@@ -2,14 +2,26 @@ import Foundation
 
 enum TranscriptionPipelineError: LocalizedError {
     case missingInputAudio
-    case missingASRModel
+    case modelMissing
+    case inferenceFailed(String)
+    case unsupportedFormat
+    case outputParseFailed
+    case cancelled
 
     var errorDescription: String? {
         switch self {
         case .missingInputAudio:
             return "No microphone, system, or imported audio is available for transcription."
-        case .missingASRModel:
+        case .modelMissing:
             return "Required ASR model is not installed."
+        case .inferenceFailed(let message):
+            return "ASR inference failed: \(message)"
+        case .unsupportedFormat:
+            return "ASR input audio format is not supported."
+        case .outputParseFailed:
+            return "Failed to parse ASR engine output."
+        case .cancelled:
+            return "Transcription was cancelled."
         }
     }
 }
@@ -73,6 +85,10 @@ struct TranscriptionPipeline {
 
         guard micURL != nil || systemURL != nil || importedURL != nil else {
             throw TranscriptionPipelineError.missingInputAudio
+        }
+
+        guard FileManager.default.fileExists(atPath: modelResolution.asrModelURL.path) else {
+            throw TranscriptionPipelineError.modelMissing
         }
 
         let micASRFile = "mic.asr.json"
@@ -187,14 +203,34 @@ struct TranscriptionPipeline {
             return nil
         }
 
-        let document = try await asrEngine.transcribe(
-            audioURL: preferredAudioURL,
-            channel: channel,
-            sessionID: sessionID,
-            configuration: configuration
-        )
-        try writeJSON(document, to: destination)
-        return document
+        do {
+            let document = try await asrEngine.transcribe(
+                audioURL: preferredAudioURL,
+                channel: channel,
+                sessionID: sessionID,
+                configuration: configuration
+            )
+
+            guard !document.segments.isEmpty else {
+                throw TranscriptionPipelineError.inferenceFailed("ASR returned empty segments")
+            }
+
+            try writeJSON(document, to: destination)
+            return document
+        } catch let error as WhisperCppError {
+            switch error {
+            case .modelMissing:
+                throw TranscriptionPipelineError.modelMissing
+            case .inferenceFailed(let message):
+                throw TranscriptionPipelineError.inferenceFailed(message)
+            case .unsupportedFormat:
+                throw TranscriptionPipelineError.unsupportedFormat
+            case .outputParseFailed:
+                throw TranscriptionPipelineError.outputParseFailed
+            case .cancelled:
+                throw TranscriptionPipelineError.cancelled
+            }
+        }
     }
 
     private func loadOrRunDiarization(

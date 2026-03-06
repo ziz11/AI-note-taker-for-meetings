@@ -8,7 +8,7 @@
       "version": "1.0.0",
       "sizeBytes": 450000000,
       "checksum": "sha256:761facc11662f8240e1b45dcd8bd3c9dcacf1cf805a696fa7a964b25043e6728",
-      "downloadURL": "https://example.invalid/models/asr-compact-v1.bin",
+      "downloadURL": "file:///Users/Shared/CallRecorderProModels/asr/asr-compact-v1.bin",
       "locationLabel": "Application Support/CallRecorderPro/Models/asr"
     },
     {
@@ -19,7 +19,7 @@
       "version": "1.0.0",
       "sizeBytes": 980000000,
       "checksum": "sha256:7de048bc7dda27509f429944d65132af1e5c4607867eee93f38af3e3d50f8bd5",
-      "downloadURL": "https://example.invalid/models/asr-balanced-v1.bin",
+      "downloadURL": "file:///Users/Shared/CallRecorderProModels/asr/asr-balanced-v1.bin",
       "locationLabel": "Application Support/CallRecorderPro/Models/asr"
     },
     {
@@ -30,7 +30,7 @@
       "version": "1.0.0",
       "sizeBytes": 1600000000,
       "checksum": "sha256:254227280be7600f11092c3f786dab8f7c2d4140aeb92fd0618daf4318d929fb",
-      "downloadURL": "https://example.invalid/models/asr-enhanced-v1.bin",
+      "downloadURL": "file:///Users/Shared/CallRecorderProModels/asr/asr-enhanced-v1.bin",
       "locationLabel": "Application Support/CallRecorderPro/Models/asr"
     },
     {
@@ -41,7 +41,7 @@
       "version": "1.0.0",
       "sizeBytes": 320000000,
       "checksum": "sha256:7c2472b69036286b85f502a132b4dc5c448904071f013a090a428630f3b54e43",
-      "downloadURL": "https://example.invalid/models/diarization-enhanced-v1.bin",
+      "downloadURL": "file:///Users/Shared/CallRecorderProModels/diarization/diarization-enhanced-v1.bin",
       "locationLabel": "Application Support/CallRecorderPro/Models/diarization"
     }
   ]

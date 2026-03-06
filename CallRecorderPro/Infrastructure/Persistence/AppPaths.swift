@@ -4,20 +4,24 @@ enum AppPaths {
     static let appSupportFolderName = "CallRecorderPro"
     static let recordingsFolderName = "recordings"
     static let modelsFolderName = "Models"
+    static let installedModelsMetadataName = "installed-models.json"
 
-    static func recordingsDirectory() throws -> URL {
+    static func appSupportDirectory() throws -> URL {
         let baseDirectory = try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
         )
-
         let appDirectory = baseDirectory.appendingPathComponent(appSupportFolderName, isDirectory: true)
-        let recordingsDirectory = appDirectory.appendingPathComponent(recordingsFolderName, isDirectory: true)
+        try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
+        return appDirectory
+    }
 
-        try FileManager.default.createDirectory(at: recordingsDirectory, withIntermediateDirectories: true)
-        return recordingsDirectory
+    static func recordingsDirectory() throws -> URL {
+        let directory = try appSupportDirectory().appendingPathComponent(recordingsFolderName, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 
     static func sessionDirectory(for id: UUID) throws -> URL {
@@ -31,23 +35,27 @@ enum AppPaths {
         try sessionDirectory(for: id).appendingPathComponent("session.json")
     }
 
-    static func modelsDirectory(kind: ModelKind) -> URL {
-        let base: URL
-        do {
-            base = try FileManager.default.url(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask,
-                appropriateFor: nil,
-                create: true
-            )
-        } catch {
-            base = FileManager.default.temporaryDirectory
-        }
+    static func modelsRootDirectory() throws -> URL {
+        let directory = try appSupportDirectory().appendingPathComponent(modelsFolderName, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
 
-        let appDirectory = base.appendingPathComponent(appSupportFolderName, isDirectory: true)
-        let modelsDirectory = appDirectory.appendingPathComponent(modelsFolderName, isDirectory: true)
-        let typeDirectory = modelsDirectory.appendingPathComponent(kind.rawValue, isDirectory: true)
-        try? FileManager.default.createDirectory(at: typeDirectory, withIntermediateDirectories: true)
-        return typeDirectory
+    static func modelsDirectory(kind: ModelKind) throws -> URL {
+        let directory = try modelsRootDirectory().appendingPathComponent(kind.rawValue, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    static func canonicalModelDirectory(modelID: String, kind: ModelKind) throws -> URL {
+        try modelsDirectory(kind: kind).appendingPathComponent(modelID, isDirectory: true)
+    }
+
+    static func canonicalModelBinaryURL(modelID: String, kind: ModelKind) throws -> URL {
+        try canonicalModelDirectory(modelID: modelID, kind: kind).appendingPathComponent("model.bin", isDirectory: false)
+    }
+
+    static func installedModelsMetadataURL() throws -> URL {
+        try modelsRootDirectory().appendingPathComponent(installedModelsMetadataName, isDirectory: false)
     }
 }
