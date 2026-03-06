@@ -1,0 +1,42 @@
+# macOS
+.DS_Store
+
+# Local agent/tooling metadata
+.claude/
+.codex/
+
+# Xcode user-local
+*.xcuserstate
+*.xcuserdatad/
+
+# Build products
+DerivedData/
+build/
+.build/
+
+# Local app runtime data
+recordings/
+models/
+transcripts/
+
+# Audio and video artifacts (prevent accidental leaks)
+*.m4a
+*.caf
+*.wav
+*.mp3
+*.flac
+*.aac
+*.ogg
+*.aif
+*.aiff
+*.mp4
+*.mov
+
+# Session and transcript outputs
+transcript.txt
+transcript.srt
+transcript.json
+summary.md
+mic.asr.json
+system.asr.json
+system.diarization.json
