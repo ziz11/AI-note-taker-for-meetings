@@ -87,6 +87,7 @@ struct TranscriptionPipeline {
         let micURL = resolveAudioURL(fileName: recording.assets.microphoneFile, in: sessionDirectory)
         let systemURL = resolveAudioURL(fileName: recording.assets.systemAudioFile, in: sessionDirectory)
         let importedURL = resolveAudioURL(fileName: recording.assets.importedAudioFile, in: sessionDirectory)
+        let asrSources = resolveASRSources(recording: recording, micURL: micURL, systemURL: systemURL, importedURL: importedURL)
 
         guard micURL != nil || systemURL != nil || importedURL != nil else {
             throw TranscriptionPipelineError.missingInputAudio
@@ -110,7 +111,7 @@ struct TranscriptionPipeline {
             existingFile: micASRFile,
             modelFingerprintFile: micASRModelFile,
             channel: .mic,
-            preferredAudioURL: micURL ?? importedURL,
+            preferredAudioURL: asrSources.mic,
             sessionID: recording.id,
             sessionDirectory: sessionDirectory,
             configuration: ASREngineConfiguration(modelURL: modelResolution.asrModelURL)
@@ -121,7 +122,7 @@ struct TranscriptionPipeline {
             existingFile: systemASRFile,
             modelFingerprintFile: systemASRModelFile,
             channel: .system,
-            preferredAudioURL: systemURL,
+            preferredAudioURL: asrSources.system,
             sessionID: recording.id,
             sessionDirectory: sessionDirectory,
             configuration: ASREngineConfiguration(modelURL: modelResolution.asrModelURL)
@@ -348,6 +349,20 @@ struct TranscriptionPipeline {
 
         let url = sessionDirectory.appendingPathComponent(fileName)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private func resolveASRSources(
+        recording: RecordingSession,
+        micURL: URL?,
+        systemURL: URL?,
+        importedURL: URL?
+    ) -> (mic: URL?, system: URL?) {
+        switch recording.source {
+        case .liveCapture:
+            return (mic: micURL, system: systemURL)
+        case .importedAudio:
+            return (mic: nil, system: systemURL ?? importedURL)
+        }
     }
 
     private func writeJSON<T: Encodable>(_ value: T, to url: URL) throws {

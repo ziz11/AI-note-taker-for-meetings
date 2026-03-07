@@ -96,6 +96,110 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(calls.count, 4)
     }
 
+    func testLiveCaptureUsesRawMicAndSystemTracksForASR() async throws {
+        let asrEngine = RecordingASREngine()
+        let pipeline = TranscriptionPipeline(
+            asrEngine: asrEngine,
+            diarizationService: FailingDiarizationService()
+        )
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("mic".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("sys".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("imported-audio.m4a").path, contents: Data("mix".utf8))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.raw.caf",
+                systemAudioFile: "system.raw.caf",
+                mergedCallFile: nil,
+                importedAudioFile: "imported-audio.m4a",
+                transcriptFile: nil,
+                srtFile: nil,
+                transcriptJSONFile: nil,
+                micASRJSONFile: nil,
+                systemASRJSONFile: nil,
+                systemDiarizationJSONFile: nil,
+                summaryFile: nil,
+                connectorNotesFile: nil
+            )
+        )
+
+        let modelURL = temp.appendingPathComponent("asr.bin")
+        try Data("asr-model".utf8).write(to: modelURL)
+
+        _ = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            modelResolution: RequiredModelsResolution(asrModelURL: modelURL, diarizationModelURL: nil)
+        )
+
+        XCTAssertEqual(asrEngine.calls.count, 2)
+        XCTAssertEqual(asrEngine.calls.first(where: { $0.channel == .mic })?.audioFileName, "mic.raw.caf")
+        XCTAssertEqual(asrEngine.calls.first(where: { $0.channel == .system })?.audioFileName, "system.raw.caf")
+    }
+
+    func testImportedAudioUsesSingleSystemTimelineForASR() async throws {
+        let asrEngine = RecordingASREngine()
+        let pipeline = TranscriptionPipeline(
+            asrEngine: asrEngine,
+            diarizationService: FailingDiarizationService()
+        )
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("imported-audio.m4a").path, contents: Data("mix".utf8))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "imported",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .importedAudio,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: nil,
+                systemAudioFile: nil,
+                mergedCallFile: nil,
+                importedAudioFile: "imported-audio.m4a",
+                transcriptFile: nil,
+                srtFile: nil,
+                transcriptJSONFile: nil,
+                micASRJSONFile: nil,
+                systemASRJSONFile: nil,
+                systemDiarizationJSONFile: nil,
+                summaryFile: nil,
+                connectorNotesFile: nil
+            )
+        )
+
+        let modelURL = temp.appendingPathComponent("asr.bin")
+        try Data("asr-model".utf8).write(to: modelURL)
+
+        _ = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            modelResolution: RequiredModelsResolution(asrModelURL: modelURL, diarizationModelURL: nil)
+        )
+
+        XCTAssertEqual(asrEngine.calls.count, 1)
+        XCTAssertEqual(asrEngine.calls.first?.channel, .system)
+        XCTAssertEqual(asrEngine.calls.first?.audioFileName, "imported-audio.m4a")
+    }
+
     func testPipelineNoDiarizationModelFallsBackToRemote() async throws {
         let pipeline = TranscriptionPipeline(
             asrEngine: MockASREngine(),
@@ -604,6 +708,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         struct Call: Equatable {
             let channel: TranscriptChannel
             let modelName: String
+            let audioFileName: String
         }
 
         private let lock = NSLock()
@@ -638,7 +743,13 @@ final class TranscriptionPipelineTests: XCTestCase {
             configuration: ASREngineConfiguration
         ) async throws -> ASRDocument {
             lock.lock()
-            storedCalls.append(Call(channel: channel, modelName: configuration.modelURL.lastPathComponent))
+            storedCalls.append(
+                Call(
+                    channel: channel,
+                    modelName: configuration.modelURL.lastPathComponent,
+                    audioFileName: audioURL.lastPathComponent
+                )
+            )
             lock.unlock()
             return ASRDocument(
                 version: 1,
