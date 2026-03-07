@@ -26,6 +26,7 @@ final class RecordingSessionCompatibilityTests: XCTestCase {
         decoder.dateDecodingStrategy = .iso8601
         let session = try decoder.decode(RecordingSession.self, from: Data(json.utf8))
 
+        XCTAssertFalse(session.isFavorite)
         XCTAssertEqual(session.assets.transcriptJSONFile, nil)
         XCTAssertEqual(session.assets.micASRJSONFile, nil)
         XCTAssertEqual(session.assets.systemASRJSONFile, nil)

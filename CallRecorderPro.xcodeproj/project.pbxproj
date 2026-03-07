@@ -31,6 +31,7 @@
 		8A1000082D82A10000A13B02 /* ModelOnboardingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000182D82A10000A13B02 /* ModelOnboardingCoordinator.swift */; };
 		8A1000092D82A10000A13B02 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000192D82A10000A13B02 /* ModelSettingsView.swift */; };
 		8A10000A2D82A10000A13B02 /* ModelSettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A10001A2D82A10000A13B02 /* ModelSettingsViewModel.swift */; };
+		8FD72D2C7A10F5B000000001 /* RecordingsPhaseOneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FD72D2B7A10F5B000000001 /* RecordingsPhaseOneTests.swift */; };
 		9C41A2402D82A10000A13B02 /* CallRecorderProApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C41A2202D82A10000A13B02 /* CallRecorderProApp.swift */; };
 		9C41A2412D82A10000A13B02 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C41A2212D82A10000A13B02 /* ContentView.swift */; };
 		9C41A2422D82A10000A13B02 /* RecordingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C41A2222D82A10000A13B02 /* RecordingSession.swift */; };
@@ -94,6 +95,7 @@
 		8A1000182D82A10000A13B02 /* ModelOnboardingCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelOnboardingCoordinator.swift; sourceTree = "<group>"; };
 		8A1000192D82A10000A13B02 /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
 		8A10001A2D82A10000A13B02 /* ModelSettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsViewModel.swift; sourceTree = "<group>"; };
+		8FD72D2B7A10F5B000000001 /* RecordingsPhaseOneTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RecordingsPhaseOneTests.swift; sourceTree = "<group>"; };
 		9C41A2112D82A10000A13B02 /* CallRecorderPro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CallRecorderPro.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9C41A2202D82A10000A13B02 /* CallRecorderProApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecorderProApp.swift; sourceTree = "<group>"; };
 		9C41A2212D82A10000A13B02 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -151,6 +153,7 @@
 				F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */,
 				2DEFD63A7FD04AB090FB58CB /* SummarizationTests.swift */,
 				74AC31327248529A315C55DE /* RecordingSessionCompatibilityTests.swift */,
+				8FD72D2B7A10F5B000000001 /* RecordingsPhaseOneTests.swift */,
 			);
 			name = CallRecorderProTests;
 			path = CallRecorderProTests;
@@ -488,6 +491,7 @@
 				6C21B2A77926FB977C286632 /* TranscriptionPipelineTests.swift in Sources */,
 				B2B60921DC6C5B664F8DD737 /* SummarizationTests.swift in Sources */,
 				E1FC38DB7BE73D51B20D5261 /* RecordingSessionCompatibilityTests.swift in Sources */,
+				8FD72D2C7A10F5B000000001 /* RecordingsPhaseOneTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -28,9 +28,9 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(Color.black)
         }
-        .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
+        .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 420)
         .alert("Action Failed", isPresented: errorBinding) {
             Button("OK", role: .cancel) {
                 store.dismissError()
@@ -46,13 +46,6 @@ struct ContentView: View {
         }
         .sheet(isPresented: $store.isModelsSheetPresented) {
             ModelSettingsView(viewModel: store.modelSettingsViewModelProxy)
-        }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button("Models") {
-                    store.isModelsSheetPresented = true
-                }
-            }
         }
     }
 
