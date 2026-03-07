@@ -43,6 +43,8 @@ final class RecordingsStore: ObservableObject {
     private let modelSettingsViewModel: ModelSettingsViewModel
     private var meterTimer: Timer?
     private var lastPublishedRecordingSecond = -1
+    private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
+    private var summarizationTasks: [UUID: Task<Void, Never>] = [:]
 
     init(
         audioCaptureService: AudioCaptureService,
@@ -102,6 +104,11 @@ final class RecordingsStore: ObservableObject {
         )
     }
 
+    deinit {
+        transcriptionTasks.values.forEach { $0.cancel() }
+        summarizationTasks.values.forEach { $0.cancel() }
+    }
+
     var availableModels: [ModelDescriptor] {
         modelManager.listAvailableModels()
     }
@@ -142,6 +149,15 @@ final class RecordingsStore: ObservableObject {
         viewState.runtime.isRecording
     }
 
+    var processingJobs: [RecordingProcessingJob] {
+        viewState.runtime.processingJobs.sorted { lhs, rhs in
+            if lhs.startedAt == rhs.startedAt {
+                return lhs.kind.rawValue < rhs.kind.rawValue
+            }
+            return lhs.startedAt < rhs.startedAt
+        }
+    }
+
     var filteredRecordings: [RecordingSession] {
         let query = viewState.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
@@ -169,13 +185,43 @@ final class RecordingsStore: ObservableObject {
         return workflow.transcriptText(for: recording)
     }
 
+    func processingJobs(for recordingID: UUID) -> [RecordingProcessingJob] {
+        processingJobs.filter { $0.recordingID == recordingID }
+    }
+
+    func isProcessing(_ kind: RecordingProcessingKind, for recordingID: UUID) -> Bool {
+        viewState.runtime.processingJobs.contains {
+            $0.recordingID == recordingID && $0.kind == kind
+        }
+    }
+
+    func processingBadgeText(for recording: RecordingSession) -> String? {
+        let jobs = processingJobs(for: recording.id)
+        guard !jobs.isEmpty else {
+            return nil
+        }
+
+        if jobs.count == 1, let job = jobs.first {
+            return "\(job.kind.label): \(job.stageLabel)"
+        }
+
+        let kinds = Set(jobs.map(\.kind))
+        if kinds.count > 1 {
+            return "Transcribing + summarizing"
+        }
+
+        return "\(jobs.first?.kind.label ?? "Processing"): \(jobs.count) jobs"
+    }
+
     func beginRecording() async {
         guard !previewMode else { return }
         guard !viewState.runtime.isRecording else { return }
+        guard !viewState.runtime.isCaptureTransitionInFlight else { return }
         playbackController.stop(resetPosition: true)
         var draftRecordingID: UUID?
 
         do {
+            viewState.runtime.isCaptureTransitionInFlight = true
             let recording = try workflow.createDraftRecording(index: recordings.count + 1)
             draftRecordingID = recording.id
             recordings.insert(recording, at: 0)
@@ -192,7 +238,9 @@ final class RecordingsStore: ObservableObject {
             viewState.runtime.sidebarStatus = "Recording"
             viewState.runtime.meterLevels.systemAudioLabel = startResult.systemAudioLabel
             startMeterTimer()
+            viewState.runtime.isCaptureTransitionInFlight = false
         } catch {
+            viewState.runtime.isCaptureTransitionInFlight = false
             if let draftID = draftRecordingID {
                 removeRecording(id: draftID)
                 workflow.failRecording(id: draftID)
@@ -202,10 +250,11 @@ final class RecordingsStore: ObservableObject {
     }
 
     func endRecording() async {
+        guard !viewState.runtime.isCaptureTransitionInFlight else { return }
         await completeCapture(
             runTranscription: viewState.autoTranscribeEnabled,
             runSummarization: viewState.autoTranscribeEnabled && viewState.autoSummarizeEnabled,
-            statusWhenSaved: viewState.autoTranscribeEnabled ? "Transcribing" : "Ready to transcribe"
+            statusWhenSaved: "Saving"
         )
     }
 
@@ -233,43 +282,23 @@ final class RecordingsStore: ObservableObject {
         do {
             viewState.runtime.sidebarStatus = "Importing"
             viewState.runtime.activityStatus = "Importing"
-            if viewState.autoTranscribeEnabled {
-                viewState.runtime.sidebarStatus = "Transcribing"
-                viewState.runtime.activityStatus = "Processing"
-            }
             let result = try await workflow.importAudio(
                 from: sourceURL,
-                autoTranscribe: viewState.autoTranscribeEnabled,
-                onTranscriptionStateChange: { [weak self] state in
-                    self?.applyTranscriptionProgress(state: state, recordingID: nil)
-                }
+                autoTranscribe: false
             )
-            var importedRecording = result.recording
-
-            if viewState.autoTranscribeEnabled && viewState.autoSummarizeEnabled && result.processingError == nil {
-                beginSummarizationProgress()
-                importedRecording = try await workflow.summarize(
-                    recording: importedRecording,
-                    onProgress: { [weak self] progress, label in
-                        self?.viewState.runtime.summarizationProgress = progress
-                        self?.viewState.runtime.summarizationStageLabel = label
-                    }
-                )
-                endSummarizationProgress()
-            }
+            let importedRecording = result.recording
 
             recordings.insert(importedRecording, at: 0)
             selectedRecordingID = importedRecording.id
-            viewState.runtime.sidebarStatus = viewState.autoTranscribeEnabled ? "Ready" : "Ready to transcribe"
-            viewState.runtime.activityStatus = "Ready"
-            clearTranscriptionProgress()
             playbackController.syncSelection(selectedRecording)
-            if let processingError = result.processingError {
-                handleTranscriptionError(processingError)
+
+            if viewState.autoTranscribeEnabled {
+                enqueueTranscription(for: importedRecording.id, summarizeAfterCompletion: viewState.autoSummarizeEnabled)
+            } else {
+                viewState.runtime.sidebarStatus = "Ready to transcribe"
+                viewState.runtime.activityStatus = "Ready"
             }
         } catch {
-            clearTranscriptionProgress()
-            endSummarizationProgress()
             present(error)
         }
     }
@@ -347,26 +376,7 @@ final class RecordingsStore: ObservableObject {
             return
         }
 
-        do {
-            viewState.runtime.sidebarStatus = "Transcribing"
-            viewState.runtime.activityStatus = "Processing"
-            let updatedRecording = try await workflow.transcribe(
-                recording: selectedRecording,
-                onStateChange: { [weak self] state in
-                    Task { @MainActor [weak self] in
-                        self?.applyTranscriptionProgress(state: state, recordingID: selectedRecording.id)
-                    }
-                }
-            )
-            replaceRecording(updatedRecording)
-            clearTranscriptionProgress()
-            viewState.runtime.sidebarStatus = "Ready"
-            viewState.runtime.activityStatus = "Ready"
-            playbackController.syncSelection(self.selectedRecording)
-        } catch {
-            clearTranscriptionProgress()
-            present(error)
-        }
+        enqueueTranscription(for: selectedRecording.id, summarizeAfterCompletion: false)
     }
 
     func summarizeSelectedRecording() async {
@@ -377,25 +387,7 @@ final class RecordingsStore: ObservableObject {
             return
         }
 
-        do {
-            beginSummarizationProgress()
-            viewState.runtime.sidebarStatus = "Summarizing"
-            viewState.runtime.activityStatus = "Processing"
-            let updatedRecording = try await workflow.summarize(
-                recording: selectedRecording,
-                onProgress: { [weak self] progress, label in
-                    self?.viewState.runtime.summarizationProgress = progress
-                    self?.viewState.runtime.summarizationStageLabel = label
-                }
-            )
-            replaceRecording(updatedRecording)
-            endSummarizationProgress()
-            viewState.runtime.sidebarStatus = "Ready"
-            viewState.runtime.activityStatus = "Ready"
-        } catch {
-            endSummarizationProgress()
-            present(error)
-        }
+        enqueueSummarization(for: selectedRecording.id)
     }
 
     func exportAudio(for recording: RecordingSession) {
@@ -532,6 +524,7 @@ final class RecordingsStore: ObservableObject {
                 playbackController.stop(resetPosition: true)
             }
 
+            cancelProcessing(for: selectedRecording.id)
             try workflow.delete(id: selectedRecording.id)
             recordings.remove(at: index)
             selectedRecordingID = recordings.first?.id
@@ -554,45 +547,39 @@ final class RecordingsStore: ObservableObject {
         }
 
         do {
+            viewState.runtime.isCaptureTransitionInFlight = true
             stopMeterTimer()
             viewState.runtime.sidebarStatus = statusWhenSaved
-            viewState.runtime.activityStatus = runTranscription ? "Processing" : "Ready"
+            viewState.runtime.activityStatus = "Processing"
             let result = try await workflow.completeCapture(
                 for: recording,
                 duration: viewState.runtime.activeDuration,
-                runTranscription: runTranscription,
-                onTranscriptionStateChange: { [weak self] state in
-                    self?.applyTranscriptionProgress(state: state, recordingID: recording.id)
-                }
+                runTranscription: false
             )
-            var finalRecording = result.recording
-            if runSummarization && result.processingError == nil {
-                beginSummarizationProgress()
-                finalRecording = try await workflow.summarize(
-                    recording: finalRecording,
-                    onProgress: { [weak self] progress, label in
-                        self?.viewState.runtime.summarizationProgress = progress
-                        self?.viewState.runtime.summarizationStageLabel = label
-                    }
-                )
-                endSummarizationProgress()
-            }
 
-            replaceRecording(finalRecording)
+            replaceRecording(result.recording)
             resetRuntimeState()
+            viewState.runtime.isCaptureTransitionInFlight = false
             viewState.runtime.meterLevels.systemAudioLabel = result.systemAudioLabel
+            playbackController.syncSelection(selectedRecording)
+            refreshRuntimeStatusFromJobs()
+
             if runTranscription {
-                clearTranscriptionProgress()
-                viewState.runtime.sidebarStatus = "Ready"
+                enqueueTranscription(
+                    for: result.recording.id,
+                    summarizeAfterCompletion: runSummarization
+                )
+            } else {
+                viewState.runtime.sidebarStatus = "Ready to transcribe"
                 viewState.runtime.activityStatus = "Ready"
             }
-            playbackController.syncSelection(selectedRecording)
+
             if result.recording.source == .liveCapture,
                result.recording.assets.mergedCallFile == nil {
                 scheduleMergeProgressRefresh(recordingID: result.recording.id)
             }
             if let processingError = result.processingError {
-                handleTranscriptionError(processingError)
+                handleTranscriptionError(processingError, isBackground: true)
             }
         } catch {
             if let index = recordings.firstIndex(where: { $0.id == activeRecordingID }) {
@@ -601,8 +588,7 @@ final class RecordingsStore: ObservableObject {
                 try? workflow.save(recordings[index])
             }
             resetRuntimeState()
-            clearTranscriptionProgress()
-            endSummarizationProgress()
+            viewState.runtime.isCaptureTransitionInFlight = false
             stopMeterTimer()
             present(error)
         }
@@ -616,6 +602,8 @@ final class RecordingsStore: ObservableObject {
         let previousSelection = selectedRecordingID
         do {
             recordings = try workflow.loadRecordings().map(normalizeRecoveredRecording)
+            let existingIDs = Set(recordings.map(\.id))
+            viewState.runtime.processingJobs.removeAll { !existingIDs.contains($0.recordingID) }
             if preserveSelection,
                let previousSelection,
                recordings.contains(where: { $0.id == previousSelection }) {
@@ -624,6 +612,7 @@ final class RecordingsStore: ObservableObject {
                 selectedRecordingID = recordings.first?.id
             }
             playbackController.syncSelection(selectedRecording)
+            refreshRuntimeStatusFromJobs()
         } catch {
             present(error)
         }
@@ -631,8 +620,8 @@ final class RecordingsStore: ObservableObject {
 
     private func recoverPendingPostProcessing() async {
         await workflow.recoverPendingMerges()
-        await workflow.recoverPendingTranscriptions()
         loadRecordings(preserveSelection: true)
+        enqueueRecoverableTranscriptions()
     }
 
     private func replaceRecording(_ recording: RecordingSession) {
@@ -647,6 +636,7 @@ final class RecordingsStore: ObservableObject {
     }
 
     private func removeRecording(id: UUID) {
+        cancelProcessing(for: id)
         recordings.removeAll(where: { $0.id == id })
         selectedRecordingID = recordings.first?.id
         playbackController.syncSelection(selectedRecording)
@@ -707,25 +697,276 @@ final class RecordingsStore: ObservableObject {
         viewState.runtime.activeDuration = 0
         viewState.runtime.recordingStartedAt = nil
         viewState.runtime.meterLevels = RecordingMeterLevels()
-        clearTranscriptionProgress()
-        endSummarizationProgress()
+        viewState.runtime.transcriptionProgress = nil
+        viewState.runtime.transcriptionStageLabel = nil
+        viewState.runtime.summarizationProgress = nil
+        viewState.runtime.summarizationStageLabel = nil
     }
 
-    private func present(_ error: Error) {
+    private func present(_ error: Error, shouldSetRuntimeErrorState: Bool = true) {
         viewState.alert = RecordingsAlertState(message: readableMessage(for: error))
-        viewState.runtime.activityStatus = "Error"
-        viewState.runtime.sidebarStatus = "Error"
-        stopMeterTimer()
+        if shouldSetRuntimeErrorState {
+            viewState.runtime.activityStatus = "Error"
+            viewState.runtime.sidebarStatus = "Error"
+            stopMeterTimer()
+        }
     }
 
-    private func applyTranscriptionProgress(state: TranscriptPipelineState, recordingID: UUID?) {
-        if let recordingID,
-           let index = recordings.firstIndex(where: { $0.id == recordingID }) {
+    private func enqueueRecoverableTranscriptions() {
+        for recording in recordings where shouldRecoverTranscription(for: recording) {
+            enqueueTranscription(for: recording.id, summarizeAfterCompletion: false)
+        }
+    }
+
+    private func shouldRecoverTranscription(for recording: RecordingSession) -> Bool {
+        switch recording.transcriptState {
+        case .queued, .transcribingMic, .transcribingSystem, .diarizingSystem, .merging, .renderingOutputs:
+            return true
+        case .failed:
+            return recording.assets.transcriptJSONFile == nil
+        case .idle, .ready:
+            return false
+        }
+    }
+
+    private func enqueueTranscription(for recordingID: UUID, summarizeAfterCompletion: Bool) {
+        guard transcriptionTasks[recordingID] == nil else {
+            return
+        }
+        guard let recording = recordings.first(where: { $0.id == recordingID }) else {
+            return
+        }
+
+        upsertProcessingJob(
+            recordingID: recording.id,
+            recordingTitle: recording.title,
+            kind: .transcription,
+            progress: 0.08,
+            stageLabel: "Queued"
+        )
+
+        if let index = recordings.firstIndex(where: { $0.id == recordingID }) {
+            recordings[index].lifecycleState = .processing
+            recordings[index].transcriptState = .queued
+            recordings[index].notes = "Queued for transcription."
+            try? workflow.save(recordings[index])
+        }
+
+        refreshRuntimeStatusFromJobs()
+        transcriptionTasks[recordingID] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runTranscriptionJob(
+                recordingID: recordingID,
+                summarizeAfterCompletion: summarizeAfterCompletion
+            )
+        }
+    }
+
+    private func runTranscriptionJob(recordingID: UUID, summarizeAfterCompletion: Bool) async {
+        defer {
+            transcriptionTasks[recordingID] = nil
+            removeProcessingJob(recordingID: recordingID, kind: .transcription)
+            refreshRuntimeStatusFromJobs()
+        }
+
+        guard let recording = recordings.first(where: { $0.id == recordingID }) else {
+            return
+        }
+
+        do {
+            let updatedRecording = try await workflow.transcribe(
+                recording: recording,
+                onStateChange: { [weak self] state in
+                    self?.applyTranscriptionProgress(state: state, recordingID: recordingID)
+                }
+            )
+            replaceRecording(updatedRecording)
+            playbackController.syncSelection(selectedRecording)
+
+            if summarizeAfterCompletion {
+                enqueueSummarization(for: recordingID)
+            }
+        } catch {
+            if !Task.isCancelled {
+                handleTranscriptionError(error, isBackground: true)
+            }
+        }
+    }
+
+    private func enqueueSummarization(for recordingID: UUID) {
+        guard summarizationTasks[recordingID] == nil else {
+            return
+        }
+        guard let recording = recordings.first(where: { $0.id == recordingID }) else {
+            return
+        }
+
+        upsertProcessingJob(
+            recordingID: recording.id,
+            recordingTitle: recording.title,
+            kind: .summarization,
+            progress: 0.05,
+            stageLabel: "Queued"
+        )
+        refreshRuntimeStatusFromJobs()
+
+        summarizationTasks[recordingID] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runSummarizationJob(recordingID: recordingID)
+        }
+    }
+
+    private func runSummarizationJob(recordingID: UUID) async {
+        defer {
+            summarizationTasks[recordingID] = nil
+            removeProcessingJob(recordingID: recordingID, kind: .summarization)
+            refreshRuntimeStatusFromJobs()
+        }
+
+        guard let recording = recordings.first(where: { $0.id == recordingID }) else {
+            return
+        }
+
+        do {
+            let updatedRecording = try await workflow.summarize(
+                recording: recording,
+                onProgress: { [weak self] progress, label in
+                    self?.applySummarizationProgress(
+                        recordingID: recordingID,
+                        progress: progress,
+                        stageLabel: label
+                    )
+                }
+            )
+            replaceRecording(updatedRecording)
+        } catch {
+            if !Task.isCancelled {
+                present(error, shouldSetRuntimeErrorState: false)
+            }
+        }
+    }
+
+    private func applyTranscriptionProgress(state: TranscriptPipelineState, recordingID: UUID) {
+        if let index = recordings.firstIndex(where: { $0.id == recordingID }) {
             recordings[index].transcriptState = state
         }
 
-        viewState.runtime.transcriptionProgress = progress(for: state)
-        viewState.runtime.transcriptionStageLabel = state.label
+        if let job = viewState.runtime.processingJobs.first(where: {
+            $0.recordingID == recordingID && $0.kind == .transcription
+        }) {
+            upsertProcessingJob(
+                recordingID: recordingID,
+                recordingTitle: job.recordingTitle,
+                kind: .transcription,
+                progress: progress(for: state) ?? job.progress,
+                stageLabel: state.label
+            )
+        } else if let recording = recordings.first(where: { $0.id == recordingID }) {
+            upsertProcessingJob(
+                recordingID: recordingID,
+                recordingTitle: recording.title,
+                kind: .transcription,
+                progress: progress(for: state) ?? 0.08,
+                stageLabel: state.label
+            )
+        }
+
+        if selectedRecordingID == recordingID {
+            viewState.runtime.transcriptionProgress = progress(for: state)
+            viewState.runtime.transcriptionStageLabel = state.label
+        }
+        refreshRuntimeStatusFromJobs()
+    }
+
+    private func applySummarizationProgress(recordingID: UUID, progress: Double, stageLabel: String) {
+        if let job = viewState.runtime.processingJobs.first(where: {
+            $0.recordingID == recordingID && $0.kind == .summarization
+        }) {
+            upsertProcessingJob(
+                recordingID: recordingID,
+                recordingTitle: job.recordingTitle,
+                kind: .summarization,
+                progress: progress,
+                stageLabel: stageLabel
+            )
+        } else if let recording = recordings.first(where: { $0.id == recordingID }) {
+            upsertProcessingJob(
+                recordingID: recordingID,
+                recordingTitle: recording.title,
+                kind: .summarization,
+                progress: progress,
+                stageLabel: stageLabel
+            )
+        }
+
+        if selectedRecordingID == recordingID {
+            viewState.runtime.summarizationProgress = progress
+            viewState.runtime.summarizationStageLabel = stageLabel
+        }
+        refreshRuntimeStatusFromJobs()
+    }
+
+    private func upsertProcessingJob(
+        recordingID: UUID,
+        recordingTitle: String,
+        kind: RecordingProcessingKind,
+        progress: Double,
+        stageLabel: String
+    ) {
+        let clampedProgress = min(max(progress, 0), 1)
+        if let index = viewState.runtime.processingJobs.firstIndex(where: {
+            $0.recordingID == recordingID && $0.kind == kind
+        }) {
+            viewState.runtime.processingJobs[index].recordingTitle = recordingTitle
+            viewState.runtime.processingJobs[index].progress = clampedProgress
+            viewState.runtime.processingJobs[index].stageLabel = stageLabel
+            return
+        }
+
+        viewState.runtime.processingJobs.append(
+            RecordingProcessingJob(
+                recordingID: recordingID,
+                recordingTitle: recordingTitle,
+                kind: kind,
+                progress: clampedProgress,
+                stageLabel: stageLabel,
+                startedAt: Date()
+            )
+        )
+    }
+
+    private func removeProcessingJob(recordingID: UUID, kind: RecordingProcessingKind) {
+        viewState.runtime.processingJobs.removeAll {
+            $0.recordingID == recordingID && $0.kind == kind
+        }
+
+        if selectedRecordingID == recordingID {
+            switch kind {
+            case .transcription:
+                viewState.runtime.transcriptionProgress = nil
+                viewState.runtime.transcriptionStageLabel = nil
+            case .summarization:
+                viewState.runtime.summarizationProgress = nil
+                viewState.runtime.summarizationStageLabel = nil
+            }
+        }
+    }
+
+    private func refreshRuntimeStatusFromJobs() {
+        guard !viewState.runtime.isRecording else {
+            return
+        }
+
+        if viewState.runtime.processingJobs.isEmpty {
+            if viewState.runtime.activityStatus != "Error" {
+                viewState.runtime.activityStatus = "Ready"
+                viewState.runtime.sidebarStatus = "Ready"
+            }
+            return
+        }
+
+        viewState.runtime.activityStatus = "Processing"
+        viewState.runtime.sidebarStatus = viewState.runtime.backgroundProcessingLabel
     }
 
     private func progress(for state: TranscriptPipelineState) -> Double? {
@@ -749,22 +990,17 @@ final class RecordingsStore: ObservableObject {
         }
     }
 
-    private func clearTranscriptionProgress() {
-        viewState.runtime.transcriptionProgress = nil
-        viewState.runtime.transcriptionStageLabel = nil
+    private func cancelProcessing(for recordingID: UUID) {
+        transcriptionTasks[recordingID]?.cancel()
+        transcriptionTasks[recordingID] = nil
+        summarizationTasks[recordingID]?.cancel()
+        summarizationTasks[recordingID] = nil
+        removeProcessingJob(recordingID: recordingID, kind: .transcription)
+        removeProcessingJob(recordingID: recordingID, kind: .summarization)
+        refreshRuntimeStatusFromJobs()
     }
 
-    private func beginSummarizationProgress() {
-        viewState.runtime.summarizationProgress = 0.05
-        viewState.runtime.summarizationStageLabel = "Preparing summary"
-    }
-
-    private func endSummarizationProgress() {
-        viewState.runtime.summarizationProgress = nil
-        viewState.runtime.summarizationStageLabel = nil
-    }
-
-    private func handleTranscriptionError(_ error: Error) {
+    private func handleTranscriptionError(_ error: Error, isBackground: Bool = false) {
         if case let RecordingWorkflowError.transcriptionUnavailable(availability) = error {
             if case .requiresASRModel = availability {
                 isModelsSheetPresented = true
@@ -772,7 +1008,7 @@ final class RecordingsStore: ObservableObject {
             }
             return
         }
-        present(error)
+        present(error, shouldSetRuntimeErrorState: !isBackground)
     }
 
     private func scheduleMergeProgressRefresh(recordingID: UUID) {

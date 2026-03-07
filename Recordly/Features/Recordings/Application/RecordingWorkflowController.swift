@@ -49,6 +49,7 @@ final class RecordingWorkflowController {
     private let repository: RecordingsPersistence
     private let modelManager: ModelManager?
     private let summaryEngine: SummaryEngine?
+    private let summarizationTimeoutSeconds: UInt64
     var selectedModelProfile: ModelProfile
 
     init(
@@ -57,7 +58,8 @@ final class RecordingWorkflowController {
         repository: RecordingsPersistence,
         modelManager: ModelManager? = nil,
         summaryEngine: SummaryEngine? = nil,
-        selectedModelProfile: ModelProfile = .balanced
+        selectedModelProfile: ModelProfile = .balanced,
+        summarizationTimeoutSeconds: UInt64 = 180
     ) {
         self.audioCaptureService = audioCaptureService
         self.transcriptionPipeline = transcriptionPipeline
@@ -65,6 +67,7 @@ final class RecordingWorkflowController {
         self.modelManager = modelManager
         self.summaryEngine = summaryEngine
         self.selectedModelProfile = selectedModelProfile
+        self.summarizationTimeoutSeconds = max(1, summarizationTimeoutSeconds)
     }
 
     var engineDisplayName: String {
@@ -339,18 +342,19 @@ final class RecordingWorkflowController {
             logLines.append("ctx_size=\(runtimeSettings.contextSize)")
             logLines.append("temperature=\(runtimeSettings.temperature)")
             logLines.append("top_p=\(runtimeSettings.topP)")
+            logLines.append("timeout_seconds=\(summarizationTimeoutSeconds)")
             let config = SummaryEngineConfiguration(
                 modelURL: modelOption.url,
                 runtime: runtimeSettings
             )
             do {
-                let doc = try await summarizeWithTimeout {
+                let doc = try await summarizeWithTimeout(timeoutSeconds: summarizationTimeoutSeconds) {
                     try await summaryEngine.summarize(
-                    transcript: transcript ?? "",
-                    srtText: srtText,
-                    recordingTitle: recording.title,
-                    configuration: config
-                )
+                        transcript: transcript ?? "",
+                        srtText: srtText,
+                        recordingTitle: recording.title,
+                        configuration: config
+                    )
                 }
                 summary = doc.rawMarkdown
                 summarySource = "llm"
@@ -541,7 +545,7 @@ final class RecordingWorkflowController {
             return "- Темы не определены."
         }()
 
-        let decisionsBullets = "- Решения не выделены автоматически. Требуется ручная проверка."
+        let decisionsBullets = "- Решения и договоренности не выделены автоматически. Требуется ручная проверка."
 
         let actionItemsBullets: String = {
             if !timeline.isEmpty {
@@ -563,11 +567,11 @@ final class RecordingWorkflowController {
         - Duration: \(recording.durationLabel)
         - Source: \(recording.transcriptSourceLabel)
 
-        ## Executive Summary
+        ## Call Summary
 
         \(executiveBullets)
 
-        ## Topics
+        ## Topics and Agreements
 
         \(topicsBullets)
 

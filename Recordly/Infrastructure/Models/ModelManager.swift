@@ -3,6 +3,7 @@ import Foundation
 struct ModelDiscoveryPaths {
     let appSupportDirectory: (ModelKind) -> URL?
     let sharedDirectory: (ModelKind) -> URL?
+    let userDirectory: (ModelKind) -> URL?
     let projectDirectories: () -> [URL]
 
     static func live() -> ModelDiscoveryPaths {
@@ -12,6 +13,9 @@ struct ModelDiscoveryPaths {
             },
             sharedDirectory: { kind in
                 try? AppPaths.sharedModelsDirectory(kind: kind)
+            },
+            userDirectory: { kind in
+                AppPaths.userModelsDirectory(kind: kind)
             },
             projectDirectories: {
                 AppPaths.projectLocalModelsDirectories()
@@ -131,6 +135,7 @@ final class ModelManager: ObservableObject {
     func listLocalOptions(kind: ModelKind) -> [LocalModelOption] {
         let options = loadAppSupportOptions(kind: kind)
             + loadSharedOptions(kind: kind)
+            + loadUserLocalOptions(kind: kind)
             + loadProjectLocalOptions(kind: kind)
         var seen = Set<String>()
         return options.filter { option in
@@ -187,6 +192,8 @@ final class ModelManager: ObservableObject {
             return discoveryPaths.sharedDirectory(kind)
         case .appSupport:
             return discoveryPaths.appSupportDirectory(kind)
+        case .userLocal:
+            return discoveryPaths.userDirectory(kind)
         case .projectLocal:
             return discoveryPaths.projectDirectories().first
         }
@@ -363,6 +370,13 @@ final class ModelManager: ObservableObject {
             return .diarization
         }
         return .summarization
+    }
+
+    private func loadUserLocalOptions(kind: ModelKind) -> [LocalModelOption] {
+        guard let directory = discoveryPaths.userDirectory(kind) else {
+            return []
+        }
+        return loadDirectoryOptions(kind: kind, directory: directory, source: .userLocal, recursive: false)
     }
 
     private func loadSharedOptions(kind: ModelKind) -> [LocalModelOption] {

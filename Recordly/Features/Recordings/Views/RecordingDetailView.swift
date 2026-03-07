@@ -159,12 +159,13 @@ struct RecordingDetailView: View {
 
     @ViewBuilder
     private var processingPanel: some View {
-        if let transcription = store.viewState.runtime.transcriptionProgress {
-            progressCard(title: "Transcription", detail: store.viewState.runtime.transcriptionStageLabel ?? "Processing", value: transcription)
-        }
-
-        if let summarization = store.viewState.runtime.summarizationProgress {
-            progressCard(title: "Summary", detail: store.viewState.runtime.summarizationStageLabel ?? "Processing", value: summarization)
+        let jobs = store.processingJobs(for: recording.id)
+        ForEach(jobs) { job in
+            progressCard(
+                title: job.kind == .transcription ? "Transcription" : "Summary",
+                detail: job.stageLabel,
+                value: job.progress
+            )
         }
     }
 
@@ -260,7 +261,9 @@ struct RecordingDetailView: View {
                 secondaryActionButton(
                     title: "Transcribe",
                     systemImage: "waveform.badge.magnifyingglass",
-                    isDisabled: store.isRecording || recording.playableAudioFileName == nil
+                    isDisabled: store.isRecording
+                        || recording.playableAudioFileName == nil
+                        || store.isProcessing(.transcription, for: recording.id)
                 ) {
                     Task {
                         await store.transcribeSelectedRecording()
@@ -270,7 +273,10 @@ struct RecordingDetailView: View {
                 secondaryActionButton(
                     title: "Summarize",
                     systemImage: "sparkles",
-                    isDisabled: store.isRecording || !hasTranscript
+                    isDisabled: store.isRecording
+                        || !hasTranscript
+                        || store.isProcessing(.transcription, for: recording.id)
+                        || store.isProcessing(.summarization, for: recording.id)
                 ) {
                     Task {
                         await store.summarizeSelectedRecording()

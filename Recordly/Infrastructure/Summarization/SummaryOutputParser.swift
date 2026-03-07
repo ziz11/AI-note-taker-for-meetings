@@ -8,19 +8,45 @@ enum SummaryOutputParser {
         }
 
         let topics = extractBullets(
-            underAny: ["## Topics", "## Ключевые темы", "1. Ключевые темы"],
+            underAny: [
+                "## Topics",
+                "## Topic Agreements",
+                "## Topics and Agreements",
+                "## Темы",
+                "## Темы и договоренности",
+                "## Ключевые темы",
+                "1. Ключевые темы"
+            ],
             in: trimmed
         )
         let decisions = extractBullets(
-            underAny: ["## Decisions", "## Основные решения", "2. Основные решения"],
+            underAny: [
+                "## Decisions",
+                "## Decisions and Agreements",
+                "## Решения",
+                "## Решения и договоренности",
+                "## Основные решения",
+                "2. Основные решения"
+            ],
             in: trimmed
         )
         let actionItems = extractBullets(
-            underAny: ["## Action Items", "## Следующие шаги", "3. Следующие шаги"],
+            underAny: [
+                "## Action Items",
+                "## Follow-ups",
+                "## Следующие шаги",
+                "3. Следующие шаги"
+            ],
             in: trimmed
         )
         let risks = extractBullets(
-            underAny: ["## Risks", "## Риски и открытые вопросы", "4. Риски и открытые вопросы"],
+            underAny: [
+                "## Risks",
+                "## Open Risks",
+                "## Риски",
+                "## Риски и открытые вопросы",
+                "4. Риски и открытые вопросы"
+            ],
             in: trimmed
         )
 

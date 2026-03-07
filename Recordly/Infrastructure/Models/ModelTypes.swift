@@ -66,6 +66,7 @@ struct LocalModelOption: Identifiable, Equatable {
         case shared
         case appSupport
         case projectLocal
+        case userLocal
     }
 
     let id: String

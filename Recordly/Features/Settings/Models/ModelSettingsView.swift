@@ -138,6 +138,13 @@ struct ModelSettingsView: View {
                     }
                     .buttonStyle(.bordered)
                 }
+
+                if let userLocal = viewModel.folderURL(for: kind, source: .userLocal) {
+                    Button("Open User Folder") {
+                        NSWorkspace.shared.open(userLocal)
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
         }
         .padding(14)

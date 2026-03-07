@@ -4,6 +4,33 @@ struct RecordingsAlertState: Equatable {
     var message: String
 }
 
+enum RecordingProcessingKind: String, Equatable, Hashable {
+    case transcription
+    case summarization
+
+    var label: String {
+        switch self {
+        case .transcription:
+            return "Transcribing"
+        case .summarization:
+            return "Summarizing"
+        }
+    }
+}
+
+struct RecordingProcessingJob: Equatable, Identifiable {
+    var recordingID: UUID
+    var recordingTitle: String
+    var kind: RecordingProcessingKind
+    var progress: Double
+    var stageLabel: String
+    var startedAt: Date
+
+    var id: String {
+        "\(recordingID.uuidString)-\(kind.rawValue)"
+    }
+}
+
 struct RecordingMeterLevels: Equatable {
     var microphoneLevel: Double = 0
     var systemAudioLevel: Double = 0
@@ -22,6 +49,24 @@ struct RecordingRuntimeState: Equatable {
     var transcriptionStageLabel: String?
     var summarizationProgress: Double?
     var summarizationStageLabel: String?
+    var processingJobs: [RecordingProcessingJob] = []
+    var isCaptureTransitionInFlight = false
+
+    var activeProcessingCount: Int {
+        processingJobs.count
+    }
+
+    var backgroundProcessingLabel: String {
+        guard !processingJobs.isEmpty else {
+            return "Ready"
+        }
+
+        if processingJobs.count == 1, let single = processingJobs.first {
+            return "\(single.kind.label) 1 recording"
+        }
+
+        return "Processing \(processingJobs.count) jobs"
+    }
 
     var recordingDurationLabel: String {
         let totalSeconds = max(Int(activeDuration.rounded()), 0)

@@ -68,7 +68,7 @@ struct RecordingSidebarView: View {
                         await store.importAudio()
                     }
                 }
-                .disabled(store.isRecording)
+                .disabled(store.isRecording || store.viewState.runtime.isCaptureTransitionInFlight)
 
                 Spacer(minLength: 8)
 
@@ -113,12 +113,14 @@ struct RecordingSidebarView: View {
 
     @ViewBuilder
     private var progressSection: some View {
-        if let transcription = store.viewState.runtime.transcriptionProgress {
-            progressCard(title: "Transcribing", detail: store.viewState.runtime.transcriptionStageLabel ?? "Processing", progress: transcription)
-        }
-
-        if let summarization = store.viewState.runtime.summarizationProgress {
-            progressCard(title: "Summarizing", detail: store.viewState.runtime.summarizationStageLabel ?? "Processing", progress: summarization)
+        if !store.processingJobs.isEmpty {
+            ForEach(store.processingJobs) { job in
+                progressCard(
+                    title: "\(job.kind.label) · \(job.recordingTitle)",
+                    detail: job.stageLabel,
+                    progress: job.progress
+                )
+            }
         }
     }
 
@@ -217,9 +219,7 @@ struct RecordingSidebarView: View {
     }
 
     private var isRecordButtonLocked: Bool {
-        store.viewState.runtime.activityStatus == "Processing"
-            || store.viewState.runtime.transcriptionProgress != nil
-            || store.viewState.runtime.summarizationProgress != nil
+        store.viewState.runtime.isCaptureTransitionInFlight
     }
 
     private var recordButtonBackground: some ShapeStyle {

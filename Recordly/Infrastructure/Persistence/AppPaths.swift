@@ -5,6 +5,7 @@ enum AppPaths {
     static let recordingsFolderName = "recordings"
     static let modelsFolderName = "Models"
     static let sharedModelsFolder = "/Users/Shared/RecordlyModels"
+    static let userModelsFolder = "models"
     static let installedModelsMetadataName = "installed-models.json"
 
     static func appSupportDirectory() throws -> URL {
@@ -52,6 +53,17 @@ enum AppPaths {
         let root = URL(fileURLWithPath: sharedModelsFolder, isDirectory: true)
         let directory = root.appendingPathComponent(kind.rawValue, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    static func userModelsDirectory(kind: ModelKind) -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let directory = home
+            .appendingPathComponent(userModelsFolder, isDirectory: true)
+            .appendingPathComponent(kind.rawValue, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: directory.path) else {
+            return nil
+        }
         return directory
     }
 

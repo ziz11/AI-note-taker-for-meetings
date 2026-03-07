@@ -163,3 +163,54 @@ final class RecordingsPhaseOneTests: XCTestCase {
         return directory
     }
 }
+
+final class RecordingRuntimeStateProcessingTests: XCTestCase {
+    func testBackgroundProcessingLabelIsReadyWhenNoJobs() {
+        let state = RecordingRuntimeState()
+
+        XCTAssertEqual(state.backgroundProcessingLabel, "Ready")
+        XCTAssertEqual(state.activeProcessingCount, 0)
+    }
+
+    func testBackgroundProcessingLabelForSingleTranscriptionJob() {
+        var state = RecordingRuntimeState()
+        state.processingJobs = [
+            RecordingProcessingJob(
+                recordingID: UUID(),
+                recordingTitle: "Call 1",
+                kind: .transcription,
+                progress: 0.42,
+                stageLabel: "Transcribing system",
+                startedAt: Date()
+            )
+        ]
+
+        XCTAssertEqual(state.backgroundProcessingLabel, "Transcribing 1 recording")
+        XCTAssertEqual(state.activeProcessingCount, 1)
+    }
+
+    func testBackgroundProcessingLabelForMultipleJobs() {
+        var state = RecordingRuntimeState()
+        state.processingJobs = [
+            RecordingProcessingJob(
+                recordingID: UUID(),
+                recordingTitle: "Call 1",
+                kind: .transcription,
+                progress: 0.5,
+                stageLabel: "Merging transcript",
+                startedAt: Date()
+            ),
+            RecordingProcessingJob(
+                recordingID: UUID(),
+                recordingTitle: "Call 2",
+                kind: .summarization,
+                progress: 0.2,
+                stageLabel: "Generating summary",
+                startedAt: Date()
+            )
+        ]
+
+        XCTAssertEqual(state.backgroundProcessingLabel, "Processing 2 jobs")
+        XCTAssertEqual(state.activeProcessingCount, 2)
+    }
+}

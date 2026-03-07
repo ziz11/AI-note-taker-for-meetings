@@ -12,7 +12,11 @@ protocol LlamaProcessExecutor {
 }
 
 struct FoundationLlamaProcessExecutor: LlamaProcessExecutor {
-    private let processTimeoutSeconds: TimeInterval = 25
+    private let processTimeoutSeconds: TimeInterval
+
+    init(processTimeoutSeconds: TimeInterval = 180) {
+        self.processTimeoutSeconds = max(processTimeoutSeconds, 0.1)
+    }
 
     func run(executableURL: URL, arguments: [String], stdinData: Data? = nil) async throws -> LlamaProcessResult {
         try await withCheckedThrowingContinuation { continuation in
@@ -151,7 +155,7 @@ struct ProcessLlamaCppRunner: LlamaCppRunner {
             try? fileManager.removeItem(at: promptFileURL)
         }
 
-        let args = [
+        let baseArgs = [
             "-m", configuration.modelURL.path,
             "--file", promptFileURL.path,
             "--no-display-prompt",
@@ -161,14 +165,27 @@ struct ProcessLlamaCppRunner: LlamaCppRunner {
             "-n", "\(maxPredictionTokens)"
         ]
 
-        let result = try await processExecutor.run(executableURL: binaryURL, arguments: args, stdinData: nil)
+        let result = try await processExecutor.run(executableURL: binaryURL, arguments: baseArgs, stdinData: nil)
+        if result.exitCode == 0 {
+            return result.stdout
+        }
 
-        guard result.exitCode == 0 else {
-            let message = result.stderr.isEmpty ? "exit code \(result.exitCode)" : result.stderr
+        if shouldRetryWithCompatibilityFlags(stderr: result.stderr) {
+            let compatibilityArgs = baseArgs + ["--no-jinja", "--chat-template", "chatml"]
+            let retryResult = try await processExecutor.run(
+                executableURL: binaryURL,
+                arguments: compatibilityArgs,
+                stdinData: nil
+            )
+            if retryResult.exitCode == 0 {
+                return retryResult.stdout
+            }
+            let message = retryResult.stderr.isEmpty ? "exit code \(retryResult.exitCode)" : retryResult.stderr
             throw SummarizationError.inferenceFailed(message: message)
         }
 
-        return result.stdout
+        let message = result.stderr.isEmpty ? "exit code \(result.exitCode)" : result.stderr
+        throw SummarizationError.inferenceFailed(message: message)
     }
 
     private func normalizedRuntimeSettings(_ settings: SummarizationRuntimeSettings) -> SummarizationRuntimeSettings {
@@ -180,6 +197,13 @@ struct ProcessLlamaCppRunner: LlamaCppRunner {
             temperature: temperature,
             topP: topP
         )
+    }
+
+    private func shouldRetryWithCompatibilityFlags(stderr: String) -> Bool {
+        let normalized = stderr.lowercased()
+        return normalized.contains("common_chat_templates_init")
+            || normalized.contains("chat template parsing error")
+            || normalized.contains("consider disabling jinja")
     }
 }
 

@@ -59,6 +59,8 @@ final class ModelSettingsViewModel: ObservableObject {
             return "Shared"
         case .appSupport:
             return "App Support"
+        case .userLocal:
+            return "User"
         case .projectLocal:
             return "Project"
         }

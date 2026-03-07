@@ -34,6 +34,26 @@ final class MockSummaryEngine: SummaryEngine {
     }
 }
 
+final class DelayedSummaryEngine: SummaryEngine {
+    private let delayNanoseconds: UInt64
+    private let document: SummaryDocument
+
+    init(delayNanoseconds: UInt64, document: SummaryDocument) {
+        self.delayNanoseconds = delayNanoseconds
+        self.document = document
+    }
+
+    func summarize(
+        transcript: String,
+        srtText: String?,
+        recordingTitle: String,
+        configuration: SummaryEngineConfiguration
+    ) async throws -> SummaryDocument {
+        try await Task.sleep(nanoseconds: delayNanoseconds)
+        return document
+    }
+}
+
 final class MockLlamaProcessExecutor: LlamaProcessExecutor {
     var result: Result<LlamaProcessResult, Error>
 
@@ -59,6 +79,23 @@ final class CapturingLlamaProcessExecutor: LlamaProcessExecutor {
         capturedExecutableURL = executableURL
         capturedArguments = arguments
         return result
+    }
+}
+
+final class SequencedLlamaProcessExecutor: LlamaProcessExecutor {
+    var results: [LlamaProcessResult]
+    var invocations: [[String]] = []
+
+    init(results: [LlamaProcessResult]) {
+        self.results = results
+    }
+
+    func run(executableURL: URL, arguments: [String], stdinData: Data?) async throws -> LlamaProcessResult {
+        invocations.append(arguments)
+        guard !results.isEmpty else {
+            return LlamaProcessResult(exitCode: 1, stdout: "", stderr: "No more results")
+        }
+        return results.removeFirst()
     }
 }
 
@@ -186,22 +223,26 @@ final class InMemoryRecordingsRepository: RecordingsPersistence {
 // MARK: - SummaryPromptBuilder Tests
 
 final class SummaryPromptBuilderTests: XCTestCase {
-    func testPromptContainsStrictStructuredInstructions() {
+    func testPromptContainsCallStructuredInstructions() {
         let result = SummaryPromptBuilder.build(
             transcript: "Sample transcript",
             srtText: nil,
             recordingTitle: "Meeting"
         )
 
-        XCTAssertTrue(result.contains("You are an expert meeting analyst."))
+        XCTAssertTrue(result.contains("You are an expert call analyst."))
         XCTAssertTrue(result.contains("Return structured markdown using the exact sections below."))
+        XCTAssertTrue(result.contains("Answer in Russian by default."))
         XCTAssertTrue(result.contains("Rules:"))
         XCTAssertTrue(result.contains("If a section has no items write: None"))
         XCTAssertTrue(result.contains("Return ONLY markdown."))
+        XCTAssertTrue(result.contains("## Call Summary"))
         XCTAssertTrue(result.contains("## Topics"))
         XCTAssertTrue(result.contains("## Decisions"))
         XCTAssertTrue(result.contains("## Action Items"))
         XCTAssertTrue(result.contains("## Risks"))
+        XCTAssertTrue(result.contains("For each topic include related agreements if present."))
+        XCTAssertTrue(result.contains("Ignore obvious noise artifacts"))
         XCTAssertTrue(result.contains("If the transcript is incomplete, summarize the available information."))
         XCTAssertTrue(result.contains("Transcript:"))
         XCTAssertTrue(result.contains("Write the summary now."))
@@ -313,6 +354,31 @@ final class SummaryOutputParserTests: XCTestCase {
         XCTAssertEqual(doc.decisions, ["Запустить пилот в апреле"])
         XCTAssertEqual(doc.actionItems, ["[Иван] [2026-04-10] Подготовить план запуска"])
         XCTAssertEqual(doc.risks, ["Задержка интеграции"])
+    }
+
+    func testParsesCallStyleRussianHeadings() throws {
+        let markdown = """
+        ## Саммари звонка
+        - Короткое описание созвона.
+
+        ## Темы и договоренности
+        - Интеграция API: подтвердили дедлайн на пятницу.
+
+        ## Решения и договоренности
+        - Запускать пилот на 100 пользователей.
+
+        ## Следующие шаги
+        - [Анна] [2026-03-12] Подготовить rollout-план.
+
+        ## Риски и открытые вопросы
+        - Возможна задержка по backend.
+        """
+
+        let doc = try SummaryOutputParser.parse(markdown)
+        XCTAssertEqual(doc.topics, ["Интеграция API: подтвердили дедлайн на пятницу."])
+        XCTAssertEqual(doc.decisions, ["Запускать пилот на 100 пользователей."])
+        XCTAssertEqual(doc.actionItems, ["[Анна] [2026-03-12] Подготовить rollout-план."])
+        XCTAssertEqual(doc.risks, ["Возможна задержка по backend."])
     }
 }
 
@@ -524,16 +590,29 @@ final class RecordingsStoreSummarizationTests: XCTestCase {
             recordings: [recording],
             sessionDirectories: [recordingID: sessionDirectory]
         )
+        let modelManager = ModelManager(
+            discoveryPaths: ModelDiscoveryPaths(
+                appSupportDirectory: { _ in nil },
+                sharedDirectory: { _ in nil },
+                userDirectory: { _ in nil },
+                projectDirectories: { [] }
+            )
+        )
         let store = RecordingsStore(
             audioCaptureService: AudioCaptureService(),
             transcriptionPipeline: TranscriptionPipeline(),
-            modelManager: ModelManager(),
+            modelManager: modelManager,
             repository: repository,
             previewMode: false
         )
 
         await store.summarizeSelectedRecording()
-        try await Task.sleep(nanoseconds: 50_000_000)
+        for _ in 0..<80 {
+            if store.selectedRecording?.assets.summaryFile == "summary.md" {
+                break
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
 
         XCTAssertNil(store.viewState.runtime.summarizationProgress)
         XCTAssertNil(store.viewState.runtime.summarizationStageLabel)
@@ -541,6 +620,204 @@ final class RecordingsStoreSummarizationTests: XCTestCase {
         XCTAssertEqual(store.viewState.runtime.sidebarStatus, "Ready")
         XCTAssertEqual(store.selectedRecording?.assets.summaryFile, "summary.md")
         XCTAssertEqual(store.selectedRecording?.notes, "Summary is ready.")
+    }
+}
+
+@MainActor
+final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
+    private var tempDirectory: URL!
+    private var defaultsSuiteName: String!
+    private var defaults: UserDefaults!
+
+    override func setUpWithError() throws {
+        tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "RecordingWorkflowControllerSummarizationTimeoutTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+
+        defaultsSuiteName = "RecordingWorkflowControllerSummarizationTimeoutTests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: defaultsSuiteName)
+        defaults.removePersistentDomain(forName: defaultsSuiteName)
+    }
+
+    override func tearDownWithError() throws {
+        if let defaultsSuiteName {
+            defaults.removePersistentDomain(forName: defaultsSuiteName)
+        }
+        if let tempDirectory {
+            try? FileManager.default.removeItem(at: tempDirectory)
+        }
+        defaults = nil
+        defaultsSuiteName = nil
+        tempDirectory = nil
+    }
+
+    func testSummarizeUsesFallbackWhenSummaryGenerationExceedsTimeout() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Timeout case",
+            createdAt: Date(),
+            duration: 90,
+            lifecycleState: .ready,
+            transcriptState: .ready,
+            source: .importedAudio,
+            notes: "Transcript ready.",
+            assets: RecordingAssets(importedAudioFile: "call.m4a")
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory],
+            transcriptBodies: [recordingID: String(repeating: "word ", count: 120)]
+        )
+
+        let modelURL = try makeSummarizationModel(named: "timeout-model.gguf")
+        let modelManager = makeModelManager(modelURL: modelURL)
+        let llmMarkdown = """
+        ## Topics
+        - Should not be used
+
+        ## Decisions
+        - None
+
+        ## Action Items
+        - None
+
+        ## Risks
+        - None
+        """
+        let summaryEngine = DelayedSummaryEngine(
+            delayNanoseconds: 2_000_000_000,
+            document: SummaryDocument(
+                topics: ["Should not be used"],
+                decisions: [],
+                actionItems: [],
+                risks: [],
+                rawMarkdown: llmMarkdown
+            )
+        )
+
+        let workflow = RecordingWorkflowController(
+            audioCaptureService: AudioCaptureService(),
+            transcriptionPipeline: TranscriptionPipeline(),
+            repository: repository,
+            modelManager: modelManager,
+            summaryEngine: summaryEngine,
+            selectedModelProfile: .balanced,
+            summarizationTimeoutSeconds: 1
+        )
+
+        let updated = try await workflow.summarize(recording: recording)
+        XCTAssertEqual(updated.assets.summaryFile, "summary.md")
+
+        let summaryURL = sessionDirectory.appendingPathComponent("summary.md")
+        let summaryText = try String(contentsOf: summaryURL, encoding: .utf8)
+        XCTAssertTrue(summaryText.contains("# Summary"))
+
+        let logURL = sessionDirectory.appendingPathComponent("summarization.log")
+        let logText = try String(contentsOf: logURL, encoding: .utf8)
+        XCTAssertTrue(logText.contains("llm_status=failed"))
+        XCTAssertTrue(logText.contains("summary_source=fallback"))
+    }
+
+    func testSummarizePreservesLLMOutputWhenTimeoutAllowsCompletion() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "LLM success",
+            createdAt: Date(),
+            duration: 90,
+            lifecycleState: .ready,
+            transcriptState: .ready,
+            source: .importedAudio,
+            notes: "Transcript ready.",
+            assets: RecordingAssets(importedAudioFile: "call.m4a")
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory],
+            transcriptBodies: [recordingID: String(repeating: "word ", count: 120)]
+        )
+
+        let modelURL = try makeSummarizationModel(named: "success-model.gguf")
+        let modelManager = makeModelManager(modelURL: modelURL)
+        let llmMarkdown = """
+        ## Topics
+        - Quarterly planning
+
+        ## Decisions
+        - Keep roadmap
+
+        ## Action Items
+        - Publish notes
+
+        ## Risks
+        - None
+        """
+        let summaryEngine = DelayedSummaryEngine(
+            delayNanoseconds: 1_000_000_000,
+            document: SummaryDocument(
+                topics: ["Quarterly planning"],
+                decisions: ["Keep roadmap"],
+                actionItems: ["Publish notes"],
+                risks: ["None"],
+                rawMarkdown: llmMarkdown
+            )
+        )
+
+        let workflow = RecordingWorkflowController(
+            audioCaptureService: AudioCaptureService(),
+            transcriptionPipeline: TranscriptionPipeline(),
+            repository: repository,
+            modelManager: modelManager,
+            summaryEngine: summaryEngine,
+            selectedModelProfile: .balanced,
+            summarizationTimeoutSeconds: 3
+        )
+
+        _ = try await workflow.summarize(recording: recording)
+
+        let summaryURL = sessionDirectory.appendingPathComponent("summary.md")
+        let summaryText = try String(contentsOf: summaryURL, encoding: .utf8)
+        XCTAssertEqual(summaryText.trimmingCharacters(in: .whitespacesAndNewlines), llmMarkdown)
+
+        let logURL = sessionDirectory.appendingPathComponent("summarization.log")
+        let logText = try String(contentsOf: logURL, encoding: .utf8)
+        XCTAssertTrue(logText.contains("llm_status=success"))
+        XCTAssertTrue(logText.contains("summary_source=llm"))
+    }
+
+    private func makeSummarizationModel(named name: String) throws -> URL {
+        let modelsDirectory = tempDirectory.appendingPathComponent("Models", isDirectory: true)
+        try FileManager.default.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
+        let modelURL = modelsDirectory.appendingPathComponent(name, isDirectory: false)
+        try Data("model".utf8).write(to: modelURL)
+        return modelURL
+    }
+
+    private func makeModelManager(modelURL: URL) -> ModelManager {
+        let discoveryPaths = ModelDiscoveryPaths(
+            appSupportDirectory: { _ in nil },
+            sharedDirectory: { _ in nil },
+            userDirectory: { _ in nil },
+            projectDirectories: { [modelURL.deletingLastPathComponent()] }
+        )
+        let manager = ModelManager(
+            preferences: ModelPreferencesStore(defaults: defaults),
+            discoveryPaths: discoveryPaths
+        )
+
+        let options = manager.listLocalOptions(kind: .summarization)
+        let selected = options.first(where: { $0.url.path == modelURL.path }) ?? options.first
+        manager.setSelectedModelID(selected?.id, for: .summarization)
+        return manager
     }
 }
 
@@ -614,6 +891,36 @@ final class ProcessLlamaCppRunnerTests: XCTestCase {
             XCTAssertEqual(error as? SummarizationError, .inferenceFailed(message: "segfault"))
         }
     }
+
+    func testChatTemplateFailureRetriesWithCompatibilityFlags() async throws {
+        let chatTemplateError = """
+        common_chat_templates_init: failed to initialize chat template
+        srv init: please consider disabling jinja via --no-jinja
+        """
+        let executor = SequencedLlamaProcessExecutor(results: [
+            LlamaProcessResult(exitCode: 1, stdout: "", stderr: chatTemplateError),
+            LlamaProcessResult(exitCode: 0, stdout: "summary output", stderr: "")
+        ])
+        let fakeBinary = URL(fileURLWithPath: "/usr/bin/true")
+        let modelURL = URL(fileURLWithPath: "/tmp/model.bin")
+
+        let runner = ProcessLlamaCppRunner(
+            processExecutor: executor,
+            resolveBinaryURL: { fakeBinary },
+            temporaryDirectory: FileManager.default.temporaryDirectory
+        )
+
+        let output = try await runner.generate(
+            prompt: "test",
+            configuration: SummaryEngineConfiguration(modelURL: modelURL, runtime: .default)
+        )
+
+        XCTAssertEqual(output, "summary output")
+        XCTAssertEqual(executor.invocations.count, 2)
+        XCTAssertTrue(executor.invocations[1].contains("--no-jinja"))
+        XCTAssertTrue(executor.invocations[1].contains("--chat-template"))
+        XCTAssertTrue(executor.invocations[1].contains("chatml"))
+    }
 }
 
 final class ResolveLlamaBinaryURLTests: XCTestCase {
@@ -679,6 +986,32 @@ final class FoundationLlamaProcessExecutorTests: XCTestCase {
 
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertTrue(result.stdout.count >= payloadSize)
+    }
+
+    func testRunTimesOutUsingConfiguredTimeout() async {
+        let executor = FoundationLlamaProcessExecutor(processTimeoutSeconds: 0.1)
+        let shellURL = URL(fileURLWithPath: "/bin/zsh")
+
+        do {
+            _ = try await executor.run(executableURL: shellURL, arguments: ["-lc", "sleep 1"], stdinData: nil)
+            XCTFail("Expected timeout")
+        } catch {
+            XCTAssertEqual(error as? SummarizationError, .cancelled)
+        }
+    }
+
+    func testRunCompletesWhenConfiguredTimeoutIsSufficient() async throws {
+        let executor = FoundationLlamaProcessExecutor(processTimeoutSeconds: 2.0)
+        let shellURL = URL(fileURLWithPath: "/bin/zsh")
+
+        let result = try await executor.run(
+            executableURL: shellURL,
+            arguments: ["-lc", "sleep 0.2; printf done"],
+            stdinData: nil
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stdout, "done")
     }
 
     private func runWithTimeout<T>(

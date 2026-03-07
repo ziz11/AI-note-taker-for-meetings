@@ -30,7 +30,8 @@ struct RecordingRowView: View {
                         .foregroundStyle(Color.white.opacity(0.6))
                         .lineLimit(1)
 
-                    Text(recording.source == .importedAudio ? "Imported audio" : recording.statusBadgeText)
+                    Text(store.processingBadgeText(for: recording)
+                        ?? (recording.source == .importedAudio ? "Imported audio" : recording.statusBadgeText))
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color.white.opacity(0.42))
                         .lineLimit(1)

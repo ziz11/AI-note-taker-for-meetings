@@ -155,6 +155,7 @@ final class ModelDiscoveryTests: XCTestCase {
             sharedDirectory: { kind in
                 sharedRoot?.appendingPathComponent(kind.rawValue, isDirectory: true)
             },
+            userDirectory: { _ in nil },
             projectDirectories: {
                 projectDirectories
             }
