@@ -4,6 +4,7 @@ enum AppPaths {
     static let appSupportFolderName = "CallRecorderPro"
     static let recordingsFolderName = "recordings"
     static let modelsFolderName = "Models"
+    static let sharedModelsFolder = "/Users/Shared/CallRecorderProModels"
     static let installedModelsMetadataName = "installed-models.json"
 
     static func appSupportDirectory() throws -> URL {
@@ -45,6 +46,44 @@ enum AppPaths {
         let directory = try modelsRootDirectory().appendingPathComponent(kind.rawValue, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    static func sharedModelsDirectory(kind: ModelKind) throws -> URL {
+        let root = URL(fileURLWithPath: sharedModelsFolder, isDirectory: true)
+        let directory = root.appendingPathComponent(kind.rawValue, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    static func repositoryRootDirectory(
+        startingAt: URL = URL(fileURLWithPath: #filePath),
+        fileManager: FileManager = .default
+    ) -> URL? {
+        var current = startingAt.hasDirectoryPath ? startingAt : startingAt.deletingLastPathComponent()
+
+        while true {
+            let gitDirectory = current.appendingPathComponent(".git", isDirectory: true)
+            if fileManager.fileExists(atPath: gitDirectory.path) {
+                return current
+            }
+
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                return nil
+            }
+            current = parent
+        }
+    }
+
+    static func projectLocalModelsDirectories(repoRoot: URL? = repositoryRootDirectory()) -> [URL] {
+        guard let repoRoot else {
+            return []
+        }
+
+        return [
+            repoRoot.appendingPathComponent("Models", isDirectory: true),
+            repoRoot.appendingPathComponent("models", isDirectory: true),
+        ]
     }
 
     static func canonicalModelDirectory(modelID: String, kind: ModelKind) throws -> URL {

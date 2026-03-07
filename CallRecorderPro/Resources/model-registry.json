@@ -6,8 +6,8 @@
       "kind": "asr",
       "profile": "compact",
       "version": "1.0.0",
-      "sizeBytes": 450000000,
-      "checksum": "sha256:761facc11662f8240e1b45dcd8bd3c9dcacf1cf805a696fa7a964b25043e6728",
+      "sizeBytes": 59707625,
+      "checksum": "sha256:422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
       "downloadURL": "file:///Users/Shared/CallRecorderProModels/asr/asr-compact-v1.bin",
       "locationLabel": "Application Support/CallRecorderPro/Models/asr"
     },
@@ -17,21 +17,32 @@
       "kind": "asr",
       "profile": "balanced",
       "version": "1.0.0",
-      "sizeBytes": 980000000,
-      "checksum": "sha256:7de048bc7dda27509f429944d65132af1e5c4607867eee93f38af3e3d50f8bd5",
+      "sizeBytes": 190085487,
+      "checksum": "sha256:ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
       "downloadURL": "file:///Users/Shared/CallRecorderProModels/asr/asr-balanced-v1.bin",
       "locationLabel": "Application Support/CallRecorderPro/Models/asr"
     },
     {
-      "id": "asr-enhanced-v1",
-      "displayName": "Enhanced ASR",
+      "id": "asr-podlodka-turbo-v1.2-q4_0",
+      "displayName": "Podlodka Turbo ASR (Q4_0)",
       "kind": "asr",
       "profile": "enhanced",
-      "version": "1.0.0",
-      "sizeBytes": 1600000000,
-      "checksum": "sha256:254227280be7600f11092c3f786dab8f7c2d4140aeb92fd0618daf4318d929fb",
-      "downloadURL": "file:///Users/Shared/CallRecorderProModels/asr/asr-enhanced-v1.bin",
+      "version": "1.2.0",
+      "sizeBytes": 889340843,
+      "checksum": "sha256:78253e32cd9614e1f317fadb2a0a5341e10b64ce497576399d7f8801bffd911a",
+      "downloadURL": "file:///Users/Shared/CallRecorderProModels/asr/podlodka-turbo-v1.2-q4_0.bin",
       "locationLabel": "Application Support/CallRecorderPro/Models/asr"
+    },
+    {
+      "id": "summarization-compact-v1",
+      "displayName": "Compact Summarizer",
+      "kind": "summarization",
+      "profile": "compact",
+      "version": "1.0.0",
+      "sizeBytes": 415182688,
+      "checksum": "sha256:9ee36184e616dfc76df4f5dd66f908dbde6979524ae36e6cefb67f532f798cb8",
+      "downloadURL": "file:///Users/Shared/CallRecorderProModels/summarization/summarization-compact-v1.bin",
+      "locationLabel": "Application Support/CallRecorderPro/Models/summarization"
     },
     {
       "id": "diarization-enhanced-v1",
@@ -39,8 +50,8 @@
       "kind": "diarization",
       "profile": "enhanced",
       "version": "1.0.0",
-      "sizeBytes": 320000000,
-      "checksum": "sha256:7c2472b69036286b85f502a132b4dc5c448904071f013a090a428630f3b54e43",
+      "sizeBytes": 5986908,
+      "checksum": "sha256:057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25",
       "downloadURL": "file:///Users/Shared/CallRecorderProModels/diarization/diarization-enhanced-v1.bin",
       "locationLabel": "Application Support/CallRecorderPro/Models/diarization"
     }

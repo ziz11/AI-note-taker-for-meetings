@@ -31,4 +31,57 @@ final class RecordingSessionCompatibilityTests: XCTestCase {
         XCTAssertEqual(session.assets.systemASRJSONFile, nil)
         XCTAssertEqual(session.assets.systemDiarizationJSONFile, nil)
     }
+
+    func testTranscriptProgressMapping() {
+        XCTAssertNil(makeSession(state: .idle).transcriptProgress)
+        XCTAssertEqual(makeSession(state: .queued).transcriptProgress, 0.08)
+        XCTAssertEqual(makeSession(state: .transcribingMic).transcriptProgress, 0.24)
+        XCTAssertEqual(makeSession(state: .transcribingSystem).transcriptProgress, 0.46)
+        XCTAssertEqual(makeSession(state: .diarizingSystem).transcriptProgress, 0.64)
+        XCTAssertEqual(makeSession(state: .merging).transcriptProgress, 0.82)
+        XCTAssertEqual(makeSession(state: .renderingOutputs).transcriptProgress, 0.94)
+        XCTAssertEqual(makeSession(state: .ready).transcriptProgress, 1)
+        XCTAssertNil(makeSession(state: .failed).transcriptProgress)
+    }
+
+    func testHasSummarizationSourceWhenOnlySRTExists() {
+        var session = makeSession(state: .ready)
+        session.assets.srtFile = "transcript.srt"
+
+        XCTAssertTrue(session.hasSummarizationSource)
+    }
+
+    func testHasSummarizationSourceWhenNoTranscriptArtifactsExist() {
+        let session = makeSession(state: .ready)
+        XCTAssertFalse(session.hasSummarizationSource)
+    }
+
+    private func makeSession(state: TranscriptPipelineState) -> RecordingSession {
+        RecordingSession(
+            id: UUID(),
+            title: "Test",
+            createdAt: Date(),
+            duration: 42,
+            lifecycleState: .processing,
+            transcriptState: state,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets()
+        )
+    }
+
+    func testAdaptiveLayoutUsesCompactThresholdAtOrBelow800() {
+        XCTAssertTrue(AdaptiveLayoutMetrics.isCompactWindow(800))
+        XCTAssertTrue(AdaptiveLayoutMetrics.isCompactWindow(760))
+    }
+
+    func testAdaptiveLayoutUsesRegularThresholdAbove800() {
+        XCTAssertFalse(AdaptiveLayoutMetrics.isCompactWindow(801))
+        XCTAssertFalse(AdaptiveLayoutMetrics.isCompactWindow(1040))
+    }
+
+    func testAdaptiveLayoutSidebarModes() {
+        XCTAssertTrue(AdaptiveLayoutMetrics.isSidebarNarrow(259))
+        XCTAssertFalse(AdaptiveLayoutMetrics.isSidebarNarrow(260))
+    }
 }

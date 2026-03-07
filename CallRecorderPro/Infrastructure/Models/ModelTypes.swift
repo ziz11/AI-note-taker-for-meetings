@@ -6,6 +6,27 @@ enum ModelKind: String, Codable, CaseIterable {
     case summarization
 }
 
+enum ASRLanguage: String, Codable, CaseIterable {
+    case ru
+    case en
+    case auto
+
+    var displayName: String {
+        switch self {
+        case .ru:
+            return "RU"
+        case .en:
+            return "EN"
+        case .auto:
+            return "AUTO"
+        }
+    }
+
+    var whisperCode: String {
+        rawValue
+    }
+}
+
 enum ModelProfile: String, Codable, CaseIterable {
     case compact
     case balanced
@@ -40,6 +61,21 @@ struct ModelDescriptor: Codable, Equatable {
     let locationLabel: String
 }
 
+struct LocalModelOption: Identifiable, Equatable {
+    enum Source: String, Codable, Equatable {
+        case shared
+        case appSupport
+        case projectLocal
+    }
+
+    let id: String
+    let displayName: String
+    let kind: ModelKind
+    let url: URL
+    let sizeBytes: Int64
+    let source: Source
+}
+
 enum ModelInstallState: Equatable {
     case notInstalled
     case downloading(progress: Double)
@@ -48,8 +84,22 @@ enum ModelInstallState: Equatable {
 }
 
 enum TranscriptionAvailability: Equatable {
-    case available
+    case ready
+    case degradedNoDiarization
     case requiresASRModel(profileOptions: [ModelProfile])
+    case unavailable(reason: String)
+}
+
+struct RequiredModelsResolution: Equatable {
+    let asrModelURL: URL
+    let diarizationModelURL: URL?
+}
+
+struct ModelRuntimeStatus: Identifiable, Equatable {
+    let model: ModelDescriptor
+    let state: ModelInstallState
+
+    var id: String { model.id }
 }
 
 struct InstalledModelMetadata: Codable, Equatable {

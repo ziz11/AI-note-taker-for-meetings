@@ -6,12 +6,19 @@ struct ASREngineConfiguration: Sendable {
 
 protocol ASREngine {
     var displayName: String { get }
+    func cacheFingerprint(configuration: ASREngineConfiguration) -> String
     func transcribe(
         audioURL: URL,
         channel: TranscriptChannel,
         sessionID: UUID,
         configuration: ASREngineConfiguration
     ) async throws -> ASRDocument
+}
+
+extension ASREngine {
+    func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
+        configuration.modelURL.standardizedFileURL.path
+    }
 }
 
 enum WhisperCppError: LocalizedError {
@@ -58,23 +65,80 @@ struct WhisperCppSegment {
 struct ProcessWhisperCppRunner: WhisperCppRunner {
     private let fileManager: FileManager
     private let processExecutor: WhisperProcessExecutor
+    private let temporaryDirectory: URL
+    private let environment: [String: String]
+    private let languageCodeProvider: () -> String
+    private let resolveBinaryURL: () throws -> URL
+    private let outputBaseURLFactory: () -> URL
 
     init(
         fileManager: FileManager = .default,
-        processExecutor: WhisperProcessExecutor = FoundationWhisperProcessExecutor()
+        processExecutor: WhisperProcessExecutor = FoundationWhisperProcessExecutor(),
+        temporaryDirectory: URL = FileManager.default.temporaryDirectory,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        languageCode: String = "ru",
+        resolveBinaryURL: (() throws -> URL)? = nil,
+        outputBaseURLFactory: (() -> URL)? = nil
     ) {
         self.fileManager = fileManager
         self.processExecutor = processExecutor
+        self.temporaryDirectory = temporaryDirectory
+        self.environment = environment
+        self.languageCodeProvider = { languageCode }
+        self.resolveBinaryURL = resolveBinaryURL ?? {
+            try Self.resolveWhisperBinaryURL(
+                fileManager: fileManager,
+                environment: environment
+            )
+        }
+        self.outputBaseURLFactory = outputBaseURLFactory ?? {
+            temporaryDirectory.appendingPathComponent("whisper-output-\(UUID().uuidString)")
+        }
+    }
+
+    init(
+        fileManager: FileManager = .default,
+        processExecutor: WhisperProcessExecutor = FoundationWhisperProcessExecutor(),
+        temporaryDirectory: URL = FileManager.default.temporaryDirectory,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        languageCodeProvider: @escaping () -> String,
+        resolveBinaryURL: (() throws -> URL)? = nil,
+        outputBaseURLFactory: (() -> URL)? = nil
+    ) {
+        self.fileManager = fileManager
+        self.processExecutor = processExecutor
+        self.temporaryDirectory = temporaryDirectory
+        self.environment = environment
+        self.languageCodeProvider = languageCodeProvider
+        self.resolveBinaryURL = resolveBinaryURL ?? {
+            try Self.resolveWhisperBinaryURL(
+                fileManager: fileManager,
+                environment: environment
+            )
+        }
+        self.outputBaseURLFactory = outputBaseURLFactory ?? {
+            temporaryDirectory.appendingPathComponent("whisper-output-\(UUID().uuidString)")
+        }
     }
 
     func transcribe(audioURL: URL, modelURL: URL) async throws -> WhisperCppRunnerOutput {
-        let binaryURL = try resolveWhisperBinaryURL()
-        let outputBaseURL = fileManager.temporaryDirectory.appendingPathComponent("whisper-output-\(UUID().uuidString)")
+        let binaryURL = try resolveBinaryURL()
+        let outputBaseURL = outputBaseURLFactory()
         let outputJSONURL = outputBaseURL.appendingPathExtension("json")
+
+        let effectiveAudioURL = try convertToWAVIfNeeded(audioURL)
+        let shouldCleanupConverted = (effectiveAudioURL != audioURL)
+
+        defer {
+            if shouldCleanupConverted {
+                try? fileManager.removeItem(at: effectiveAudioURL)
+            }
+        }
 
         let args = [
             "-m", modelURL.path,
-            "-f", audioURL.path,
+            "-f", effectiveAudioURL.path,
+            "--language", languageCodeProvider(),
             "--output-json",
             "--output-file", outputBaseURL.path,
             "--no-prints"
@@ -86,7 +150,10 @@ struct ProcessWhisperCppRunner: WhisperCppRunner {
         }
 
         guard fileManager.fileExists(atPath: outputJSONURL.path) else {
-            throw WhisperCppError.outputParseFailed
+            let detail = result.stderr.isEmpty ? "" : " stderr: \(result.stderr)"
+            throw WhisperCppError.inferenceFailed(
+                message: "whisper-cli produced no output file for \(effectiveAudioURL.lastPathComponent).\(detail)"
+            )
         }
 
         let data = try Data(contentsOf: outputJSONURL)
@@ -95,19 +162,91 @@ struct ProcessWhisperCppRunner: WhisperCppRunner {
         return try parseWhisperJSONOutput(data)
     }
 
-    private func resolveWhisperBinaryURL() throws -> URL {
-        let candidateURLs: [URL] = [
-            Bundle.main.resourceURL?.appendingPathComponent("Binaries/whisper-main"),
-            Bundle.main.resourceURL?.appendingPathComponent("whisper-main"),
-            URL(fileURLWithPath: "/usr/local/bin/whisper-main"),
-            URL(fileURLWithPath: "/opt/homebrew/bin/whisper-main")
-        ].compactMap { $0 }
+    private func convertToWAVIfNeeded(_ audioURL: URL) throws -> URL {
+        let supportedByWhisper: Set<String> = ["wav", "flac", "mp3", "ogg"]
+        let ext = audioURL.pathExtension.lowercased()
+        if supportedByWhisper.contains(ext) {
+            return audioURL
+        }
+
+        let wavURL = temporaryDirectory.appendingPathComponent("whisper-input-\(UUID().uuidString).wav")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/afconvert")
+        process.arguments = [
+            "-f", "WAVE",
+            "-d", "LEI16@16000",
+            "-c", "1",
+            audioURL.path,
+            wavURL.path
+        ]
+
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            throw WhisperCppError.inferenceFailed(
+                message: "Failed to convert \(audioURL.lastPathComponent) to WAV: \(stderr)"
+            )
+        }
+
+        guard fileManager.fileExists(atPath: wavURL.path) else {
+            throw WhisperCppError.inferenceFailed(
+                message: "Audio conversion produced no output for \(audioURL.lastPathComponent)"
+            )
+        }
+
+        return wavURL
+    }
+
+    func defaultResolveWhisperBinaryURL() throws -> URL {
+        try Self.resolveWhisperBinaryURL(fileManager: fileManager, environment: environment)
+    }
+
+    private static func resolveWhisperBinaryURL(
+        fileManager: FileManager,
+        environment: [String: String]
+    ) throws -> URL {
+        let binaryNames = ["whisper-main", "whisper-cli", "main"]
+        var candidateURLs: [URL] = []
+
+        if let resourceURL = Bundle.main.resourceURL {
+            candidateURLs.append(contentsOf: binaryNames.flatMap { name in
+                [
+                    resourceURL.appendingPathComponent("Binaries/\(name)"),
+                    resourceURL.appendingPathComponent(name)
+                ]
+            })
+        }
+
+        candidateURLs.append(contentsOf: [
+            "/usr/local/bin",
+            "/opt/homebrew/bin"
+        ].flatMap { directory in
+            binaryNames.map { name in
+                URL(fileURLWithPath: directory).appendingPathComponent(name)
+            }
+        })
+
+        if let path = environment["PATH"], !path.isEmpty {
+            let directories = path.split(separator: ":").map(String.init)
+            candidateURLs.append(contentsOf: directories.flatMap { directory in
+                binaryNames.map { name in
+                    URL(fileURLWithPath: directory).appendingPathComponent(name)
+                }
+            })
+        }
 
         for candidate in candidateURLs where fileManager.isExecutableFile(atPath: candidate.path) {
             return candidate
         }
 
-        throw WhisperCppError.inferenceFailed(message: "whisper-main binary not found (expected bundled or system install)")
+        throw WhisperCppError.inferenceFailed(
+            message: "whisper binary not found (looked for whisper-main, whisper-cli, or main in app resources, Homebrew paths, and PATH)"
+        )
     }
 
     private func parseWhisperJSONOutput(_ data: Data) throws -> WhisperCppRunnerOutput {
@@ -192,9 +331,22 @@ struct FoundationWhisperProcessExecutor: WhisperProcessExecutor {
 struct WhisperCppEngine: ASREngine {
     let displayName: String = "WhisperCpp (RU+EN)"
     private let runner: WhisperCppRunner
+    private let preferences: ModelPreferencesStore
 
-    init(runner: WhisperCppRunner = ProcessWhisperCppRunner()) {
-        self.runner = runner
+    init(
+        runner: WhisperCppRunner? = nil,
+        preferences: ModelPreferencesStore = ModelPreferencesStore()
+    ) {
+        self.preferences = preferences
+        self.runner = runner ?? ProcessWhisperCppRunner(
+            languageCodeProvider: { preferences.selectedASRLanguage.whisperCode }
+        )
+    }
+
+    func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
+        let modelPath = configuration.modelURL.standardizedFileURL.path
+        let language = preferences.selectedASRLanguage.whisperCode
+        return "\(modelPath)|lang:\(language)"
     }
 
     func transcribe(
@@ -214,7 +366,7 @@ struct WhisperCppEngine: ASREngine {
             throw WhisperCppError.modelMissing(configuration.modelURL)
         }
 
-        let supportedExtensions: Set<String> = ["caf", "wav", "mp3", "m4a", "flac"]
+        let supportedExtensions: Set<String> = ["caf", "wav", "mp3", "m4a", "flac", "ogg"]
         let ext = audioURL.pathExtension.lowercased()
         guard supportedExtensions.contains(ext) else {
             throw WhisperCppError.unsupportedFormat(audioURL)

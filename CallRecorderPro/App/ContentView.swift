@@ -1,5 +1,18 @@
 import SwiftUI
 
+enum AdaptiveLayoutMetrics {
+    static let compactWindowThreshold: CGFloat = 800
+    static let narrowSidebarThreshold: CGFloat = 260
+
+    static func isCompactWindow(_ width: CGFloat) -> Bool {
+        width <= compactWindowThreshold
+    }
+
+    static func isSidebarNarrow(_ width: CGFloat) -> Bool {
+        width < narrowSidebarThreshold
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var store: RecordingsStore
 
@@ -17,7 +30,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .controlBackgroundColor))
         }
-        .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 380)
+        .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
         .alert("Action Failed", isPresented: errorBinding) {
             Button("OK", role: .cancel) {
                 store.dismissError()

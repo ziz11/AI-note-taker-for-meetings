@@ -1,5 +1,25 @@
 import Foundation
 
+struct ModelDiscoveryPaths {
+    let appSupportDirectory: (ModelKind) -> URL?
+    let sharedDirectory: (ModelKind) -> URL?
+    let projectDirectories: () -> [URL]
+
+    static func live() -> ModelDiscoveryPaths {
+        ModelDiscoveryPaths(
+            appSupportDirectory: { kind in
+                try? AppPaths.modelsDirectory(kind: kind)
+            },
+            sharedDirectory: { kind in
+                try? AppPaths.sharedModelsDirectory(kind: kind)
+            },
+            projectDirectories: {
+                AppPaths.projectLocalModelsDirectories()
+            }
+        )
+    }
+}
+
 @MainActor
 final class ModelManager: ObservableObject {
     @Published private(set) var installStates: [String: ModelInstallState] = [:]
@@ -8,16 +28,22 @@ final class ModelManager: ObservableObject {
     private let storage: ModelStorage
     private let downloader: ModelDownloader
     private let preferences: ModelPreferencesStore
+    private let fileManager: FileManager
+    private let discoveryPaths: ModelDiscoveryPaths
 
     init(
         registry: ModelRegistry = ModelRegistry(),
         storage: ModelStorage = ModelStorage(),
-        preferences: ModelPreferencesStore = ModelPreferencesStore()
+        preferences: ModelPreferencesStore = ModelPreferencesStore(),
+        fileManager: FileManager = .default,
+        discoveryPaths: ModelDiscoveryPaths? = nil
     ) {
         self.registry = registry
         self.storage = storage
         self.preferences = preferences
         self.downloader = ModelDownloader(storage: storage)
+        self.fileManager = fileManager
+        self.discoveryPaths = discoveryPaths ?? .live()
     }
 
     var onboardingSeen: Bool {
@@ -35,43 +61,175 @@ final class ModelManager: ObservableObject {
         set { preferences.pendingProfileSelection = newValue }
     }
 
+    var selectedASRModelID: String? {
+        get { preferences.selectedASRModelID }
+        set { preferences.selectedASRModelID = newValue }
+    }
+
+    var selectedASRLanguage: ASRLanguage {
+        get { preferences.selectedASRLanguage }
+        set { preferences.selectedASRLanguage = newValue }
+    }
+
+    var selectedDiarizationModelID: String? {
+        get { preferences.selectedDiarizationModelID }
+        set { preferences.selectedDiarizationModelID = newValue }
+    }
+
+    var selectedSummarizationModelID: String? {
+        get { preferences.selectedSummarizationModelID }
+        set { preferences.selectedSummarizationModelID = newValue }
+    }
+
+    var summarizationRuntimeSettings: SummarizationRuntimeSettings {
+        get { preferences.summarizationRuntimeSettings }
+        set { preferences.summarizationRuntimeSettings = newValue }
+    }
+
+    // MARK: Legacy install flow (kept for onboarding compatibility)
+
     func install(profile: ModelProfile) async {
         let descriptors = registry.loadModels().filter { $0.profile == profile }
+        if descriptors.isEmpty {
+            return
+        }
+
         for descriptor in descriptors {
             await install(modelID: descriptor.id)
         }
     }
 
     func install(modelID: String) async {
-        guard let descriptor = registry.loadModels().first(where: { $0.id == modelID }) else {
-            installStates[modelID] = .failed(reason: "Model not found in registry")
+        if let descriptor = registry.loadModels().first(where: { $0.id == modelID }) {
+            await installRegistryModel(descriptor)
             return
         }
 
-        if storage.isInstallationValid(for: descriptor) {
+        if fileManager.fileExists(atPath: modelID) {
             installStates[modelID] = .installed
-            return
-        }
-
-        installStates[modelID] = .downloading(progress: 0)
-
-        do {
-            _ = try await downloader.downloadAndInstall(descriptor: descriptor) { [weak self] progress in
-                Task { @MainActor in
-                    self?.installStates[modelID] = .downloading(progress: progress)
-                }
-            }
-            installStates[modelID] = storage.isInstallationValid(for: descriptor) ? .installed : .failed(reason: "Installed model validation failed")
-        } catch {
-            try? storage.removeModel(modelID: descriptor.id, kind: descriptor.kind)
-            installStates[modelID] = .failed(reason: error.localizedDescription)
+        } else {
+            installStates[modelID] = .failed(reason: "Model file not found")
         }
     }
 
+    func retry(modelID: String) async {
+        await install(modelID: modelID)
+    }
+
     func remove(modelID: String) {
-        guard let descriptor = registry.loadModels().first(where: { $0.id == modelID }) else { return }
-        try? storage.removeModel(modelID: modelID, kind: descriptor.kind)
-        installStates[modelID] = .notInstalled
+        if let descriptor = registry.loadModels().first(where: { $0.id == modelID }) {
+            try? storage.removeModel(modelID: modelID, kind: descriptor.kind)
+            installStates[modelID] = .notInstalled
+            return
+        }
+
+        installStates[modelID] = fileManager.fileExists(atPath: modelID) ? .installed : .notInstalled
+    }
+
+    // MARK: Dynamic model catalog
+
+    func listLocalOptions(kind: ModelKind) -> [LocalModelOption] {
+        let options = loadAppSupportOptions(kind: kind)
+            + loadSharedOptions(kind: kind)
+            + loadProjectLocalOptions(kind: kind)
+        var seen = Set<String>()
+        return options.filter { option in
+            seen.insert(modelIdentity(for: option)).inserted
+        }
+    }
+
+    func selectedLocalOption(kind: ModelKind) -> LocalModelOption? {
+        let options = listLocalOptions(kind: kind)
+        guard !options.isEmpty else {
+            setSelectedModelID(nil, for: kind)
+            return nil
+        }
+
+        if let selectedID = selectedModelID(for: kind),
+           let selected = options.first(where: { $0.id == selectedID }) {
+            return selected
+        }
+
+        if kind == .asr {
+            let fallback = options[0]
+            setSelectedModelID(fallback.id, for: kind)
+            return fallback
+        }
+
+        return nil
+    }
+
+    func setSelectedModelID(_ modelID: String?, for kind: ModelKind) {
+        switch kind {
+        case .asr:
+            selectedASRModelID = modelID
+        case .diarization:
+            selectedDiarizationModelID = modelID
+        case .summarization:
+            selectedSummarizationModelID = modelID
+        }
+    }
+
+    func selectedModelID(for kind: ModelKind) -> String? {
+        switch kind {
+        case .asr:
+            return selectedASRModelID
+        case .diarization:
+            return selectedDiarizationModelID
+        case .summarization:
+            return selectedSummarizationModelID
+        }
+    }
+
+    func modelsDirectory(kind: ModelKind, source: LocalModelOption.Source) -> URL? {
+        switch source {
+        case .shared:
+            return discoveryPaths.sharedDirectory(kind)
+        case .appSupport:
+            return discoveryPaths.appSupportDirectory(kind)
+        case .projectLocal:
+            return discoveryPaths.projectDirectories().first
+        }
+    }
+
+    // MARK: Runtime state and resolution
+
+    func availability(for profile: ModelProfile) -> TranscriptionAvailability {
+        guard selectedLocalOption(kind: .asr) != nil else {
+            return .requiresASRModel(profileOptions: ModelProfile.allCases)
+        }
+
+        if selectedLocalOption(kind: .diarization) == nil {
+            return .degradedNoDiarization
+        }
+
+        return .ready
+    }
+
+    func ensureRequiredModelsInstalled(for profile: ModelProfile) throws -> RequiredModelsResolution {
+        guard let asr = selectedLocalOption(kind: .asr) else {
+            throw NSError(
+                domain: "ModelManager",
+                code: 3001,
+                userInfo: [NSLocalizedDescriptionKey: "Select an ASR model in Models settings before transcribing."]
+            )
+        }
+
+        let diarization = selectedLocalOption(kind: .diarization)
+        return RequiredModelsResolution(
+            asrModelURL: asr.url,
+            diarizationModelURL: diarization?.url
+        )
+    }
+
+    func resolveInstalledModelURL(modelID: String) -> URL? {
+        if let descriptor = registry.loadModels().first(where: { $0.id == modelID }),
+           storage.isInstallationValid(for: descriptor) {
+            return storage.canonicalModelURL(modelID: descriptor.id, kind: descriptor.kind)
+        }
+
+        let url = URL(fileURLWithPath: modelID)
+        return fileManager.fileExists(atPath: url.path) ? url : nil
     }
 
     func installationState(for modelID: String) -> ModelInstallState {
@@ -79,29 +237,218 @@ final class ModelManager: ObservableObject {
             return existing
         }
 
-        guard let descriptor = registry.loadModels().first(where: { $0.id == modelID }) else {
-            return .failed(reason: "Model not found in registry")
+        if let descriptor = registry.loadModels().first(where: { $0.id == modelID }) {
+            return storage.isInstallationValid(for: descriptor) ? .installed : .notInstalled
         }
 
-        return storage.isInstallationValid(for: descriptor) ? .installed : .notInstalled
+        return fileManager.fileExists(atPath: modelID) ? .installed : .notInstalled
     }
 
-    func resolveInstalledModelURL(modelID: String) -> URL? {
-        guard let descriptor = registry.loadModels().first(where: { $0.id == modelID }),
-              storage.isInstallationValid(for: descriptor) else {
+    func installationState(for descriptor: ModelDescriptor) -> ModelInstallState {
+        installationState(for: descriptor.id)
+    }
+
+    func modelSizeOnDisk(modelID: String) throws -> Int64 {
+        if let descriptor = registry.loadModels().first(where: { $0.id == modelID }) {
+            return storage.modelSize(modelID: descriptor.id, kind: descriptor.kind) ?? 0
+        }
+
+        let attrs = try fileManager.attributesOfItem(atPath: modelID)
+        return (attrs[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    func locationLabel(for modelID: String) -> String {
+        if let descriptor = registry.loadModels().first(where: { $0.id == modelID }) {
+            return descriptor.locationLabel
+        }
+
+        return URL(fileURLWithPath: modelID).deletingLastPathComponent().path
+    }
+
+    func listAvailableModels() -> [ModelDescriptor] {
+        ModelKind.allCases.flatMap { kind in
+            listLocalOptions(kind: kind).map { option in
+                ModelDescriptor(
+                    id: option.id,
+                    displayName: option.displayName,
+                    kind: option.kind,
+                    profile: selectedProfile,
+                    version: "local",
+                    sizeBytes: option.sizeBytes,
+                    checksum: "sha256:local",
+                    downloadURL: option.url.absoluteString,
+                    locationLabel: option.url.deletingLastPathComponent().path
+                )
+            }
+        }
+    }
+
+    func modelStatuses() -> [ModelRuntimeStatus] {
+        listAvailableModels().map { descriptor in
+            ModelRuntimeStatus(
+                model: descriptor,
+                state: installationState(for: descriptor.id)
+            )
+        }
+    }
+
+    func switchProfile(_ profile: ModelProfile) {
+        selectedProfile = profile
+        pendingProfileSelection = profile
+    }
+
+    // MARK: Private
+
+    private func installRegistryModel(_ descriptor: ModelDescriptor) async {
+        if storage.isInstallationValid(for: descriptor) {
+            installStates[descriptor.id] = .installed
+            return
+        }
+
+        installStates[descriptor.id] = .downloading(progress: 0)
+
+        do {
+            _ = try await downloader.downloadAndInstall(descriptor: descriptor) { [weak self] progress in
+                Task { @MainActor in
+                    self?.installStates[descriptor.id] = .downloading(progress: progress)
+                }
+            }
+            installStates[descriptor.id] = storage.isInstallationValid(for: descriptor)
+                ? .installed
+                : .failed(reason: "Installed model validation failed")
+        } catch {
+            try? storage.removeModel(modelID: descriptor.id, kind: descriptor.kind)
+            installStates[descriptor.id] = .failed(reason: error.localizedDescription)
+        }
+    }
+
+    private func loadProjectLocalOptions(kind: ModelKind) -> [LocalModelOption] {
+        let directories = discoveryPaths.projectDirectories()
+        var results: [LocalModelOption] = []
+        var scannedPaths = Set<String>()
+        for directory in directories {
+            guard fileManager.fileExists(atPath: directory.path) else { continue }
+            let resolved = directory.resolvingSymlinksInPath().path
+            guard scannedPaths.insert(resolved).inserted else { continue }
+            let urls = (try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+
+            for url in urls.sorted(by: modelURLSort) {
+                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                let ext = url.pathExtension.lowercased()
+                guard ext == "gguf" || ext == "bin" else { continue }
+                let inferredKind = classifyModelKind(url: url)
+                guard inferredKind == kind else { continue }
+                if let option = buildLocalOption(url: url, kind: kind, source: .projectLocal) {
+                    results.append(option)
+                }
+            }
+        }
+        return results
+    }
+
+    private func classifyModelKind(url: URL) -> ModelKind {
+        let ext = url.pathExtension.lowercased()
+        if ext == "gguf" {
+            return .summarization
+        }
+        let name = url.deletingPathExtension().lastPathComponent.lowercased()
+        if name.contains("whisper") || name.contains("asr") {
+            return .asr
+        }
+        if name.contains("diarization") {
+            return .diarization
+        }
+        return .summarization
+    }
+
+    private func loadSharedOptions(kind: ModelKind) -> [LocalModelOption] {
+        guard let directory = discoveryPaths.sharedDirectory(kind) else {
+            return []
+        }
+        return loadDirectoryOptions(kind: kind, directory: directory, source: .shared, recursive: false)
+    }
+
+    private func loadAppSupportOptions(kind: ModelKind) -> [LocalModelOption] {
+        guard let directory = discoveryPaths.appSupportDirectory(kind) else {
+            return []
+        }
+        return loadDirectoryOptions(kind: kind, directory: directory, source: .appSupport, recursive: true)
+    }
+
+    private func loadDirectoryOptions(
+        kind: ModelKind,
+        directory: URL,
+        source: LocalModelOption.Source,
+        recursive: Bool
+    ) -> [LocalModelOption] {
+        let urls: [URL]
+        if recursive {
+            let keys: [URLResourceKey] = [.isRegularFileKey]
+            let enumerator = fileManager.enumerator(
+                at: directory,
+                includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles]
+            )
+            urls = (enumerator?.allObjects as? [URL]) ?? []
+        } else {
+            urls = (try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        }
+
+        return urls
+            .sorted(by: modelURLSort)
+            .filter { supportedModelExtensions(for: kind).contains($0.pathExtension.lowercased()) }
+            .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+            .compactMap { buildLocalOption(url: $0, kind: kind, source: source) }
+    }
+
+    private func supportedModelExtensions(for kind: ModelKind) -> Set<String> {
+        switch kind {
+        case .summarization:
+            return ["bin", "gguf"]
+        case .asr, .diarization:
+            return ["bin"]
+        }
+    }
+
+    private func buildLocalOption(url: URL, kind: ModelKind, source: LocalModelOption.Source) -> LocalModelOption? {
+        guard fileManager.fileExists(atPath: url.path) else {
             return nil
         }
-        return storage.canonicalModelURL(modelID: descriptor.id, kind: descriptor.kind)
+
+        let attrs = try? fileManager.attributesOfItem(atPath: url.path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        let baseName = url.deletingPathExtension().lastPathComponent
+        let displayName = baseName
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return LocalModelOption(
+            id: url.path,
+            displayName: displayName.isEmpty ? baseName : displayName.capitalized,
+            kind: kind,
+            url: url,
+            sizeBytes: size,
+            source: source
+        )
     }
 
-    func availability(for profile: ModelProfile) -> TranscriptionAvailability {
-        let profileASR = registry.loadModels().first(where: { $0.profile == profile && $0.kind == .asr })
-        guard let profileASR else {
-            return .requiresASRModel(profileOptions: ModelProfile.allCases)
-        }
+    private func modelIdentity(for option: LocalModelOption) -> String {
+        let basename = option.url.deletingPathExtension().lastPathComponent.lowercased()
+        return "\(option.kind.rawValue)|\(basename)"
+    }
 
-        return storage.isInstallationValid(for: profileASR)
-            ? .available
-            : .requiresASRModel(profileOptions: ModelProfile.allCases)
+    private func modelURLSort(_ lhs: URL, _ rhs: URL) -> Bool {
+        lhs.deletingPathExtension().lastPathComponent.localizedCaseInsensitiveCompare(
+            rhs.deletingPathExtension().lastPathComponent
+        ) == .orderedAscending
     }
 }

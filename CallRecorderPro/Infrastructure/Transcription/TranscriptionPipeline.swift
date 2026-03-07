@@ -33,6 +33,9 @@ struct TranscriptionResult {
     var micASRJSONFile: String?
     var systemASRJSONFile: String?
     var systemDiarizationJSONFile: String?
+    var diarizationApplied: Bool
+    var diarizationDegradedReason: String?
+    var diarizationModelUsed: String?
     var state: TranscriptPipelineState
     var summary: String
 }
@@ -49,7 +52,7 @@ struct TranscriptionPipeline {
 
     init(
         asrEngine: ASREngine = WhisperCppEngine(),
-        diarizationService: SystemDiarizationService = PlaceholderSystemDiarizationService(),
+        diarizationService: SystemDiarizationService = CliSystemDiarizationService(),
         speakerMappingService: SystemSpeakerMappingService = SystemSpeakerMappingService(),
         mergeService: TranscriptMergeService = TranscriptMergeService(),
         renderService: TranscriptRenderService = TranscriptRenderService()
@@ -77,8 +80,10 @@ struct TranscriptionPipeline {
     func process(
         recording: RecordingSession,
         in sessionDirectory: URL,
-        modelResolution: RequiredModelsResolution
+        modelResolution: RequiredModelsResolution,
+        onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
     ) async throws -> TranscriptionResult {
+        await onStateChange?(.queued)
         let micURL = resolveAudioURL(fileName: recording.assets.microphoneFile, in: sessionDirectory)
         let systemURL = resolveAudioURL(fileName: recording.assets.systemAudioFile, in: sessionDirectory)
         let importedURL = resolveAudioURL(fileName: recording.assets.importedAudioFile, in: sessionDirectory)
@@ -93,13 +98,17 @@ struct TranscriptionPipeline {
 
         let micASRFile = "mic.asr.json"
         let systemASRFile = "system.asr.json"
+        let micASRModelFile = "mic.asr.model.txt"
+        let systemASRModelFile = "system.asr.model.txt"
         let diarizationFile = "system.diarization.json"
         let transcriptJSONFile = "transcript.json"
         let transcriptTXTFile = "transcript.txt"
         let transcriptSRTFile = "transcript.srt"
 
+        await onStateChange?(.transcribingMic)
         let micDoc = try await loadOrRunASR(
             existingFile: micASRFile,
+            modelFingerprintFile: micASRModelFile,
             channel: .mic,
             preferredAudioURL: micURL ?? importedURL,
             sessionID: recording.id,
@@ -107,8 +116,10 @@ struct TranscriptionPipeline {
             configuration: ASREngineConfiguration(modelURL: modelResolution.asrModelURL)
         )
 
+        await onStateChange?(.transcribingSystem)
         let systemDoc = try await loadOrRunASR(
             existingFile: systemASRFile,
+            modelFingerprintFile: systemASRModelFile,
             channel: .system,
             preferredAudioURL: systemURL,
             sessionID: recording.id,
@@ -116,13 +127,15 @@ struct TranscriptionPipeline {
             configuration: ASREngineConfiguration(modelURL: modelResolution.asrModelURL)
         )
 
-        let diarizationDoc = try await loadOrRunDiarization(
+        await onStateChange?(.diarizingSystem)
+        let diarizationOutcome = try await loadOrRunDiarization(
             existingFile: diarizationFile,
             systemAudioURL: systemURL,
             sessionID: recording.id,
             sessionDirectory: sessionDirectory,
             configuration: modelResolution.diarizationModelURL.map { DiarizationServiceConfiguration(modelURL: $0) }
         )
+        let diarizationDoc = diarizationOutcome.document
 
         let micSegments = (micDoc?.segments ?? []).map {
             TranscriptSegment(
@@ -144,19 +157,21 @@ struct TranscriptionPipeline {
             diarization: diarizationDoc
         )
 
+        await onStateChange?(.merging)
         let mergedSegments = mergeService.merge(micSegments: micSegments, systemSegments: systemSegments)
         let transcriptDocument = TranscriptDocument(
             version: 1,
             sessionID: recording.id,
             createdAt: Date(),
             channelsPresent: presentChannels(mic: micDoc, system: systemDoc),
-            diarizationApplied: diarizationDoc != nil,
+            diarizationApplied: diarizationOutcome.document != nil,
             mergePolicy: .deterministicStartEndChannelID,
             segments: mergedSegments
         )
 
         try writeJSON(transcriptDocument, to: sessionDirectory.appendingPathComponent(transcriptJSONFile))
 
+        await onStateChange?(.renderingOutputs)
         let rendered = renderService.render(document: transcriptDocument)
         try rendered.transcriptText.write(
             to: sessionDirectory.appendingPathComponent(transcriptTXTFile),
@@ -169,17 +184,24 @@ struct TranscriptionPipeline {
             encoding: .utf8
         )
 
-        let summary = diarizationDoc == nil && systemDoc != nil
-            ? "Transcript ready. System diarization unavailable, speaker labels degraded to Remote."
-            : "Transcript ready."
+        let summary: String
+        if let degradedReason = diarizationOutcome.degradedReason, systemDoc != nil {
+            summary = "Transcript ready. System diarization degraded: \(degradedReason). Speaker labels fallback to Remote."
+        } else {
+            summary = "Transcript ready."
+        }
 
+        await onStateChange?(.ready)
         return TranscriptionResult(
             transcriptFile: transcriptTXTFile,
             srtFile: transcriptSRTFile,
             transcriptJSONFile: transcriptJSONFile,
             micASRJSONFile: micDoc != nil ? micASRFile : nil,
             systemASRJSONFile: systemDoc != nil ? systemASRFile : nil,
-            systemDiarizationJSONFile: diarizationDoc != nil ? diarizationFile : nil,
+            systemDiarizationJSONFile: diarizationOutcome.document != nil ? diarizationFile : nil,
+            diarizationApplied: diarizationOutcome.document != nil,
+            diarizationDegradedReason: diarizationOutcome.degradedReason,
+            diarizationModelUsed: diarizationOutcome.modelUsed,
             state: .ready,
             summary: summary
         )
@@ -187,6 +209,7 @@ struct TranscriptionPipeline {
 
     private func loadOrRunASR(
         existingFile: String,
+        modelFingerprintFile: String,
         channel: TranscriptChannel,
         preferredAudioURL: URL?,
         sessionID: UUID,
@@ -194,13 +217,16 @@ struct TranscriptionPipeline {
         configuration: ASREngineConfiguration
     ) async throws -> ASRDocument? {
         let destination = sessionDirectory.appendingPathComponent(existingFile)
+        let fingerprintURL = sessionDirectory.appendingPathComponent(modelFingerprintFile)
+        let currentFingerprint = asrEngine.cacheFingerprint(configuration: configuration)
+        let existing: ASRDocument? = try readJSONIfExists(from: destination)
 
-        if let existing: ASRDocument = try readJSONIfExists(from: destination) {
+        if let existing, let storedFingerprint = try readTextIfExists(from: fingerprintURL), storedFingerprint == currentFingerprint {
             return existing
         }
 
         guard let preferredAudioURL else {
-            return nil
+            return existing
         }
 
         do {
@@ -216,12 +242,25 @@ struct TranscriptionPipeline {
             }
 
             try writeJSON(document, to: destination)
+            try currentFingerprint.write(to: fingerprintURL, atomically: true, encoding: .utf8)
             return document
         } catch let error as WhisperCppError {
             switch error {
             case .modelMissing:
                 throw TranscriptionPipelineError.modelMissing
             case .inferenceFailed(let message):
+                if channel == .system, isSystemAudioUnavailableError(message) {
+                    let emptyDocument = ASRDocument(
+                        version: 1,
+                        sessionID: sessionID,
+                        channel: .system,
+                        createdAt: Date(),
+                        segments: []
+                    )
+                    try writeJSON(emptyDocument, to: destination)
+                    try currentFingerprint.write(to: fingerprintURL, atomically: true, encoding: .utf8)
+                    return emptyDocument
+                }
                 throw TranscriptionPipelineError.inferenceFailed(message)
             case .unsupportedFormat:
                 throw TranscriptionPipelineError.unsupportedFormat
@@ -239,15 +278,27 @@ struct TranscriptionPipeline {
         sessionID: UUID,
         sessionDirectory: URL,
         configuration: DiarizationServiceConfiguration?
-    ) async throws -> DiarizationDocument? {
+    ) async throws -> DiarizationLoadOutcome {
         let destination = sessionDirectory.appendingPathComponent(existingFile)
 
         if let existing: DiarizationDocument = try readJSONIfExists(from: destination) {
-            return existing
+            return DiarizationLoadOutcome(
+                document: existing,
+                degradedReason: nil,
+                modelUsed: configuration?.modelURL.lastPathComponent
+            )
         }
 
-        guard let systemAudioURL, let configuration else {
-            return nil
+        guard let systemAudioURL else {
+            return DiarizationLoadOutcome(document: nil, degradedReason: "system audio track missing", modelUsed: nil)
+        }
+
+        guard systemAudioURL.lastPathComponent == "system.raw.caf" else {
+            return DiarizationLoadOutcome(document: nil, degradedReason: "unsupported system audio source", modelUsed: nil)
+        }
+
+        guard let configuration else {
+            return DiarizationLoadOutcome(document: nil, degradedReason: "diarization model not selected", modelUsed: nil)
         }
 
         do {
@@ -257,10 +308,30 @@ struct TranscriptionPipeline {
                 configuration: configuration
             )
             try writeJSON(document, to: destination)
-            return document
+            return DiarizationLoadOutcome(
+                document: document,
+                degradedReason: nil,
+                modelUsed: configuration.modelURL.lastPathComponent
+            )
+        } catch let error as DiarizationRuntimeError {
+            return DiarizationLoadOutcome(
+                document: nil,
+                degradedReason: error.errorDescription ?? "runtime error",
+                modelUsed: configuration.modelURL.lastPathComponent
+            )
         } catch {
-            return nil
+            return DiarizationLoadOutcome(
+                document: nil,
+                degradedReason: error.localizedDescription,
+                modelUsed: configuration.modelURL.lastPathComponent
+            )
         }
+    }
+
+    private struct DiarizationLoadOutcome {
+        var document: DiarizationDocument?
+        var degradedReason: String?
+        var modelUsed: String?
     }
 
     private func presentChannels(mic: ASRDocument?, system: ASRDocument?) -> [TranscriptChannel] {
@@ -292,4 +363,20 @@ struct TranscriptionPipeline {
         let data = try Data(contentsOf: url)
         return try decoder.decode(T.self, from: data)
     }
+
+    private func readTextIfExists(from url: URL) throws -> String? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func isSystemAudioUnavailableError(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("failed to read the frames of the audio data")
+            || normalized.contains("failed to read audio file")
+            || normalized.contains("invalid argument")
+    }
+
 }

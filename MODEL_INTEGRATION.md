@@ -2,23 +2,43 @@
 
 ## Current status (March 6, 2026)
 
-Model management is wired into app flow, but ASR/diarization engines are still placeholder implementations.
+Model management is wired into app flow with dynamic local folder discovery. All three model kinds now have real inference runners.
 
-- Model profile selection works (`compact`, `balanced`, `enhanced`).
-- Install/remove buttons work through `ModelManager`.
-- Transcription preflight checks required ASR model installation.
-- `ASREngine` and `SystemDiarizationService` now receive model URL via config/DI.
-- Real speech recognition and real speaker diarization are not integrated yet.
+- Model selection is done by kind (`asr`, `diarization`, `summarization`) from local folders.
+- Selected model IDs are persisted and used by transcription preflight/model resolution.
+- `ASREngine` and `SystemDiarizationService` receive selected model URLs via config/DI.
+- ASR inference is integrated through `WhisperCppEngine` + `whisper-main` runner.
+- Diarization inference is integrated via CLI runner (`diarization-main`) with typed error mapping.
+- Summarization inference is integrated via `LlamaCppSummaryEngine` + llama.cpp-compatible runner (`main`/`llama-cli`). Falls back to template summary on any failure.
+- Local source files are staged under `/Users/Shared/CallRecorderProModels/`.
 
-## Local-only model policy (v1)
+## Local model policy (v1)
 
-This build supports only local model sources.
+This build is local-file based.
 
-- `downloadURL` in `model-registry.json` must be `file://...`
-- HTTP/HTTPS model URLs are intentionally rejected.
-- Models are installed outside app bundle:
-  - `~/Library/Application Support/CallRecorderPro/Models/asr/<model-id>/`
-  - `~/Library/Application Support/CallRecorderPro/Models/diarization/<model-id>/`
+- UI model catalog reads local model files from:
+  - `/Users/Shared/CallRecorderProModels/<kind>/`
+  - `~/Library/Application Support/CallRecorderPro/Models/<kind>/`
+- Supported extensions:
+  - ASR / diarization: `.bin`
+  - Summarization: `.bin`, `.gguf`
+- `model-registry.json` remains as metadata/legacy-install source; current active model selection is folder-based.
+
+## Local source files staged for development
+
+Current local source files prepared on disk:
+
+- `/Users/Shared/CallRecorderProModels/asr/asr-compact-v1.bin`
+- `/Users/Shared/CallRecorderProModels/asr/asr-balanced-v1.bin`
+- `/Users/Shared/CallRecorderProModels/diarization/diarization-enhanced-v1.bin`
+- `/Users/Shared/CallRecorderProModels/summarization/summarization-compact-v1.bin`
+
+Verified metadata for these files:
+
+- `asr-compact-v1`: `59,707,625` bytes, `sha256:422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898`
+- `asr-balanced-v1`: `190,085,487` bytes, `sha256:ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb`
+- `diarization-enhanced-v1`: `5,986,908` bytes, `sha256:057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25`
+- `summarization-compact-v1`: `415,182,688` bytes, `sha256:9ee36184e616dfc76df4f5dd66f908dbde6979524ae36e6cefb67f532f798cb8`
 
 ## Install source of truth
 
@@ -30,16 +50,38 @@ A model is treated as installed only when all checks pass:
 
 If checksum fails, installation is rejected as invalid.
 
-## What is still placeholder
+## Runtime behavior
 
-- `WhisperCppEngine.transcribe(...)` currently returns empty ASR segments.
-- `PlaceholderSystemDiarizationService.diarize(...)` currently returns empty diarization segments.
-- Because of this, transcript pipeline can run but transcript content quality is placeholder-level.
+- Runtime default is `CliSystemDiarizationService` (placeholder is not used as default path).
+- On diarization errors (`binaryMissing`, `modelMissing`, malformed/empty/non-zero exit), transcription pipeline remains successful and degrades speaker labels to `Remote`.
+- Summarization uses `LlamaCppSummaryEngine` backed by `llama-cli` (llama.cpp). The engine is injected into `RecordingWorkflowController` via `SummaryEngine` protocol.
+- Summarization model is resolved at runtime via `modelManager.selectedLocalOption(kind: .summarization)` — not through `RequiredModelsResolution`.
+- On any summarization failure (binary missing, model missing, transcript too short, inference error, empty output, cancellation), the workflow falls back to template-based summary generation. Summarization errors never block the recording workflow.
+
+## Summarization runner details
+
+- Binary: `main` or `llama-cli` (llama.cpp-compatible), resolved from Bundle resources/current directory → `/usr/local/bin` → `/opt/homebrew/bin` → `$PATH`.
+- Prompt is written to a temp file to avoid shell escaping and argument length limits.
+- CLI args: `-m <model> --file <prompt> --no-display-prompt --ctx-size <N> --temp <T> --top-p <P>`.
+- Runtime defaults are persisted in preferences: `ctx-size=8192`, `temp=0.3`, `top-p=0.9`.
+- Prompt builder prefers SRT over plain transcript (SRT has timestamps), trims input to 12K characters.
+- Output parser extracts `## Topics`, `## Decisions`, `## Action Items`, `## Risks` sections into `SummaryDocument`.
+- `SummaryDocument` is kept in-memory only; the `rawMarkdown` field is written to `summary.md`.
+
+## ASR audio input policy
+
+- `WhisperCppEngine` sits at an integration boundary. It adapts app-owned audio artifacts to the format expected by the selected whisper binary.
+- Current recording sessions persist canonical raw tracks as `CAF` containers with normalized PCM audio. That is an internal pipeline choice and remains independent from `whisper-cli` input quirks.
+- `whisper-cli` (Homebrew `whisper-cpp`) only accepts `wav`, `flac`, `mp3`, `ogg`. It does **not** support `.caf`. It silently fails on `.caf` (exit code 0, no output file).
+- `ProcessWhisperCppRunner.convertToWAVIfNeeded()` now handles this: when the input audio extension is not natively supported by whisper, it converts to a temporary `16kHz mono LEI16 WAV` via `/usr/bin/afconvert` before invoking the binary, then removes the temporary file after inference completes.
+- Do not treat `WAV` support in the ASR runner as a reason to rewrite capture, merge, or repository asset contracts.
+- Future agents changing ASR runners should first verify the actual accepted input formats of the target binary, rather than assuming feature parity across whisper builds.
 
 ## How to use local models now
 
-1. Put model files on disk (for example under `/Users/<you>/Models/CallRecorderPro/`).
-2. Update `CallRecorderPro/Resources/model-registry.json` with `file://` absolute URLs.
-3. Set correct `checksum` (`sha256:<hex>`), profile, and size.
-4. Build and run app.
-5. Install models from sidebar "Models" section.
+1. Put model files on disk under `/Users/Shared/CallRecorderProModels/` using `asr/`, `diarization/`, and `summarization/` subfolders.
+2. Ensure `llama-cli` is installed (e.g., `brew install llama.cpp`) for summarization.
+3. Build and run app.
+4. Open `Models` menu (top-right).
+5. Select ASR/diarization/summarization models.
+6. Run transcribe/summarize flows. Summarization will use the LLM when both `llama-cli` and a summarization model are available; otherwise it falls back to the template summary.

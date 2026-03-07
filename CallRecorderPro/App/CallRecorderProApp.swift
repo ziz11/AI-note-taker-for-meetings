@@ -39,7 +39,7 @@ struct CallRecorderProApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(recordingsStore)
-                .frame(minWidth: 1180, minHeight: 720)
+                .frame(minWidth: 800, minHeight: 600)
                 .onAppear {
                     terminationCoordinator.recordingsStore = recordingsStore
                 }
