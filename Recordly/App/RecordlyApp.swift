@@ -25,11 +25,15 @@ struct RecordlyApp: App {
 
     init() {
         let modelManager = ModelManager()
+        let composition = DefaultInferenceComposition.make(modelManager: modelManager)
         let pipeline = TranscriptionPipeline()
         _recordingsStore = StateObject(
             wrappedValue: RecordingsStore(
-                audioCaptureService: AudioCaptureService(),
+                audioCaptureEngine: composition.audioCaptureEngine,
                 transcriptionPipeline: pipeline,
+                runtimeProfileSelector: composition.runtimeProfileSelector,
+                inferenceEngineFactory: composition.engineFactory,
+                transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
                 modelManager: modelManager
             )
         )

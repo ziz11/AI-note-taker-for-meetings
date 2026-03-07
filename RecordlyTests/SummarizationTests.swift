@@ -10,12 +10,12 @@ final class MockLlamaCppRunner: LlamaCppRunner {
         self.result = result
     }
 
-    func generate(prompt: String, configuration: SummaryEngineConfiguration) async throws -> String {
+    func generate(prompt: String, configuration: SummarizationConfiguration) async throws -> String {
         try result.get()
     }
 }
 
-final class MockSummaryEngine: SummaryEngine {
+final class MockSummaryEngine: SummarizationEngine {
     var result: Result<SummaryDocument, Error>
 
     init(result: Result<SummaryDocument, Error> = .success(SummaryDocument(
@@ -28,13 +28,13 @@ final class MockSummaryEngine: SummaryEngine {
         transcript: String,
         srtText: String?,
         recordingTitle: String,
-        configuration: SummaryEngineConfiguration
+        configuration: SummarizationConfiguration
     ) async throws -> SummaryDocument {
         try result.get()
     }
 }
 
-final class DelayedSummaryEngine: SummaryEngine {
+final class DelayedSummaryEngine: SummarizationEngine {
     private let delayNanoseconds: UInt64
     private let document: SummaryDocument
 
@@ -47,7 +47,7 @@ final class DelayedSummaryEngine: SummaryEngine {
         transcript: String,
         srtText: String?,
         recordingTitle: String,
-        configuration: SummaryEngineConfiguration
+        configuration: SummarizationConfiguration
     ) async throws -> SummaryDocument {
         try await Task.sleep(nanoseconds: delayNanoseconds)
         return document
@@ -96,6 +96,60 @@ final class SequencedLlamaProcessExecutor: LlamaProcessExecutor {
             return LlamaProcessResult(exitCode: 1, stdout: "", stderr: "No more results")
         }
         return results.removeFirst()
+    }
+}
+
+struct TestInferenceEngineFactory: InferenceEngineFactory {
+    let summarizationEngine: any SummarizationEngine
+
+    @MainActor
+    func makeAudioCaptureEngine(for profile: InferenceRuntimeProfile) throws -> any AudioCaptureEngine {
+        AudioCaptureService()
+    }
+
+    func makeASREngine(for profile: InferenceRuntimeProfile) throws -> any ASREngine {
+        NoopASREngine()
+    }
+
+    func makeDiarizationEngine(for profile: InferenceRuntimeProfile) throws -> any DiarizationEngine {
+        NoopDiarizationEngine()
+    }
+
+    func makeSummarizationEngine(for profile: InferenceRuntimeProfile) throws -> any SummarizationEngine {
+        summarizationEngine
+    }
+
+    func makeVoiceActivityDetectionEngine(for profile: InferenceRuntimeProfile) throws -> (any VoiceActivityDetectionEngine)? {
+        nil
+    }
+}
+
+struct NoopASREngine: ASREngine {
+    var displayName: String { "noop-asr" }
+
+    func transcribe(
+        audioURL: URL,
+        channel: TranscriptChannel,
+        sessionID: UUID,
+        configuration: ASREngineConfiguration
+    ) async throws -> ASRDocument {
+        ASRDocument(
+            version: 1,
+            sessionID: sessionID,
+            channel: channel,
+            createdAt: Date(),
+            segments: []
+        )
+    }
+}
+
+struct NoopDiarizationEngine: DiarizationEngine {
+    func diarize(
+        systemAudioURL: URL,
+        sessionID: UUID,
+        configuration: DiarizationEngineConfiguration
+    ) async throws -> DiarizationDocument {
+        DiarizationDocument(version: 1, sessionID: sessionID, createdAt: Date(), segments: [])
     }
 }
 
@@ -382,9 +436,9 @@ final class SummaryOutputParserTests: XCTestCase {
     }
 }
 
-// MARK: - LlamaCppSummaryEngine Tests
+// MARK: - LlamaCppSummarizationEngine Tests
 
-final class LlamaCppSummaryEngineTests: XCTestCase {
+final class LlamaCppSummarizationEngineTests: XCTestCase {
     private let tempModelURL = FileManager.default.temporaryDirectory.appendingPathComponent("test-model-\(UUID().uuidString).bin")
 
     override func setUp() {
@@ -399,8 +453,8 @@ final class LlamaCppSummaryEngineTests: XCTestCase {
 
     func testTranscriptTooShortThrows() async {
         let runner = MockLlamaCppRunner()
-        let engine = LlamaCppSummaryEngine(runner: runner)
-        let config = SummaryEngineConfiguration(modelURL: tempModelURL)
+        let engine = LlamaCppSummarizationEngine(runner: runner)
+        let config = SummarizationConfiguration(modelURL: tempModelURL)
 
         do {
             _ = try await engine.summarize(
@@ -417,9 +471,9 @@ final class LlamaCppSummaryEngineTests: XCTestCase {
 
     func testModelMissingThrows() async {
         let runner = MockLlamaCppRunner()
-        let engine = LlamaCppSummaryEngine(runner: runner)
+        let engine = LlamaCppSummarizationEngine(runner: runner)
         let missingURL = URL(fileURLWithPath: "/nonexistent/model.bin")
-        let config = SummaryEngineConfiguration(modelURL: missingURL)
+        let config = SummarizationConfiguration(modelURL: missingURL)
         let transcript = String(repeating: "word ", count: 20)
 
         do {
@@ -450,8 +504,8 @@ final class LlamaCppSummaryEngineTests: XCTestCase {
         - Timeline tight
         """
         let runner = MockLlamaCppRunner(result: .success(markdown))
-        let engine = LlamaCppSummaryEngine(runner: runner)
-        let config = SummaryEngineConfiguration(modelURL: tempModelURL)
+        let engine = LlamaCppSummarizationEngine(runner: runner)
+        let config = SummarizationConfiguration(modelURL: tempModelURL)
         let transcript = String(repeating: "word ", count: 20)
 
         let doc = try await engine.summarize(
@@ -482,8 +536,8 @@ final class LlamaCppSummaryEngineTests: XCTestCase {
         - Scope creep
         """
         let runner = MockLlamaCppRunner(result: .success(markdown))
-        let engine = LlamaCppSummaryEngine(runner: runner)
-        let config = SummaryEngineConfiguration(modelURL: tempModelURL)
+        let engine = LlamaCppSummarizationEngine(runner: runner)
+        let config = SummarizationConfiguration(modelURL: tempModelURL)
         let srt = """
         1
         00:00:00,000 --> 00:00:03,000
@@ -506,8 +560,8 @@ final class LlamaCppSummaryEngineTests: XCTestCase {
 
     func testRunnerFailurePropagates() async {
         let runner = MockLlamaCppRunner(result: .failure(SummarizationError.inferenceFailed(message: "boom")))
-        let engine = LlamaCppSummaryEngine(runner: runner)
-        let config = SummaryEngineConfiguration(modelURL: tempModelURL)
+        let engine = LlamaCppSummarizationEngine(runner: runner)
+        let config = SummarizationConfiguration(modelURL: tempModelURL)
         let transcript = String(repeating: "word ", count: 20)
 
         do {
@@ -525,8 +579,8 @@ final class LlamaCppSummaryEngineTests: XCTestCase {
 
     func testUnstructuredOutputThrowsOutputParseFailed() async {
         let runner = MockLlamaCppRunner(result: .success("plain text without expected markdown sections"))
-        let engine = LlamaCppSummaryEngine(runner: runner)
-        let config = SummaryEngineConfiguration(modelURL: tempModelURL)
+        let engine = LlamaCppSummarizationEngine(runner: runner)
+        let config = SummarizationConfiguration(modelURL: tempModelURL)
         let transcript = String(repeating: "word ", count: 20)
 
         do {
@@ -598,9 +652,13 @@ final class RecordingsStoreSummarizationTests: XCTestCase {
                 projectDirectories: { [] }
             )
         )
+        let composition = DefaultInferenceComposition.make(modelManager: modelManager)
         let store = RecordingsStore(
-            audioCaptureService: AudioCaptureService(),
+            audioCaptureEngine: composition.audioCaptureEngine,
             transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: composition.runtimeProfileSelector,
+            inferenceEngineFactory: composition.engineFactory,
+            transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
             modelManager: modelManager,
             repository: repository,
             previewMode: false
@@ -701,13 +759,10 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             )
         )
 
-        let workflow = RecordingWorkflowController(
-            audioCaptureService: AudioCaptureService(),
-            transcriptionPipeline: TranscriptionPipeline(),
+        let workflow = makeWorkflow(
             repository: repository,
             modelManager: modelManager,
-            summaryEngine: summaryEngine,
-            selectedModelProfile: .balanced,
+            summarizationEngine: summaryEngine,
             summarizationTimeoutSeconds: 1
         )
 
@@ -772,13 +827,10 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             )
         )
 
-        let workflow = RecordingWorkflowController(
-            audioCaptureService: AudioCaptureService(),
-            transcriptionPipeline: TranscriptionPipeline(),
+        let workflow = makeWorkflow(
             repository: repository,
             modelManager: modelManager,
-            summaryEngine: summaryEngine,
-            selectedModelProfile: .balanced,
+            summarizationEngine: summaryEngine,
             summarizationTimeoutSeconds: 3
         )
 
@@ -819,6 +871,25 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         manager.setSelectedModelID(selected?.id, for: .summarization)
         return manager
     }
+
+    private func makeWorkflow(
+        repository: InMemoryRecordingsRepository,
+        modelManager: ModelManager,
+        summarizationEngine: any SummarizationEngine,
+        summarizationTimeoutSeconds: UInt64
+    ) -> RecordingWorkflowController {
+        let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(modelManager: modelManager)
+        let engineFactory = TestInferenceEngineFactory(summarizationEngine: summarizationEngine)
+        return RecordingWorkflowController(
+            audioCaptureEngine: AudioCaptureService(),
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: runtimeProfileSelector,
+            inferenceEngineFactory: engineFactory,
+            repository: repository,
+            selectedModelProfile: .balanced,
+            summarizationTimeoutSeconds: summarizationTimeoutSeconds
+        )
+    }
 }
 
 // MARK: - ProcessLlamaCppRunner Tests
@@ -839,7 +910,7 @@ final class ProcessLlamaCppRunnerTests: XCTestCase {
 
         let output = try await runner.generate(
             prompt: "test prompt",
-            configuration: SummaryEngineConfiguration(
+            configuration: SummarizationConfiguration(
                 modelURL: modelURL,
                 runtime: SummarizationRuntimeSettings(
                     contextSize: 8_192,
@@ -881,7 +952,7 @@ final class ProcessLlamaCppRunnerTests: XCTestCase {
         do {
             _ = try await runner.generate(
                 prompt: "test",
-                configuration: SummaryEngineConfiguration(
+                configuration: SummarizationConfiguration(
                     modelURL: modelURL,
                     runtime: .default
                 )
@@ -912,7 +983,7 @@ final class ProcessLlamaCppRunnerTests: XCTestCase {
 
         let output = try await runner.generate(
             prompt: "test",
-            configuration: SummaryEngineConfiguration(modelURL: modelURL, runtime: .default)
+            configuration: SummarizationConfiguration(modelURL: modelURL, runtime: .default)
         )
 
         XCTAssertEqual(output, "summary output")

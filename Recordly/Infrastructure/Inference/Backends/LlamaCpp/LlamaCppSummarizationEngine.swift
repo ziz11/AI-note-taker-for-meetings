@@ -1,6 +1,6 @@
 import Foundation
 
-struct LlamaCppSummaryEngine: SummaryEngine {
+struct LlamaCppSummarizationEngine: SummarizationEngine {
     static let minimumTranscriptLength = 50
 
     private let runner: LlamaCppRunner
@@ -15,7 +15,7 @@ struct LlamaCppSummaryEngine: SummaryEngine {
         transcript: String,
         srtText: String?,
         recordingTitle: String,
-        configuration: SummaryEngineConfiguration
+        configuration: SummarizationConfiguration
     ) async throws -> SummaryDocument {
         if Task.isCancelled {
             throw SummarizationError.cancelled

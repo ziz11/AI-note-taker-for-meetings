@@ -16,7 +16,7 @@
 - Keep format compatible with future remote JSON.
 
 ### Task 2: Persistent model storage
-- Add `AppPaths` support for `~/Library/Application Support/CallRecorderPro/Models`.
+- Add `AppPaths` support for `~/Library/Application Support/Recordly/Models`.
 - Implement deterministic install directories by type/id.
 - Add helpers for canonical model URL, file checks, installed metadata file, removal, and disk size.
 

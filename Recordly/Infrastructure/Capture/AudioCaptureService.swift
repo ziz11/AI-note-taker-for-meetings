@@ -567,7 +567,7 @@ final class ScreenCaptureAudioService: NSObject {
 }
 
 @MainActor
-final class AudioCaptureService {
+final class AudioCaptureService: AudioCaptureEngine {
     private let metadataStore = SessionMetadataStore()
     private lazy var mergeService = SessionMergeService(metadataStore: metadataStore)
     private let screenCaptureService = ScreenCaptureAudioService()

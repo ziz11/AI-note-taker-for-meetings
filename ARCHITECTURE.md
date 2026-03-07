@@ -4,88 +4,138 @@
 
 ```text
 Recordly/
+  App/
+    ContentView.swift
+    RecordlyApp.swift
+  Domain/
+    Recordings/
+      RecordingSession.swift
+  Features/
+    Recordings/
+      Application/
+        RecordingsStore.swift
+        RecordingWorkflowController.swift
+        PlaybackController.swift
+      Presentation/
+        RecordingsViewState.swift
+      Views/
+        RecordingSidebarView.swift
+        RecordingDetailView.swift
+        RecordingRowView.swift
+        RecordButton.swift
+        EmptyRecordingView.swift
+    Onboarding/
+      ModelOnboardingCoordinator.swift
+      ModelOnboardingView.swift
+    Settings/
+      Models/
+        ModelSettingsView.swift
+        ModelSettingsViewModel.swift
   Infrastructure/
+    Capture/
+      AudioCaptureService.swift
+      SessionMergeService.swift
+      DirectPCMMixService.swift
+    Inference/
+      Contracts/
+        InferenceStageContracts.swift
+      Runtime/
+        InferenceRuntimeProfile.swift
+        DefaultInferenceRuntimeProfileSelector.swift
+      Factory/
+        InferenceEngineFactory.swift
+        DefaultInferenceEngineFactory.swift
+      Composition/
+        DefaultInferenceComposition.swift
+      Audio/
+        AudioInput.swift
+      Backends/
+        WhisperCpp/
+          WhisperCppASREngine.swift
+        CliDiarization/
+          CliDiarizationEngine.swift
+        LlamaCpp/
+          LlamaCppRunner.swift
+          LlamaCppSummarizationEngine.swift
+    Transcription/
+      TranscriptionPipeline.swift
+      TranscriptMergeService.swift
+      TranscriptRenderService.swift
+      SystemSpeakerMappingService.swift
+      Models/
+        ASRDocument.swift
+        DiarizationDocument.swift
+        TranscriptDocument.swift
+    Summarization/
+      SummaryEngine.swift
+      SummaryPromptBuilder.swift
+      SummaryOutputParser.swift
     Models/
       ModelTypes.swift
       ModelRegistry.swift
       ModelStorage.swift
       ModelDownloader.swift
+      ModelPreferencesStore.swift
       ModelManager.swift
-    Summarization/
-      SummaryEngine.swift
-      SummaryPromptBuilder.swift
-      SummaryOutputParser.swift
-      LlamaCppRunner.swift
-      LlamaCppSummaryEngine.swift
+    Persistence/
+      AppPaths.swift
+      RecordingsRepository.swift
 ```
 
-## Model architecture
+## Inference Architecture
 
-- `ModelRegistry`: loads known models from bundle JSON manifest.
-- `ModelStorage`: manages install paths under Application Support and checksum validation.
-- `ModelDownloader`: local-only source reader (`file://`), no network fetch in v1.
-- `ModelManager`: high-level orchestration for install/remove/state/profile requirements.
+Inference is capability + backend-centric and split by responsibility:
 
-## Transcription dependency injection
+- Stage contracts: `AudioCaptureEngine`, `ASREngine`, `DiarizationEngine`, `SummarizationEngine`, `VoiceActivityDetectionEngine`.
+- Runtime selection: `InferenceStage`, `InferenceBackend`, `StageRuntimeSelection`, `InferenceRuntimeProfile`.
+- Profile resolving: `DefaultInferenceRuntimeProfileSelector` (reads `ModelManager` only for discovery/install/resolution/settings).
+- Engine routing: `DefaultInferenceEngineFactory` creates concrete stage engines by `stage + backend`.
+- Composition root: `DefaultInferenceComposition` is the single place where per-stage backend defaults are selected.
 
-- `RecordingWorkflowController` calls `ModelManager.ensureRequiredModelsInstalled(...)` before transcription.
-- `TranscriptionPipeline` receives `RequiredModelsResolution` and uses the resolved ASR/diarization URLs during processing.
-- `WhisperCppEngine` and `SystemDiarizationService` consume model URLs through configuration objects.
-
-## Summarization architecture
+Dependency flow:
 
 ```text
-SummaryEngine (protocol)
-    ↑
-LlamaCppSummaryEngine ──→ LlamaCppRunner (protocol) ──→ LlamaProcessExecutor (protocol)
-                              ↑                              ↑
-                         ProcessLlamaCppRunner      FoundationLlamaProcessExecutor
+RecordlyApp
+  -> DefaultInferenceComposition
+    -> { InferenceRuntimeProfileSelecting + InferenceEngineFactory + AudioCaptureEngine }
+      -> RecordingsStore
+        -> RecordingWorkflowController
+          -> TranscriptionPipeline
+            -> stage contracts (backend-agnostic)
 ```
 
-Supporting pure functions: `SummaryPromptBuilder` (prompt construction + context trimming), `SummaryOutputParser` (regex-based section extraction).
+## Orchestration Boundaries
 
-- `SummaryEngine` protocol defines the summarization contract: transcript + SRT + title + config → `SummaryDocument`.
-- `LlamaCppSummaryEngine` orchestrates guardrails (min transcript length, model file existence, cancellation) then delegates to `LlamaCppRunner`.
-- `ProcessLlamaCppRunner` writes prompt to a temp file and invokes `llama-cli` with `--file`, `--no-display-prompt`, `--ctx-size`, `--temp`, `--top-p`, and `-n <maxPredictionTokens>`.
-- `resolveLlamaBinaryURL()` searches Bundle resources → `/usr/local/bin` → `/opt/homebrew/bin` → `$PATH` for `llama-cli`.
-- `SummaryPromptBuilder` prefers SRT (has timestamps) over plain transcript, trims to 12K characters, and requests structured markdown with `## Topics`, `## Decisions`, `## Action Items`, `## Risks`.
-- `SummaryOutputParser` extracts bullet lists under each heading into `SummaryDocument` fields; stores full output in `rawMarkdown`.
+- `RecordingsStore` coordinates app state and injects workflow dependencies.
+- `RecordingWorkflowController` owns workflow policies (degradation/fallback/timeout behavior).
+- `TranscriptionPipeline` orchestrates stage execution and persistence of transcript artifacts.
+- Pipeline/workflow do not instantiate concrete backends directly.
 
-## Summarization dependency injection
+Fallback ownership:
 
-- `RecordingWorkflowController` accepts an optional `summaryEngine: SummaryEngine?` via init.
-- `RecordingsStore` injects `LlamaCppSummaryEngine()` when constructing `RecordingWorkflowController`.
-- `summarize(recording:)` is `async throws`. It tries the LLM engine first (when engine and summarization model are both available), then falls back to the existing template-based `composeSummary()` on any failure.
-- Summarization model is resolved via `modelManager.selectedLocalOption(kind: .summarization)` — no changes to `RequiredModelsResolution`.
+- Backend implementations throw stage-specific errors.
+- Selector only resolves runtime profile and artifacts.
+- Factory only routes/creates engines.
+- Degradation/fallback decisions remain in orchestration (`RecordingWorkflowController`, `TranscriptionPipeline`).
 
-## Reliability contracts
+## Model Responsibilities
 
-- Mutable model files are never read from app bundle.
-- Incomplete/invalid installs are not treated as valid.
-- Reinstall is idempotent when checksum and local artifacts are already valid.
+- `ModelManager` is not an orchestration center.
+- `ModelManager` owns model discovery/install/resolution, availability checks, and runtime settings persistence.
+- `InferenceRuntimeProfile` carries resolved artifacts and stage runtime params into pipeline execution.
 
-## Capture and audio pipeline
+## Audio Boundary
 
-- `ScreenCaptureKit` is the primary live-capture source for both system audio and microphone audio.
-- Capture input arrives as `CMSampleBuffer`, not as ready-made audio files.
-- `AudioCaptureService` converts input buffers into one canonical internal working format: `Float32 PCM`, `48 kHz`, `mono`, non-interleaved.
-- Canonical raw tracks are persisted as:
-  - `mic.raw.caf`
-  - `system.raw.caf`
-- `CAF` is an internal container choice for normalized PCM working audio. It is not a product requirement that user-facing outputs be `CAF`.
-- `SessionMergeService` performs offline PCM merge into `merged-call.caf`, then exports `merged-call.m4a` for normal playback when export succeeds.
-- Recovery logic may temporarily surface `merged-call.caf` if the `m4a` export is missing, but `m4a` remains the preferred playback artifact.
+- Capture internal contract remains canonical PCM in CAF (`mic.raw.caf`, `system.raw.caf`).
+- `AudioInput`/`AudioInputAdapter` provide boundary-level adaptation for stage engines without changing capture/storage contracts.
+- `merged-call.m4a` remains preferred playback artifact for live recordings.
 
-## Audio architecture decisions
+## Extension Point (FluidAudio)
 
-- The source of truth for recorded session audio is canonical PCM, not the filename extension.
-- The system deliberately normalizes capture before merge so drift detection, frame offsets, and deterministic mixing do not depend on variable input stream formats.
-- Avoid broad refactors that replace internal `CAF` working files with `WAV` unless there is a strong pipeline-level reason. A downstream tool's file-format preference alone is not sufficient reason to rewrite capture/storage contracts.
-- Prefer boundary adaptation: if a downstream binary or service requires `WAV`, `FLAC`, or another consumer format, convert at that boundary rather than changing the internal recording format.
+To add FluidAudio:
 
-## Current technical gap
+1. Add backend module(s) under `Infrastructure/Inference/Backends/FluidAudio`.
+2. Add routing in `DefaultInferenceEngineFactory`.
+3. Switch stage backend mapping in `DefaultInferenceComposition`.
 
-- All three inference stages (ASR, diarization, summarization) are now wired to real CLI runners.
-- ASR uses `whisper-cli`, diarization uses `diarization-main`, summarization uses `llama-cli`.
-- No cloud/remote inference paths exist yet.
-- Quality scoring and structured summary artifact (`summary.json`) are not implemented.
+No pipeline/orchestration rewrite should be required.
