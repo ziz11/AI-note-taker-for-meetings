@@ -1,49 +1,5 @@
 import Foundation
 
-struct ASREngineConfiguration: Sendable {
-    var modelURL: URL
-}
-
-protocol ASREngine {
-    var displayName: String { get }
-    func cacheFingerprint(configuration: ASREngineConfiguration) -> String
-    func transcribe(
-        audioURL: URL,
-        channel: TranscriptChannel,
-        sessionID: UUID,
-        configuration: ASREngineConfiguration
-    ) async throws -> ASRDocument
-}
-
-extension ASREngine {
-    func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
-        configuration.modelURL.standardizedFileURL.path
-    }
-}
-
-enum WhisperCppError: LocalizedError {
-    case modelMissing(URL)
-    case inferenceFailed(message: String)
-    case unsupportedFormat(URL)
-    case outputParseFailed
-    case cancelled
-
-    var errorDescription: String? {
-        switch self {
-        case .modelMissing(let url):
-            return "ASR model is missing at: \(url.path)"
-        case .inferenceFailed(let message):
-            return "ASR inference failed: \(message)"
-        case .unsupportedFormat(let url):
-            return "Unsupported audio format for ASR: \(url.lastPathComponent)"
-        case .outputParseFailed:
-            return "Failed to parse ASR output produced by whisper.cpp"
-        case .cancelled:
-            return "ASR inference was cancelled"
-        }
-    }
-}
-
 protocol WhisperCppRunner {
     func transcribe(audioURL: URL, modelURL: URL) async throws -> WhisperCppRunnerOutput
 }
@@ -146,12 +102,12 @@ struct ProcessWhisperCppRunner: WhisperCppRunner {
 
         let result = try await processExecutor.run(executableURL: binaryURL, arguments: args)
         guard result.exitCode == 0 else {
-            throw WhisperCppError.inferenceFailed(message: result.stderr.isEmpty ? "exit code \(result.exitCode)" : result.stderr)
+            throw ASREngineRuntimeError.inferenceFailed(message: result.stderr.isEmpty ? "exit code \(result.exitCode)" : result.stderr)
         }
 
         guard fileManager.fileExists(atPath: outputJSONURL.path) else {
             let detail = result.stderr.isEmpty ? "" : " stderr: \(result.stderr)"
-            throw WhisperCppError.inferenceFailed(
+            throw ASREngineRuntimeError.inferenceFailed(
                 message: "whisper-cli produced no output file for \(effectiveAudioURL.lastPathComponent).\(detail)"
             )
         }
@@ -188,13 +144,13 @@ struct ProcessWhisperCppRunner: WhisperCppRunner {
 
         guard process.terminationStatus == 0 else {
             let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            throw WhisperCppError.inferenceFailed(
+            throw ASREngineRuntimeError.inferenceFailed(
                 message: "Failed to convert \(audioURL.lastPathComponent) to WAV: \(stderr)"
             )
         }
 
         guard fileManager.fileExists(atPath: wavURL.path) else {
-            throw WhisperCppError.inferenceFailed(
+            throw ASREngineRuntimeError.inferenceFailed(
                 message: "Audio conversion produced no output for \(audioURL.lastPathComponent)"
             )
         }
@@ -244,14 +200,14 @@ struct ProcessWhisperCppRunner: WhisperCppRunner {
             return candidate
         }
 
-        throw WhisperCppError.inferenceFailed(
+        throw ASREngineRuntimeError.inferenceFailed(
             message: "whisper binary not found (looked for whisper-main, whisper-cli, or main in app resources, Homebrew paths, and PATH)"
         )
     }
 
     private func parseWhisperJSONOutput(_ data: Data) throws -> WhisperCppRunnerOutput {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw WhisperCppError.outputParseFailed
+            throw ASREngineRuntimeError.outputParseFailed
         }
 
         let language = (root["result"] as? [String: Any])?["language"] as? String
@@ -276,7 +232,7 @@ struct ProcessWhisperCppRunner: WhisperCppRunner {
         }
 
         guard !segments.isEmpty else {
-            throw WhisperCppError.outputParseFailed
+            throw ASREngineRuntimeError.outputParseFailed
         }
 
         return WhisperCppRunnerOutput(language: language, segments: segments)
@@ -328,24 +284,25 @@ struct FoundationWhisperProcessExecutor: WhisperProcessExecutor {
     }
 }
 
-struct WhisperCppEngine: ASREngine {
+struct WhisperCppASREngine: ASREngine {
     let displayName: String = "WhisperCpp (RU+EN)"
-    private let runner: WhisperCppRunner
-    private let preferences: ModelPreferencesStore
+    private let runnerFactory: (ASRLanguage) -> WhisperCppRunner
 
     init(
-        runner: WhisperCppRunner? = nil,
-        preferences: ModelPreferencesStore = ModelPreferencesStore()
+        runner: WhisperCppRunner? = nil
     ) {
-        self.preferences = preferences
-        self.runner = runner ?? ProcessWhisperCppRunner(
-            languageCodeProvider: { preferences.selectedASRLanguage.whisperCode }
-        )
+        if let runner {
+            self.runnerFactory = { _ in runner }
+        } else {
+            self.runnerFactory = { language in
+                ProcessWhisperCppRunner(languageCode: language.whisperCode)
+            }
+        }
     }
 
     func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
         let modelPath = configuration.modelURL.standardizedFileURL.path
-        let language = preferences.selectedASRLanguage.whisperCode
+        let language = configuration.language.whisperCode
         return "\(modelPath)|lang:\(language)"
     }
 
@@ -356,26 +313,27 @@ struct WhisperCppEngine: ASREngine {
         configuration: ASREngineConfiguration
     ) async throws -> ASRDocument {
         if Task.isCancelled {
-            throw WhisperCppError.cancelled
+            throw ASREngineRuntimeError.cancelled
         }
 
         guard FileManager.default.fileExists(atPath: audioURL.path) else {
             throw CocoaError(.fileNoSuchFile)
         }
         guard FileManager.default.fileExists(atPath: configuration.modelURL.path) else {
-            throw WhisperCppError.modelMissing(configuration.modelURL)
+            throw ASREngineRuntimeError.modelMissing(configuration.modelURL)
         }
 
         let supportedExtensions: Set<String> = ["caf", "wav", "mp3", "m4a", "flac", "ogg"]
         let ext = audioURL.pathExtension.lowercased()
         guard supportedExtensions.contains(ext) else {
-            throw WhisperCppError.unsupportedFormat(audioURL)
+            throw ASREngineRuntimeError.unsupportedFormat(audioURL)
         }
 
+        let runner = runnerFactory(configuration.language)
         let output = try await runner.transcribe(audioURL: audioURL, modelURL: configuration.modelURL)
 
         if Task.isCancelled {
-            throw WhisperCppError.cancelled
+            throw ASREngineRuntimeError.cancelled
         }
 
         return ASRDocument(

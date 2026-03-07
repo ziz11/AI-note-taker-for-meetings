@@ -122,7 +122,7 @@ struct FoundationLlamaProcessExecutor: LlamaProcessExecutor {
 }
 
 protocol LlamaCppRunner {
-    func generate(prompt: String, configuration: SummaryEngineConfiguration) async throws -> String
+    func generate(prompt: String, configuration: SummarizationConfiguration) async throws -> String
 }
 
 struct ProcessLlamaCppRunner: LlamaCppRunner {
@@ -144,7 +144,7 @@ struct ProcessLlamaCppRunner: LlamaCppRunner {
         self.temporaryDirectory = temporaryDirectory
     }
 
-    func generate(prompt: String, configuration: SummaryEngineConfiguration) async throws -> String {
+    func generate(prompt: String, configuration: SummarizationConfiguration) async throws -> String {
         let binaryURL = try resolveBinaryURL()
         let runtime = normalizedRuntimeSettings(configuration.runtime)
 

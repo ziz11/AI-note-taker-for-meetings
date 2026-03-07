@@ -41,8 +41,7 @@ struct TranscriptionResult {
 }
 
 struct TranscriptionPipeline {
-    let asrEngine: ASREngine
-    let diarizationService: SystemDiarizationService
+    let audioInputAdapter: any AudioInputAdapter
     let speakerMappingService: SystemSpeakerMappingService
     let mergeService: TranscriptMergeService
     let renderService: TranscriptRenderService
@@ -51,14 +50,12 @@ struct TranscriptionPipeline {
     private let decoder: JSONDecoder
 
     init(
-        asrEngine: ASREngine = WhisperCppEngine(),
-        diarizationService: SystemDiarizationService = CliSystemDiarizationService(),
+        audioInputAdapter: any AudioInputAdapter = PassthroughAudioInputAdapter(),
         speakerMappingService: SystemSpeakerMappingService = SystemSpeakerMappingService(),
         mergeService: TranscriptMergeService = TranscriptMergeService(),
         renderService: TranscriptRenderService = TranscriptRenderService()
     ) {
-        self.asrEngine = asrEngine
-        self.diarizationService = diarizationService
+        self.audioInputAdapter = audioInputAdapter
         self.speakerMappingService = speakerMappingService
         self.mergeService = mergeService
         self.renderService = renderService
@@ -73,28 +70,44 @@ struct TranscriptionPipeline {
         self.decoder = decoder
     }
 
-    var engineDisplayName: String {
-        asrEngine.displayName
-    }
-
     func process(
         recording: RecordingSession,
         in sessionDirectory: URL,
-        modelResolution: RequiredModelsResolution,
+        runtimeProfile: InferenceRuntimeProfile,
+        engineFactory: any InferenceEngineFactory,
         onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
     ) async throws -> TranscriptionResult {
         await onStateChange?(.queued)
-        let micURL = resolveAudioURL(fileName: recording.assets.microphoneFile, in: sessionDirectory)
-        let systemURL = resolveAudioURL(fileName: recording.assets.systemAudioFile, in: sessionDirectory)
-        let importedURL = resolveAudioURL(fileName: recording.assets.importedAudioFile, in: sessionDirectory)
 
-        guard micURL != nil || systemURL != nil || importedURL != nil else {
+        let micInput = try prepareInput(
+            fileName: recording.assets.microphoneFile,
+            channel: .mic,
+            in: sessionDirectory
+        )
+        let systemInput = try prepareInput(
+            fileName: recording.assets.systemAudioFile,
+            channel: .system,
+            in: sessionDirectory
+        )
+        let importedInput = try prepareImportedInput(
+            fileName: recording.assets.importedAudioFile,
+            in: sessionDirectory
+        )
+
+        guard micInput != nil || systemInput != nil || importedInput != nil else {
             throw TranscriptionPipelineError.missingInputAudio
         }
 
-        guard FileManager.default.fileExists(atPath: modelResolution.asrModelURL.path) else {
+        guard let asrModelURL = runtimeProfile.modelArtifacts.asrModelURL,
+              FileManager.default.fileExists(atPath: asrModelURL.path) else {
             throw TranscriptionPipelineError.modelMissing
         }
+
+        let asrEngine = try engineFactory.makeASREngine(for: runtimeProfile)
+        let asrConfiguration = ASREngineConfiguration(
+            modelURL: asrModelURL,
+            language: runtimeProfile.asrLanguage
+        )
 
         let micASRFile = "mic.asr.json"
         let systemASRFile = "system.asr.json"
@@ -107,33 +120,49 @@ struct TranscriptionPipeline {
 
         await onStateChange?(.transcribingMic)
         let micDoc = try await loadOrRunASR(
+            asrEngine: asrEngine,
             existingFile: micASRFile,
             modelFingerprintFile: micASRModelFile,
             channel: .mic,
-            preferredAudioURL: micURL ?? importedURL,
+            preferredAudioURL: micInput?.url ?? importedInput?.url,
             sessionID: recording.id,
             sessionDirectory: sessionDirectory,
-            configuration: ASREngineConfiguration(modelURL: modelResolution.asrModelURL)
+            configuration: asrConfiguration
         )
 
         await onStateChange?(.transcribingSystem)
         let systemDoc = try await loadOrRunASR(
+            asrEngine: asrEngine,
             existingFile: systemASRFile,
             modelFingerprintFile: systemASRModelFile,
             channel: .system,
-            preferredAudioURL: systemURL,
+            preferredAudioURL: systemInput?.url,
             sessionID: recording.id,
             sessionDirectory: sessionDirectory,
-            configuration: ASREngineConfiguration(modelURL: modelResolution.asrModelURL)
+            configuration: asrConfiguration
         )
+
+        let diarizationEngine: (any DiarizationEngine)?
+        let diarizationBackendError: String?
+        do {
+            diarizationEngine = try engineFactory.makeDiarizationEngine(for: runtimeProfile)
+            diarizationBackendError = nil
+        } catch {
+            diarizationEngine = nil
+            diarizationBackendError = error.localizedDescription
+        }
 
         await onStateChange?(.diarizingSystem)
         let diarizationOutcome = try await loadOrRunDiarization(
+            diarizationEngine: diarizationEngine,
             existingFile: diarizationFile,
-            systemAudioURL: systemURL,
+            systemAudioURL: systemInput?.url,
             sessionID: recording.id,
             sessionDirectory: sessionDirectory,
-            configuration: modelResolution.diarizationModelURL.map { DiarizationServiceConfiguration(modelURL: $0) }
+            configuration: runtimeProfile.modelArtifacts.diarizationModelURL.map {
+                DiarizationEngineConfiguration(modelURL: $0)
+            },
+            backendUnavailableReason: diarizationBackendError
         )
         let diarizationDoc = diarizationOutcome.document
 
@@ -207,7 +236,35 @@ struct TranscriptionPipeline {
         )
     }
 
+    private func prepareInput(
+        fileName: String?,
+        channel: TranscriptChannel,
+        in sessionDirectory: URL
+    ) throws -> PreparedAudioInput? {
+        guard let fileName else {
+            return nil
+        }
+        return try audioInputAdapter.prepare(
+            .sessionAsset(fileName: fileName, channel: channel),
+            in: sessionDirectory
+        )
+    }
+
+    private func prepareImportedInput(
+        fileName: String?,
+        in sessionDirectory: URL
+    ) throws -> PreparedAudioInput? {
+        guard let fileName else {
+            return nil
+        }
+        return try audioInputAdapter.prepare(
+            .sessionAsset(fileName: fileName, channel: .mic),
+            in: sessionDirectory
+        )
+    }
+
     private func loadOrRunASR(
+        asrEngine: any ASREngine,
         existingFile: String,
         modelFingerprintFile: String,
         channel: TranscriptChannel,
@@ -244,7 +301,7 @@ struct TranscriptionPipeline {
             try writeJSON(document, to: destination)
             try currentFingerprint.write(to: fingerprintURL, atomically: true, encoding: .utf8)
             return document
-        } catch let error as WhisperCppError {
+        } catch let error as ASREngineRuntimeError {
             switch error {
             case .modelMissing:
                 throw TranscriptionPipelineError.modelMissing
@@ -273,11 +330,13 @@ struct TranscriptionPipeline {
     }
 
     private func loadOrRunDiarization(
+        diarizationEngine: (any DiarizationEngine)?,
         existingFile: String,
         systemAudioURL: URL?,
         sessionID: UUID,
         sessionDirectory: URL,
-        configuration: DiarizationServiceConfiguration?
+        configuration: DiarizationEngineConfiguration?,
+        backendUnavailableReason: String?
     ) async throws -> DiarizationLoadOutcome {
         let destination = sessionDirectory.appendingPathComponent(existingFile)
 
@@ -285,6 +344,14 @@ struct TranscriptionPipeline {
             return DiarizationLoadOutcome(
                 document: existing,
                 degradedReason: nil,
+                modelUsed: configuration?.modelURL.lastPathComponent
+            )
+        }
+
+        if let backendUnavailableReason {
+            return DiarizationLoadOutcome(
+                document: nil,
+                degradedReason: "diarization backend unavailable (\(backendUnavailableReason))",
                 modelUsed: configuration?.modelURL.lastPathComponent
             )
         }
@@ -301,8 +368,12 @@ struct TranscriptionPipeline {
             return DiarizationLoadOutcome(document: nil, degradedReason: "diarization model not selected", modelUsed: nil)
         }
 
+        guard let diarizationEngine else {
+            return DiarizationLoadOutcome(document: nil, degradedReason: "diarization backend unavailable", modelUsed: nil)
+        }
+
         do {
-            let document = try await diarizationService.diarize(
+            let document = try await diarizationEngine.diarize(
                 systemAudioURL: systemAudioURL,
                 sessionID: sessionID,
                 configuration: configuration
@@ -341,15 +412,6 @@ struct TranscriptionPipeline {
         return channels
     }
 
-    private func resolveAudioURL(fileName: String?, in sessionDirectory: URL) -> URL? {
-        guard let fileName else {
-            return nil
-        }
-
-        let url = sessionDirectory.appendingPathComponent(fileName)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
-    }
-
     private func writeJSON<T: Encodable>(_ value: T, to url: URL) throws {
         let data = try encoder.encode(value)
         try data.write(to: url, options: .atomic)
@@ -378,5 +440,4 @@ struct TranscriptionPipeline {
             || normalized.contains("failed to read audio file")
             || normalized.contains("invalid argument")
     }
-
 }

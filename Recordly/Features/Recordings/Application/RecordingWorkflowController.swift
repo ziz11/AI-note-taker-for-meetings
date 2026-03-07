@@ -44,38 +44,34 @@ struct ImportedRecordingResult {
 
 @MainActor
 final class RecordingWorkflowController {
-    private let audioCaptureService: AudioCaptureService
+    private let audioCaptureEngine: any AudioCaptureEngine
     private let transcriptionPipeline: TranscriptionPipeline
+    private let runtimeProfileSelector: any InferenceRuntimeProfileSelecting
+    private let inferenceEngineFactory: any InferenceEngineFactory
     private let repository: RecordingsPersistence
-    private let modelManager: ModelManager?
-    private let summaryEngine: SummaryEngine?
     private let summarizationTimeoutSeconds: UInt64
     var selectedModelProfile: ModelProfile
 
     init(
-        audioCaptureService: AudioCaptureService,
+        audioCaptureEngine: any AudioCaptureEngine,
         transcriptionPipeline: TranscriptionPipeline,
+        runtimeProfileSelector: any InferenceRuntimeProfileSelecting,
+        inferenceEngineFactory: any InferenceEngineFactory,
         repository: RecordingsPersistence,
-        modelManager: ModelManager? = nil,
-        summaryEngine: SummaryEngine? = nil,
         selectedModelProfile: ModelProfile = .balanced,
         summarizationTimeoutSeconds: UInt64 = 180
     ) {
-        self.audioCaptureService = audioCaptureService
+        self.audioCaptureEngine = audioCaptureEngine
         self.transcriptionPipeline = transcriptionPipeline
+        self.runtimeProfileSelector = runtimeProfileSelector
+        self.inferenceEngineFactory = inferenceEngineFactory
         self.repository = repository
-        self.modelManager = modelManager
-        self.summaryEngine = summaryEngine
         self.selectedModelProfile = selectedModelProfile
         self.summarizationTimeoutSeconds = max(1, summarizationTimeoutSeconds)
     }
 
-    var engineDisplayName: String {
-        transcriptionPipeline.engineDisplayName
-    }
-
     var currentSystemAudioStatusLabel: String {
-        audioCaptureService.systemAudioStatusLabel
+        audioCaptureEngine.systemAudioStatusLabel
     }
 
     func recordingsDirectoryPath() throws -> String {
@@ -123,7 +119,7 @@ final class RecordingWorkflowController {
 
     func startCapture(for recording: RecordingSession) async throws -> RecordingStartResult {
         let sessionDirectory = try repository.sessionDirectory(for: recording.id)
-        let captureArtifacts = try await audioCaptureService.startCapture(in: sessionDirectory)
+        let captureArtifacts = try await audioCaptureEngine.startCapture(in: sessionDirectory)
 
         var updatedRecording = recording
         updatedRecording.assets.microphoneFile = captureArtifacts.microphoneFile
@@ -134,7 +130,7 @@ final class RecordingWorkflowController {
 
         return RecordingStartResult(
             recording: updatedRecording,
-            systemAudioLabel: audioCaptureService.systemAudioStatusLabel
+            systemAudioLabel: audioCaptureEngine.systemAudioStatusLabel
         )
     }
 
@@ -148,7 +144,7 @@ final class RecordingWorkflowController {
         runTranscription: Bool,
         onTranscriptionStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
     ) async throws -> RecordingCompletionResult {
-        let captureArtifacts = try await audioCaptureService.stopCapture()
+        let captureArtifacts = try await audioCaptureEngine.stopCapture()
 
         var updatedRecording = recording
         updatedRecording.duration = duration
@@ -198,7 +194,7 @@ final class RecordingWorkflowController {
         return RecordingCompletionResult(
             recording: updatedRecording,
             transcriptionResult: transcriptionResult,
-            systemAudioLabel: captureArtifacts.systemAudioFile != nil ? "Captured" : audioCaptureService.systemAudioStatusLabel,
+            systemAudioLabel: captureArtifacts.systemAudioFile != nil ? "Captured" : audioCaptureEngine.systemAudioStatusLabel,
             processingError: processingError
         )
     }
@@ -331,25 +327,32 @@ final class RecordingWorkflowController {
 
         var summary: String?
         var summarySource = "fallback"
+        let summarizationProfile: InferenceRuntimeProfile?
+        do {
+            summarizationProfile = try runtimeProfileSelector.resolveSummarizationProfile(for: selectedModelProfile)
+        } catch {
+            summarizationProfile = nil
+        }
 
-        if let summaryEngine,
-           let modelOption = modelManager?.selectedLocalOption(kind: .summarization) {
-            onProgress?(0.6, "Generating summary")
-            logLines.append("llm_engine=enabled")
-            logLines.append("model_id=\(modelOption.id)")
-            logLines.append("model_path=\(modelOption.url.path)")
-            let runtimeSettings = modelManager?.summarizationRuntimeSettings ?? .default
-            logLines.append("ctx_size=\(runtimeSettings.contextSize)")
-            logLines.append("temperature=\(runtimeSettings.temperature)")
-            logLines.append("top_p=\(runtimeSettings.topP)")
-            logLines.append("timeout_seconds=\(summarizationTimeoutSeconds)")
-            let config = SummaryEngineConfiguration(
-                modelURL: modelOption.url,
-                runtime: runtimeSettings
-            )
+        if let summarizationProfile,
+           let modelURL = summarizationProfile.modelArtifacts.summarizationModelURL {
             do {
+                let summarizationEngine = try inferenceEngineFactory.makeSummarizationEngine(for: summarizationProfile)
+                onProgress?(0.6, "Generating summary")
+                logLines.append("llm_engine=enabled")
+                logLines.append("model_id=\(modelURL.path)")
+                logLines.append("model_path=\(modelURL.path)")
+                let runtimeSettings = summarizationProfile.summarizationRuntimeSettings
+                logLines.append("ctx_size=\(runtimeSettings.contextSize)")
+                logLines.append("temperature=\(runtimeSettings.temperature)")
+                logLines.append("top_p=\(runtimeSettings.topP)")
+                logLines.append("timeout_seconds=\(summarizationTimeoutSeconds)")
+                let config = SummarizationConfiguration(
+                    modelURL: modelURL,
+                    runtime: runtimeSettings
+                )
                 let doc = try await summarizeWithTimeout(timeoutSeconds: summarizationTimeoutSeconds) {
-                    try await summaryEngine.summarize(
+                    try await summarizationEngine.summarize(
                         transcript: transcript ?? "",
                         srtText: srtText,
                         recordingTitle: recording.title,
@@ -373,15 +376,10 @@ final class RecordingWorkflowController {
                 } else {
                     onProgress?(0.7, "Summary model failed. Switching to fallback")
                 }
-                // Fall through to template summary
             }
         } else {
             logLines.append("llm_engine=disabled")
-            if summaryEngine == nil {
-                logLines.append("llm_reason=engine-not-configured")
-            } else {
-                logLines.append("llm_reason=model-not-selected")
-            }
+            logLines.append("llm_reason=model-not-selected")
         }
 
         if summary == nil {
@@ -411,11 +409,11 @@ final class RecordingWorkflowController {
     }
 
     func microphoneLevel() -> Double {
-        audioCaptureService.currentMicrophoneLevel()
+        audioCaptureEngine.currentMicrophoneLevel()
     }
 
     func systemAudioLevel() -> Double {
-        audioCaptureService.currentSystemAudioLevel()
+        audioCaptureEngine.currentSystemAudioLevel()
     }
 
     func recoverPendingMerges() async {
@@ -423,7 +421,7 @@ final class RecordingWorkflowController {
             return
         }
 
-        await audioCaptureService.recoverPendingSessions(in: recordingsDirectory)
+        await audioCaptureEngine.recoverPendingSessions(in: recordingsDirectory)
 
         guard var recordings = try? repository.loadRecordings() else {
             return
@@ -482,11 +480,7 @@ final class RecordingWorkflowController {
         onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
     ) async throws -> TranscriptionResult {
         let sessionDirectory = try repository.sessionDirectory(for: recording.id)
-        guard let modelManager else {
-            throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: "No model manager configured."))
-        }
-
-        let availability = modelManager.availability(for: selectedModelProfile)
+        let availability = runtimeProfileSelector.transcriptionAvailability(for: selectedModelProfile)
         switch availability {
         case .requiresASRModel, .unavailable:
             throw RecordingWorkflowError.transcriptionUnavailable(availability)
@@ -494,11 +488,22 @@ final class RecordingWorkflowController {
             break
         }
 
-        let modelResolution = try modelManager.ensureRequiredModelsInstalled(for: selectedModelProfile)
+        let runtimeProfile: InferenceRuntimeProfile
+        do {
+            runtimeProfile = try runtimeProfileSelector.resolveTranscriptionProfile(for: selectedModelProfile)
+        } catch let error as InferenceRuntimeProfileError {
+            switch error {
+            case .missingASRModel:
+                throw RecordingWorkflowError.transcriptionUnavailable(.requiresASRModel(profileOptions: ModelProfile.allCases))
+            case .missingSummarizationModel:
+                throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
+            }
+        }
         return try await transcriptionPipeline.process(
             recording: recording,
             in: sessionDirectory,
-            modelResolution: modelResolution,
+            runtimeProfile: runtimeProfile,
+            engineFactory: inferenceEngineFactory,
             onStateChange: onStateChange
         )
     }

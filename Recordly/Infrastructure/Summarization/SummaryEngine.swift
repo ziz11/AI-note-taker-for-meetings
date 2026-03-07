@@ -12,11 +12,6 @@ struct SummarizationRuntimeSettings: Codable, Equatable, Sendable {
     )
 }
 
-struct SummaryEngineConfiguration: Sendable {
-    var modelURL: URL
-    var runtime: SummarizationRuntimeSettings = .default
-}
-
 struct SummaryDocument: Equatable {
     var topics: [String]
     var decisions: [String]
@@ -52,13 +47,4 @@ enum SummarizationError: LocalizedError, Equatable {
             return "Summarization was cancelled."
         }
     }
-}
-
-protocol SummaryEngine {
-    func summarize(
-        transcript: String,
-        srtText: String?,
-        recordingTitle: String,
-        configuration: SummaryEngineConfiguration
-    ) async throws -> SummaryDocument
 }
