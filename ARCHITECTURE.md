@@ -3,7 +3,7 @@
 ## Structure
 
 ```text
-CallRecorderPro/
+Recordly/
   Infrastructure/
     Models/
       ModelTypes.swift
@@ -29,7 +29,7 @@ CallRecorderPro/
 ## Transcription dependency injection
 
 - `RecordingWorkflowController` calls `ModelManager.ensureRequiredModelsInstalled(...)` before transcription.
-- `TranscriptionPipeline` receives resolved model URLs via `RequiredModelsResolution`.
+- `TranscriptionPipeline` receives `RequiredModelsResolution` and uses the resolved ASR/diarization URLs during processing.
 - `WhisperCppEngine` and `SystemDiarizationService` consume model URLs through configuration objects.
 
 ## Summarization architecture
@@ -46,7 +46,7 @@ Supporting pure functions: `SummaryPromptBuilder` (prompt construction + context
 
 - `SummaryEngine` protocol defines the summarization contract: transcript + SRT + title + config → `SummaryDocument`.
 - `LlamaCppSummaryEngine` orchestrates guardrails (min transcript length, model file existence, cancellation) then delegates to `LlamaCppRunner`.
-- `ProcessLlamaCppRunner` writes prompt to a temp file and invokes `llama-cli` with `--file`, `--no-display-prompt`, `-n 2048`, `--temp 0.3`, `-c 4096`.
+- `ProcessLlamaCppRunner` writes prompt to a temp file and invokes `llama-cli` with `--file`, `--no-display-prompt`, `--ctx-size`, `--temp`, `--top-p`, and `-n <maxPredictionTokens>`.
 - `resolveLlamaBinaryURL()` searches Bundle resources → `/usr/local/bin` → `/opt/homebrew/bin` → `$PATH` for `llama-cli`.
 - `SummaryPromptBuilder` prefers SRT (has timestamps) over plain transcript, trims to 12K characters, and requests structured markdown with `## Topics`, `## Decisions`, `## Action Items`, `## Risks`.
 - `SummaryOutputParser` extracts bullet lists under each heading into `SummaryDocument` fields; stores full output in `rawMarkdown`.
@@ -54,7 +54,7 @@ Supporting pure functions: `SummaryPromptBuilder` (prompt construction + context
 ## Summarization dependency injection
 
 - `RecordingWorkflowController` accepts an optional `summaryEngine: SummaryEngine?` via init.
-- `RecordingsStore` injects `LlamaCppSummaryEngine()` when constructing the workflow controller.
+- `RecordingsStore` injects `LlamaCppSummaryEngine()` when constructing `RecordingWorkflowController`.
 - `summarize(recording:)` is `async throws`. It tries the LLM engine first (when engine and summarization model are both available), then falls back to the existing template-based `composeSummary()` on any failure.
 - Summarization model is resolved via `modelManager.selectedLocalOption(kind: .summarization)` — no changes to `RequiredModelsResolution`.
 

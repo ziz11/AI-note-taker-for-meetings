@@ -17,7 +17,7 @@ Recordly is a macOS app for local call capture with session-based storage and on
 
 ## Local models setup
 
-1. Place model files on disk (outside app bundle) under `/Users/Shared/CallRecorderProModels/`.
+1. Place model files on disk (outside app bundle) under `/Users/Shared/RecordlyModels/`.
 2. Build and run app.
 3. Open `Models` (top-right toolbar button).
 4. Select model files for:
@@ -30,21 +30,21 @@ Recordly is a macOS app for local call capture with session-based storage and on
 
 Current development source layout:
 
-- `/Users/Shared/CallRecorderProModels/asr/asr-compact-v1.bin`
-- `/Users/Shared/CallRecorderProModels/asr/asr-balanced-v1.bin`
-- `/Users/Shared/CallRecorderProModels/diarization/diarization-enhanced-v1.bin`
-- `/Users/Shared/CallRecorderProModels/summarization/summarization-compact-v1.bin`
+- `/Users/Shared/RecordlyModels/asr/asr-compact-v1.bin`
+- `/Users/Shared/RecordlyModels/asr/asr-balanced-v1.bin`
+- `/Users/Shared/RecordlyModels/diarization/diarization-enhanced-v1.bin`
+- `/Users/Shared/RecordlyModels/summarization/summarization-compact-v1.bin`
 
 ## Storage locations
 
-Recordly continues to use the legacy `CallRecorderPro` storage folder names for compatibility with existing installs.
+Recordly continues to use the legacy `Recordly` storage folder names for compatibility with existing installs.
 
 - Sessions:
-  - `~/Library/Application Support/CallRecorderPro/recordings/<session-id>/`
+  - `~/Library/Application Support/Recordly/recordings/<session-id>/`
 - Installed models:
-  - `~/Library/Application Support/CallRecorderPro/Models/asr/<model-id>/`
-  - `~/Library/Application Support/CallRecorderPro/Models/diarization/<model-id>/`
-  - `~/Library/Application Support/CallRecorderPro/Models/summarization/<model-id>/`
+  - `~/Library/Application Support/Recordly/Models/asr/<model-id>/`
+  - `~/Library/Application Support/Recordly/Models/diarization/<model-id>/`
+  - `~/Library/Application Support/Recordly/Models/summarization/<model-id>/`
 
 ## Audio format decisions
 

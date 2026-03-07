@@ -22,12 +22,12 @@ Recordly is a local-first macOS app for call capture and deterministic post-proc
 
 ## Model management behavior
 
-Recordly intentionally keeps the legacy `CallRecorderPro` model storage folder names for compatibility with existing local installs.
+Recordly intentionally keeps the legacy `Recordly` model storage folder names for compatibility with existing local installs.
 
 - Models UI is now selection-based by model kind, not profile-install based.
 - Available options are loaded dynamically from local folders:
-  - `/Users/Shared/CallRecorderProModels/<kind>/`
-  - `~/Library/Application Support/CallRecorderPro/Models/<kind>/`
+  - `/Users/Shared/RecordlyModels/<kind>/`
+  - `~/Library/Application Support/Recordly/Models/<kind>/`
 - The menu has 3 blocks:
   - Transcription model (ASR, required)
   - Speaker separation model (diarization, optional)
@@ -39,7 +39,7 @@ Recordly intentionally keeps the legacy `CallRecorderPro` model storage folder n
 - Model installation is local-only.
 - `downloadURL` must be `file://` absolute path to an existing local model file.
 - Network URLs are rejected in this build.
-- Development source directory currently used: `/Users/Shared/CallRecorderProModels/`
+- Development source directory currently used: `/Users/Shared/RecordlyModels/`
 
 ## Inference pipeline status
 
@@ -62,16 +62,16 @@ The summarization fallback ensures the "Summarize" action always produces a `sum
 - Summary:
   - `summary.md` output is generated via `LlamaCppSummaryEngine` when a summarization model is selected and `llama-cli` is available.
   - On any LLM failure, falls back to template-based summary from transcript/SRT timeline data.
-  - `summarize(recording:)` is now `async throws` — call sites in `RecordingsStore` use `await`.
+  - `summarize(recording:)` is now `async throws` — call sites in `RecordingsStore` (`Features/Recordings/Application/RecordingsStore.swift`) use `await`.
   - Structured `SummaryDocument` (topics, decisions, action items, risks) is kept in-memory; `rawMarkdown` is written to `summary.md`.
-  - A 415MB summarization GGUF model is staged at `/Users/Shared/CallRecorderProModels/summarization/summarization-compact-v1.bin`.
+  - A 415MB summarization GGUF model is staged at `/Users/Shared/RecordlyModels/summarization/summarization-compact-v1.bin`.
   - Requires `llama-cli` installed (e.g., `/opt/homebrew/bin/llama-cli` via `brew install llama.cpp`).
 
 ## Development model set (March 6, 2026)
 
 Prepared local source files and verified hashes:
 
-- `asr-compact-v1` -> `/Users/Shared/CallRecorderProModels/asr/asr-compact-v1.bin`
-- `asr-balanced-v1` -> `/Users/Shared/CallRecorderProModels/asr/asr-balanced-v1.bin`
-- `diarization-enhanced-v1` -> `/Users/Shared/CallRecorderProModels/diarization/diarization-enhanced-v1.bin`
-- `summarization-compact-v1` -> `/Users/Shared/CallRecorderProModels/summarization/summarization-compact-v1.bin`
+- `asr-compact-v1` -> `/Users/Shared/RecordlyModels/asr/asr-compact-v1.bin`
+- `asr-balanced-v1` -> `/Users/Shared/RecordlyModels/asr/asr-balanced-v1.bin`
+- `diarization-enhanced-v1` -> `/Users/Shared/RecordlyModels/diarization/diarization-enhanced-v1.bin`
+- `summarization-compact-v1` -> `/Users/Shared/RecordlyModels/summarization/summarization-compact-v1.bin`

@@ -10,17 +10,17 @@ Model management is wired into Recordly with dynamic local folder discovery. All
 - ASR inference is integrated through `WhisperCppEngine` + `whisper-main` runner.
 - Diarization inference is integrated via CLI runner (`diarization-main`) with typed error mapping.
 - Summarization inference is integrated via `LlamaCppSummaryEngine` + llama.cpp-compatible runner (`main`/`llama-cli`). Falls back to template summary on any failure.
-- Local source files are staged under `/Users/Shared/CallRecorderProModels/`.
+- Local source files are staged under `/Users/Shared/RecordlyModels/`.
 
 ## Local model policy (v1)
 
 This build is local-file based.
 
-Recordly intentionally keeps the legacy `CallRecorderPro` storage folder names for compatibility with existing local installs.
+Recordly intentionally keeps the legacy `Recordly` storage folder names for compatibility with existing local installs.
 
 - UI model catalog reads local model files from:
-  - `/Users/Shared/CallRecorderProModels/<kind>/`
-  - `~/Library/Application Support/CallRecorderPro/Models/<kind>/`
+  - `/Users/Shared/RecordlyModels/<kind>/`
+  - `~/Library/Application Support/Recordly/Models/<kind>/`
 - Supported extensions:
   - ASR / diarization: `.bin`
   - Summarization: `.bin`, `.gguf`
@@ -30,10 +30,10 @@ Recordly intentionally keeps the legacy `CallRecorderPro` storage folder names f
 
 Current local source files prepared on disk:
 
-- `/Users/Shared/CallRecorderProModels/asr/asr-compact-v1.bin`
-- `/Users/Shared/CallRecorderProModels/asr/asr-balanced-v1.bin`
-- `/Users/Shared/CallRecorderProModels/diarization/diarization-enhanced-v1.bin`
-- `/Users/Shared/CallRecorderProModels/summarization/summarization-compact-v1.bin`
+- `/Users/Shared/RecordlyModels/asr/asr-compact-v1.bin`
+- `/Users/Shared/RecordlyModels/asr/asr-balanced-v1.bin`
+- `/Users/Shared/RecordlyModels/diarization/diarization-enhanced-v1.bin`
+- `/Users/Shared/RecordlyModels/summarization/summarization-compact-v1.bin`
 
 Verified metadata for these files:
 
@@ -54,7 +54,7 @@ If checksum fails, installation is rejected as invalid.
 
 ## Runtime behavior
 
-- Runtime default is `CliSystemDiarizationService` (placeholder is not used as default path).
+- Runtime default is `CliSystemDiarizationService`.
 - On diarization errors (`binaryMissing`, `modelMissing`, malformed/empty/non-zero exit), transcription pipeline remains successful and degrades speaker labels to `Remote`.
 - Summarization uses `LlamaCppSummaryEngine` backed by `llama-cli` (llama.cpp). The engine is injected into `RecordingWorkflowController` via `SummaryEngine` protocol.
 - Summarization model is resolved at runtime via `modelManager.selectedLocalOption(kind: .summarization)` — not through `RequiredModelsResolution`.
@@ -81,7 +81,7 @@ If checksum fails, installation is rejected as invalid.
 
 ## How to use local models now
 
-1. Put model files on disk under `/Users/Shared/CallRecorderProModels/` using `asr/`, `diarization/`, and `summarization/` subfolders.
+1. Put model files on disk under `/Users/Shared/RecordlyModels/` using `asr/`, `diarization/`, and `summarization/` subfolders.
 2. Ensure `llama-cli` is installed (e.g., `brew install llama.cpp`) for summarization.
 3. Build and run app.
 4. Open `Models` menu (top-right).

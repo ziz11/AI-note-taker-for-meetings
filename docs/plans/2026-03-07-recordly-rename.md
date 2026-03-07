@@ -13,7 +13,7 @@
 ### Task 1: Lock legacy storage compatibility
 
 **Files:**
-- Create: `CallRecorderProTests/AppPathsCompatibilityTests.swift`
+- Create: `RecordlyTests/AppPathsCompatibilityTests.swift`
 - Verify only: `CallRecorderPro/Infrastructure/Persistence/AppPaths.swift`
 
 **Step 1: Write the compatibility test**
@@ -36,7 +36,7 @@ Import the production module with:
 Run:
 
 ```bash
-xcodebuild test -scheme CallRecorderPro -destination 'platform=macOS' -only-testing:CallRecorderProTests/AppPathsCompatibilityTests
+xcodebuild test -scheme CallRecorderPro -destination 'platform=macOS' -only-testing:RecordlyTests/AppPathsCompatibilityTests
 ```
 
 Expected: `PASS`
@@ -44,7 +44,7 @@ Expected: `PASS`
 **Step 3: Commit**
 
 ```bash
-git add CallRecorderProTests/AppPathsCompatibilityTests.swift
+git add RecordlyTests/AppPathsCompatibilityTests.swift
 git commit -m "test: lock legacy Recordly storage paths"
 ```
 
@@ -166,20 +166,20 @@ git commit -m "docs: rename product references to Recordly"
 - Verify: `CallRecorderPro.xcodeproj/project.pbxproj`
 - Verify: `CallRecorderPro/Info.plist`
 - Verify: `CallRecorderPro/Infrastructure/Persistence/AppPaths.swift`
-- Verify: `CallRecorderProTests/AppPathsCompatibilityTests.swift`
+- Verify: `RecordlyTests/AppPathsCompatibilityTests.swift`
 
 **Step 1: Run the compatibility test suite**
 
 Run:
 
 ```bash
-xcodebuild test -scheme CallRecorderPro -destination 'platform=macOS' -only-testing:CallRecorderProTests/AppPathsCompatibilityTests
+xcodebuild test -scheme CallRecorderPro -destination 'platform=macOS' -only-testing:RecordlyTests/AppPathsCompatibilityTests
 ```
 
 If the scheme name was renamed, use:
 
 ```bash
-xcodebuild test -scheme Recordly -destination 'platform=macOS' -only-testing:CallRecorderProTests/AppPathsCompatibilityTests
+xcodebuild test -scheme Recordly -destination 'platform=macOS' -only-testing:RecordlyTests/AppPathsCompatibilityTests
 ```
 
 Expected: `PASS`
@@ -227,7 +227,7 @@ Run:
 
 ```bash
 git status --short
-git diff -- CallRecorderPro.xcodeproj/project.pbxproj CallRecorderPro/Info.plist CallRecorderPro/Infrastructure/Persistence/AppPaths.swift CallRecorderProTests/AppPathsCompatibilityTests.swift README.md PRODUCT_CONTEXT.md ARCHITECTURE.md MODEL_INTEGRATION.md CallRecorderPro/Resources/Models/README.md CallRecorderPro.xcodeproj/xcshareddata/xcschemes
+git diff -- CallRecorderPro.xcodeproj/project.pbxproj CallRecorderPro/Info.plist CallRecorderPro/Infrastructure/Persistence/AppPaths.swift RecordlyTests/AppPathsCompatibilityTests.swift README.md PRODUCT_CONTEXT.md ARCHITECTURE.md MODEL_INTEGRATION.md CallRecorderPro/Resources/Models/README.md CallRecorderPro.xcodeproj/xcshareddata/xcschemes
 ```
 
 Expected: only the planned rename and compatibility-lock changes are present.
@@ -235,7 +235,7 @@ Expected: only the planned rename and compatibility-lock changes are present.
 **Step 5: Final commit**
 
 ```bash
-git add CallRecorderPro.xcodeproj/project.pbxproj CallRecorderPro/Info.plist CallRecorderPro/Infrastructure/Persistence/AppPaths.swift CallRecorderProTests/AppPathsCompatibilityTests.swift README.md PRODUCT_CONTEXT.md ARCHITECTURE.md MODEL_INTEGRATION.md CallRecorderPro/Resources/Models/README.md CallRecorderPro.xcodeproj/xcshareddata/xcschemes
+git add CallRecorderPro.xcodeproj/project.pbxproj CallRecorderPro/Info.plist CallRecorderPro/Infrastructure/Persistence/AppPaths.swift RecordlyTests/AppPathsCompatibilityTests.swift README.md PRODUCT_CONTEXT.md ARCHITECTURE.md MODEL_INTEGRATION.md CallRecorderPro/Resources/Models/README.md CallRecorderPro.xcodeproj/xcshareddata/xcschemes
 git commit -m "feat: ship Recordly branding with legacy storage compatibility"
 ```
 
