@@ -4,6 +4,7 @@
 # Local agent/tooling metadata
 .claude/
 .codex/
+.worktrees/
 
 # Xcode user-local
 *.xcuserstate
