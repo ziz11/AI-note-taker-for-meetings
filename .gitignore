@@ -16,9 +16,9 @@ build/
 .build/
 
 # Local app runtime data
-recordings/
-models/
-transcripts/
+/recordings/
+/models/
+/transcripts/
 
 # Audio and video artifacts (prevent accidental leaks)
 *.m4a

@@ -21,8 +21,8 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>CallRecorderPro captures system audio to record the other side of your calls.</string>
+	<string>Recordly captures system audio to record the other side of your calls.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>CallRecorderPro records your microphone while a call is running.</string>
+	<string>Recordly records your microphone while a call is running.</string>
 </dict>
 </plist>

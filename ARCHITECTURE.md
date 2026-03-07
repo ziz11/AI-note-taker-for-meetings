@@ -1,4 +1,4 @@
-# CallRecorderPro Architecture
+# Recordly Architecture
 
 ## Structure
 

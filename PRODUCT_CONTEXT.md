@@ -1,8 +1,8 @@
-# CallRecorderPro Product Context
+# Recordly Product Context
 
 ## Product summary
 
-CallRecorderPro is a local-first macOS app for call capture and deterministic post-processing with on-device transcription pipeline stages.
+Recordly is a local-first macOS app for call capture and deterministic post-processing with on-device transcription pipeline stages.
 
 ## Current product behavior
 
@@ -21,6 +21,8 @@ CallRecorderPro is a local-first macOS app for call capture and deterministic po
 - When external tools such as `whisper-cli` need another file type, the intended architecture is boundary conversion near that tool, not changing the session storage contract.
 
 ## Model management behavior
+
+Recordly intentionally keeps the legacy `CallRecorderPro` model storage folder names for compatibility with existing local installs.
 
 - Models UI is now selection-based by model kind, not profile-install based.
 - Available options are loaded dynamically from local folders:

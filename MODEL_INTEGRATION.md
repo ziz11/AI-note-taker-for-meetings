@@ -2,7 +2,7 @@
 
 ## Current status (March 6, 2026)
 
-Model management is wired into app flow with dynamic local folder discovery. All three model kinds now have real inference runners.
+Model management is wired into Recordly with dynamic local folder discovery. All three model kinds now have real inference runners.
 
 - Model selection is done by kind (`asr`, `diarization`, `summarization`) from local folders.
 - Selected model IDs are persisted and used by transcription preflight/model resolution.
@@ -15,6 +15,8 @@ Model management is wired into app flow with dynamic local folder discovery. All
 ## Local model policy (v1)
 
 This build is local-file based.
+
+Recordly intentionally keeps the legacy `CallRecorderPro` storage folder names for compatibility with existing local installs.
 
 - UI model catalog reads local model files from:
   - `/Users/Shared/CallRecorderProModels/<kind>/`

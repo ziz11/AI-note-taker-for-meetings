@@ -14,6 +14,7 @@
 		31F9BBA4FC1D92AB6D75193E /* LlamaCppSummaryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 108CC7941A9C36C35F7AEC9A /* LlamaCppSummaryEngine.swift */; };
 		4A6D9353B0E247EF92F9D402 /* ModelDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61A96044014F4044B8D17512 /* ModelDiscoveryTests.swift */; };
 		B2B60921DC6C5B664F8DD737 /* SummarizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DEFD63A7FD04AB090FB58CB /* SummarizationTests.swift */; };
+		B2B60922DC6C5B664F8DD737 /* AppPathsCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B60923DC6C5B664F8DD737 /* AppPathsCompatibilityTests.swift */; };
 		0930659D602BC6AACC3C516E /* TranscriptMergeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458D7BF2780B07D4DABC985A /* TranscriptMergeServiceTests.swift */; };
 		1AC10EAE781C81A93B123433 /* TranscriptMergeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4170736EE52225BAE71D569E /* TranscriptMergeService.swift */; };
 		2E4CAE3A529698B5142F49C6 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2F770263847E29213B40F9F9 /* Foundation.framework */; };
@@ -76,6 +77,7 @@
 		108CC7941A9C36C35F7AEC9A /* LlamaCppSummaryEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LlamaCppSummaryEngine.swift; sourceTree = "<group>"; };
 		61A96044014F4044B8D17512 /* ModelDiscoveryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ModelDiscoveryTests.swift; sourceTree = "<group>"; };
 		2DEFD63A7FD04AB090FB58CB /* SummarizationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SummarizationTests.swift; sourceTree = "<group>"; };
+		B2B60923DC6C5B664F8DD737 /* AppPathsCompatibilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppPathsCompatibilityTests.swift; sourceTree = "<group>"; };
 		248B0A3CEFC995A4371B6129 /* SystemSpeakerMappingServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SystemSpeakerMappingServiceTests.swift; path = SystemSpeakerMappingServiceTests.swift; sourceTree = "<group>"; };
 		2F770263847E29213B40F9F9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		304A5C09AD561E6F1886EB9F /* SystemDiarizationService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SystemDiarizationService.swift; sourceTree = "<group>"; };
@@ -94,7 +96,7 @@
 		8A1000182D82A10000A13B02 /* ModelOnboardingCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelOnboardingCoordinator.swift; sourceTree = "<group>"; };
 		8A1000192D82A10000A13B02 /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
 		8A10001A2D82A10000A13B02 /* ModelSettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsViewModel.swift; sourceTree = "<group>"; };
-		9C41A2112D82A10000A13B02 /* CallRecorderPro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CallRecorderPro.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9C41A2112D82A10000A13B02 /* Recordly.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recordly.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9C41A2202D82A10000A13B02 /* CallRecorderProApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecorderProApp.swift; sourceTree = "<group>"; };
 		9C41A2212D82A10000A13B02 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		9C41A2222D82A10000A13B02 /* RecordingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSession.swift; sourceTree = "<group>"; };
@@ -151,6 +153,7 @@
 				F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */,
 				2DEFD63A7FD04AB090FB58CB /* SummarizationTests.swift */,
 				74AC31327248529A315C55DE /* RecordingSessionCompatibilityTests.swift */,
+				B2B60923DC6C5B664F8DD737 /* AppPathsCompatibilityTests.swift */,
 			);
 			name = CallRecorderProTests;
 			path = CallRecorderProTests;
@@ -251,7 +254,7 @@
 		9C41A2162D82A10000A13B02 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				9C41A2112D82A10000A13B02 /* CallRecorderPro.app */,
+				9C41A2112D82A10000A13B02 /* Recordly.app */,
 				9FB9819BAAFB677E00C75893 /* CallRecorderProTests.xctest */,
 			);
 			name = Products;
@@ -421,8 +424,8 @@
 			dependencies = (
 			);
 			name = CallRecorderPro;
-			productName = CallRecorderPro;
-			productReference = 9C41A2112D82A10000A13B02 /* CallRecorderPro.app */;
+			productName = Recordly;
+			productReference = 9C41A2112D82A10000A13B02 /* Recordly.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -488,6 +491,7 @@
 				6C21B2A77926FB977C286632 /* TranscriptionPipelineTests.swift in Sources */,
 				B2B60921DC6C5B664F8DD737 /* SummarizationTests.swift in Sources */,
 				E1FC38DB7BE73D51B20D5261 /* RecordingSessionCompatibilityTests.swift in Sources */,
+				B2B60922DC6C5B664F8DD737 /* AppPathsCompatibilityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -559,7 +563,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.local.CallRecorderProTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CallRecorderPro.app/Contents/MacOS/CallRecorderPro";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Recordly.app/Contents/MacOS/Recordly";
 			};
 			name = Debug;
 		};
@@ -646,8 +650,9 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.local.CallRecorderPro;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.local.Recordly;
+				PRODUCT_MODULE_NAME = CallRecorderPro;
+				PRODUCT_NAME = Recordly;
 				SDKROOT = macosx;
 				STRIP_INSTALLED_PRODUCT = NO;
 				SUPPORTED_PLATFORMS = macosx;
@@ -674,8 +679,9 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.local.CallRecorderPro;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.local.Recordly;
+				PRODUCT_MODULE_NAME = CallRecorderPro;
+				PRODUCT_NAME = Recordly;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SUPPORTS_MACCATALYST = NO;
@@ -693,7 +699,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.local.CallRecorderProTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CallRecorderPro.app/Contents/MacOS/CallRecorderPro";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Recordly.app/Contents/MacOS/Recordly";
 			};
 			name = Release;
 		};

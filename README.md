@@ -1,6 +1,6 @@
-# CallRecorderPro
+# Recordly
 
-CallRecorderPro is a macOS app for local call capture with session-based storage and on-device post-processing.
+Recordly is a macOS app for local call capture with session-based storage and on-device post-processing.
 
 ## Current status (March 2026)
 
@@ -36,6 +36,8 @@ Current development source layout:
 - `/Users/Shared/CallRecorderProModels/summarization/summarization-compact-v1.bin`
 
 ## Storage locations
+
+Recordly continues to use the legacy `CallRecorderPro` storage folder names for compatibility with existing installs.
 
 - Sessions:
   - `~/Library/Application Support/CallRecorderPro/recordings/<session-id>/`

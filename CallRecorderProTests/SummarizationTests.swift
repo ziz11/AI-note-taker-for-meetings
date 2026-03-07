@@ -66,15 +66,18 @@ final class InMemoryRecordingsRepository: RecordingsPersistence {
     var recordings: [RecordingSession]
     var sessionDirectories: [UUID: URL]
     var transcriptBodies: [UUID: String]
+    var summaryBodies: [UUID: String]
 
     init(
         recordings: [RecordingSession] = [],
         sessionDirectories: [UUID: URL] = [:],
-        transcriptBodies: [UUID: String] = [:]
+        transcriptBodies: [UUID: String] = [:],
+        summaryBodies: [UUID: String] = [:]
     ) {
         self.recordings = recordings
         self.sessionDirectories = sessionDirectories
         self.transcriptBodies = transcriptBodies
+        self.summaryBodies = summaryBodies
     }
 
     func recordingsDirectoryPath() throws -> String {
@@ -128,6 +131,10 @@ final class InMemoryRecordingsRepository: RecordingsPersistence {
     }
 
     func summaryText(for recording: RecordingSession) -> String? {
+        if let cached = summaryBodies[recording.id] {
+            return cached
+        }
+
         guard let summaryFile = recording.assets.summaryFile,
               let directory = sessionDirectories[recording.id] else {
             return nil
@@ -146,6 +153,33 @@ final class InMemoryRecordingsRepository: RecordingsPersistence {
         }
         try FileManager.default.copyItem(at: sourceURL, to: destination)
         return filename
+    }
+
+    func duplicateSessionContents(from sourceID: UUID, to destinationID: UUID) throws {
+        let sourceDirectory = try sessionDirectory(for: sourceID)
+        let destinationDirectory = try sessionDirectory(for: destinationID)
+        let fileManager = FileManager.default
+        let urls = try fileManager.contentsOfDirectory(
+            at: sourceDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+
+        for url in urls {
+            try fileManager.copyItem(at: url, to: destinationDirectory.appendingPathComponent(url.lastPathComponent))
+        }
+
+        transcriptBodies[destinationID] = transcriptBodies[sourceID]
+        summaryBodies[destinationID] = summaryBodies[sourceID]
+    }
+
+    func playableAudioURL(for recording: RecordingSession) throws -> URL? {
+        guard let fileName = recording.playableAudioFileName else {
+            return nil
+        }
+        let directory = try sessionDirectory(for: recording.id)
+        let url = directory.appendingPathComponent(fileName)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 }
 

@@ -15,7 +15,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "9C41A2102D82A10000A13B02"
-               BuildableName = "CallRecorderPro.app"
+               BuildableName = "Recordly.app"
                BlueprintName = "CallRecorderPro"
                ReferencedContainer = "container:CallRecorderPro.xcodeproj">
             </BuildableReference>
@@ -55,7 +55,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "9C41A2102D82A10000A13B02"
-            BuildableName = "CallRecorderPro.app"
+            BuildableName = "Recordly.app"
             BlueprintName = "CallRecorderPro"
             ReferencedContainer = "container:CallRecorderPro.xcodeproj">
          </BuildableReference>
@@ -72,7 +72,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "9C41A2102D82A10000A13B02"
-            BuildableName = "CallRecorderPro.app"
+            BuildableName = "Recordly.app"
             BlueprintName = "CallRecorderPro"
             ReferencedContainer = "container:CallRecorderPro.xcodeproj">
          </BuildableReference>

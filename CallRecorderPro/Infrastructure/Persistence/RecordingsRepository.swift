@@ -9,6 +9,8 @@ protocol RecordingsPersistence: AnyObject {
     func transcriptText(for recording: RecordingSession) -> String?
     func summaryText(for recording: RecordingSession) -> String?
     func copyImportedAudio(from sourceURL: URL, to id: UUID) throws -> String
+    func duplicateSessionContents(from sourceID: UUID, to destinationID: UUID) throws
+    func playableAudioURL(for recording: RecordingSession) throws -> URL?
 }
 
 final class RecordingsRepository: RecordingsPersistence {
@@ -162,5 +164,35 @@ final class RecordingsRepository: RecordingsPersistence {
 
         try fileManager.copyItem(at: sourceURL, to: destinationURL)
         return destinationFileName
+    }
+
+    func duplicateSessionContents(from sourceID: UUID, to destinationID: UUID) throws {
+        let sourceDirectory = try sessionDirectory(for: sourceID)
+        let destinationDirectory = try sessionDirectory(for: destinationID)
+        let sourceURLs = try fileManager.contentsOfDirectory(
+            at: sourceDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+
+        for sourceURL in sourceURLs {
+            let destinationURL = destinationDirectory.appendingPathComponent(sourceURL.lastPathComponent)
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+        }
+    }
+
+    func playableAudioURL(for recording: RecordingSession) throws -> URL? {
+        guard let fileName = recording.playableAudioFileName else {
+            return nil
+        }
+
+        let url = try sessionDirectory(for: recording.id).appendingPathComponent(fileName)
+        guard fileManager.fileExists(atPath: url.path) else {
+            return nil
+        }
+        return url
     }
 }
