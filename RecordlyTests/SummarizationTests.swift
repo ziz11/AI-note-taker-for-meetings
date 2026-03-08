@@ -1108,6 +1108,17 @@ final class ModelPreferencesStoreTests: XCTestCase {
         let reloadedStore = ModelPreferencesStore(defaults: defaults)
         XCTAssertEqual(reloadedStore.summarizationRuntimeSettings, expected)
     }
+
+    func testPersistsASRBackendSelection() {
+        let suiteName = "ModelPreferencesStoreTests-asr-backend-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = ModelPreferencesStore(defaults: defaults)
+        store.selectedASRBackend = .fluidAudio
+
+        let reloadedStore = ModelPreferencesStore(defaults: defaults)
+        XCTAssertEqual(reloadedStore.selectedASRBackend, .fluidAudio)
+    }
 }
 
 final class FoundationLlamaProcessExecutorTests: XCTestCase {

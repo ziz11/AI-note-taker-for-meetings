@@ -11,7 +11,8 @@ struct InferenceComposition {
 @MainActor
 enum DefaultInferenceComposition {
     static func make(modelManager: ModelManager) -> InferenceComposition {
-        let stageSelection = StageRuntimeSelection.defaultLocal
+        var stageSelection = StageRuntimeSelection.defaultLocal
+        stageSelection.setBackend(modelManager.selectedASRBackend == .fluidAudio ? .fluidAudio : .whisperCpp, for: .asr)
         let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(
             modelManager: modelManager,
             stageSelection: stageSelection

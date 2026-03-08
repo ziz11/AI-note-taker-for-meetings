@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FA1000012F0A000000000001 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = FA1000022F0A000000000001 /* FluidAudio */; };
+		FA1000112F0A000000000001 /* FluidAudioASREngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */; };
 		F0DC2B834E4BE6EFD06B9228 /* SummaryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18F73A72E7F344B6A8F1F3DD /* SummaryEngine.swift */; };
 		15CD5138FCA0BCCED1F11FA5 /* SummaryPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395881AA0C8D023430EC50AE /* SummaryPromptBuilder.swift */; };
 		36C8D91020D0987C43326380 /* SummaryOutputParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD717C9D72DB2D702C5C541E /* SummaryOutputParser.swift */; };
@@ -120,6 +122,7 @@
 		AA1001012EBC1D6F00000001 /* DefaultInferenceRuntimeProfileSelectorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DefaultInferenceRuntimeProfileSelectorTests.swift; sourceTree = "<group>"; };
 		AA1001022EBC1D6F00000001 /* DefaultInferenceEngineFactoryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DefaultInferenceEngineFactoryTests.swift; sourceTree = "<group>"; };
 		AA1001032EBC1D6F00000001 /* AudioInputAdapterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AudioInputAdapterTests.swift; sourceTree = "<group>"; };
+		FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FluidAudioASREngineTests.swift; sourceTree = "<group>"; };
 		9C41A2112D82A10000A13B02 /* Recordly.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recordly.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9C41A2202D82A10000A13B02 /* RecordlyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordlyApp.swift; sourceTree = "<group>"; };
 		9C41A2212D82A10000A13B02 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -154,6 +157,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FA1000012F0A000000000001 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -182,6 +186,7 @@
 				AA1001012EBC1D6F00000001 /* DefaultInferenceRuntimeProfileSelectorTests.swift */,
 				AA1001022EBC1D6F00000001 /* DefaultInferenceEngineFactoryTests.swift */,
 				AA1001032EBC1D6F00000001 /* AudioInputAdapterTests.swift */,
+				FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */,
 			);
 			name = RecordlyTests;
 			path = RecordlyTests;
@@ -460,6 +465,9 @@
 			dependencies = (
 			);
 			name = Recordly;
+			packageProductDependencies = (
+				FA1000022F0A000000000001 /* FluidAudio */,
+			);
 			productName = Recordly;
 			productReference = 9C41A2112D82A10000A13B02 /* Recordly.app */;
 			productType = "com.apple.product-type.application";
@@ -491,6 +499,9 @@
 			productRefGroup = 9C41A2162D82A10000A13B02 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				FA1000032F0A000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+			);
 			targets = (
 				9C41A2102D82A10000A13B02 /* Recordly */,
 				190CC4EFCFCB7A27E390A36D /* RecordlyTests */,
@@ -532,6 +543,7 @@
 				AA1002012EBC1D6F00000001 /* DefaultInferenceRuntimeProfileSelectorTests.swift in Sources */,
 				AA1002022EBC1D6F00000001 /* DefaultInferenceEngineFactoryTests.swift in Sources */,
 				AA1002032EBC1D6F00000001 /* AudioInputAdapterTests.swift in Sources */,
+				FA1000112F0A000000000001 /* FluidAudioASREngineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -753,6 +765,17 @@
 		};
 /* End XCBuildConfiguration section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		FA1000032F0A000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCConfigurationList section */
 		9C41A20C2D82A10000A13B02 /* Build configuration list for PBXProject "Recordly" */ = {
 			isa = XCConfigurationList;
@@ -782,6 +805,14 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FA1000022F0A000000000001 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FA1000032F0A000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 9C41A2092D82A10000A13B02 /* Project object */;
 }

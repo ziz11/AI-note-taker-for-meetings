@@ -51,7 +51,7 @@ protocol ASREngine {
 
 extension ASREngine {
     func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
-        "\(configuration.modelURL.standardizedFileURL.path)|lang:\(configuration.language.whisperCode)"
+        "\(configuration.modelURL.standardizedFileURL.path)|lang:\(configuration.language.rawValue)"
     }
 }
 

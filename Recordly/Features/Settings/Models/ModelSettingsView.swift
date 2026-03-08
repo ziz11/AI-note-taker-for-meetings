@@ -22,6 +22,35 @@ struct ModelSettingsView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Transcription Backend")
+                        .font(.headline)
+                    Text("Choose the ASR engine while keeping the same transcription pipeline.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Picker("Transcription Backend", selection: Binding(
+                        get: { viewModel.selectedASRBackend },
+                        set: { viewModel.selectASRBackend($0) }
+                    )) {
+                        ForEach(ASRBackend.allCases, id: \.self) { backend in
+                            Text(backend.displayName).tag(backend)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if viewModel.selectedASRBackend == .fluidAudio {
+                        Text("FluidAudio uses multilingual v3 and ignores the language override. Select a staged FluidAudio model folder.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.04))
+                )
+
                 modelPickerCard(
                     title: "Transcription Model",
                     subtitle: "Required for speech-to-text pipeline.",
@@ -37,19 +66,25 @@ struct ModelSettingsView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Transcription Language")
                         .font(.headline)
-                    Text("Controls whisper language hint for ASR decoding.")
+                    Text("Controls language hint for ASR decoding.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    Picker("Transcription Language", selection: Binding(
-                        get: { viewModel.selectedASRLanguage },
-                        set: { viewModel.selectASRLanguage($0) }
-                    )) {
-                        ForEach(ASRLanguage.allCases, id: \.self) { language in
-                            Text(language.displayName).tag(language)
+                    if viewModel.isASRLanguageEditable {
+                        Picker("Transcription Language", selection: Binding(
+                            get: { viewModel.selectedASRLanguage },
+                            set: { viewModel.selectASRLanguage($0) }
+                        )) {
+                            ForEach(ASRLanguage.allCases, id: \.self) { language in
+                                Text(language.displayName).tag(language)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                    } else {
+                        Text("Language override is disabled for FluidAudio (multilingual v3).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .pickerStyle(.segmented)
                 }
                 .padding(14)
                 .background(

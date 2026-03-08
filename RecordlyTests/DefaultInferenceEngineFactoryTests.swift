@@ -46,4 +46,25 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
             )
         }
     }
+
+    func testFactoryBuildsFluidAudioEngineWhenASRBackendIsFluidAudio() throws {
+        let factory = DefaultInferenceEngineFactory()
+        var selection = StageRuntimeSelection.defaultLocal
+        selection.setBackend(.fluidAudio, for: .asr)
+        let profile = InferenceRuntimeProfile(
+            stageSelection: selection,
+            modelArtifacts: InferenceModelArtifacts(
+                asrModelURL: URL(fileURLWithPath: "/tmp/asr-fluid"),
+                diarizationModelURL: nil,
+                summarizationModelURL: nil
+            ),
+            asrLanguage: .auto,
+            summarizationRuntimeSettings: .default
+        )
+
+        let asrEngine = try factory.makeASREngine(for: profile)
+
+        XCTAssertEqual(String(describing: type(of: asrEngine)), "FluidAudioASREngine")
+        XCTAssertEqual(factory.transcriptionEngineDisplayName(for: selection), "FluidAudio")
+    }
 }
