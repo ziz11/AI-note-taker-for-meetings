@@ -3,7 +3,6 @@ import Foundation
 
 actor SessionMergeService {
     struct Result {
-        let mergedCAFFileName: String?
         let mergedM4AFileName: String?
         let note: String
         let driftWarnings: [String]
@@ -37,16 +36,15 @@ actor SessionMergeService {
 
         guard !availableTracks.isEmpty else {
             metadata.status = .mixError
-            metadata.notes.append("No non-empty raw tracks to merge.")
-            metadata.mergeMode = .unavailable
-            try await save(metadata, in: sessionDirectory)
-            return Result(
-                mergedCAFFileName: nil,
-                mergedM4AFileName: nil,
-                note: "No audio available for merge.",
-                driftWarnings: metadata.driftWarnings,
-                mergeMode: .unavailable
-            )
+                metadata.notes.append("No non-empty raw tracks to merge.")
+                metadata.mergeMode = .unavailable
+                try await save(metadata, in: sessionDirectory)
+                return Result(
+                    mergedM4AFileName: nil,
+                    note: "No audio available for merge.",
+                    driftWarnings: metadata.driftWarnings,
+                    mergeMode: .unavailable
+                )
         }
 
         let firstPTSValues = availableTracks.compactMap { $0.1.firstPTS }
@@ -81,8 +79,8 @@ actor SessionMergeService {
             )
         }
 
-        let mergedCAFFileName = "merged-call.caf"
-        let mergedCAFURL = sessionDirectory.appendingPathComponent(mergedCAFFileName)
+        let mergedCAFURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("merged-call-\(UUID().uuidString).caf")
 
         let mixResult: DirectPCMMixResult
         do {
@@ -101,6 +99,10 @@ actor SessionMergeService {
             mergedM4AFileName = try await exportMergedM4A(from: mergedCAFURL, in: sessionDirectory)
         } else {
             mergedM4AFileName = nil
+        }
+
+        if FileManager.default.fileExists(atPath: mergedCAFURL.path) {
+            try? FileManager.default.removeItem(at: mergedCAFURL)
         }
 
         metadata = try await metadataStore.load(in: sessionDirectory)
@@ -123,7 +125,6 @@ actor SessionMergeService {
         }
 
         return Result(
-            mergedCAFFileName: mergedCAFFileName,
             mergedM4AFileName: mergedM4AFileName,
             note: note,
             driftWarnings: warnings,
