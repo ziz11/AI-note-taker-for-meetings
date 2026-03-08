@@ -53,12 +53,13 @@ final class RecordingsStore: ObservableObject {
         inferenceEngineFactory: any InferenceEngineFactory,
         transcriptionEngineDisplayName: String,
         modelManager: ModelManager,
+        fluidAudioModelProvider: FluidAudioModelProvider,
         repository: RecordingsPersistence = RecordingsRepository(),
         previewMode: Bool = false
     ) {
         self.previewMode = previewMode
         self.modelManager = modelManager
-        self.modelSettingsViewModel = ModelSettingsViewModel(modelManager: modelManager)
+        self.modelSettingsViewModel = ModelSettingsViewModel(modelManager: modelManager, fluidAudioModelProvider: fluidAudioModelProvider)
         self.modelOnboardingCoordinator = ModelOnboardingCoordinator(modelManager: modelManager)
         var initialViewState = RecordingsViewState(activeEngineName: transcriptionEngineDisplayName)
         initialViewState.selectedModelProfile = modelManager.selectedProfile
@@ -100,7 +101,11 @@ final class RecordingsStore: ObservableObject {
 
     convenience init(previewMode: Bool = false) {
         let modelManager = ModelManager()
-        let composition = DefaultInferenceComposition.make(modelManager: modelManager)
+        let fluidAudioModelProvider = FluidAudioModelProvider()
+        let composition = DefaultInferenceComposition.make(
+            modelManager: modelManager,
+            fluidAudioModelProvider: fluidAudioModelProvider
+        )
         self.init(
             audioCaptureEngine: composition.audioCaptureEngine,
             transcriptionPipeline: TranscriptionPipeline(),
@@ -108,6 +113,7 @@ final class RecordingsStore: ObservableObject {
             inferenceEngineFactory: composition.engineFactory,
             transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
             modelManager: modelManager,
+            fluidAudioModelProvider: fluidAudioModelProvider,
             previewMode: previewMode
         )
     }

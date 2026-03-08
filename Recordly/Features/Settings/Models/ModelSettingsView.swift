@@ -40,7 +40,7 @@ struct ModelSettingsView: View {
                     .pickerStyle(.segmented)
 
                     if viewModel.selectedASRBackend == .fluidAudio {
-                        Text("FluidAudio uses multilingual v3 and ignores the language override. Select a staged FluidAudio model folder.")
+                        Text("FluidAudio uses SDK-managed multilingual v3 provisioning. Local ASR file picking is not required.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -51,17 +51,21 @@ struct ModelSettingsView: View {
                         .fill(Color.white.opacity(0.04))
                 )
 
-                modelPickerCard(
-                    title: "Transcription Model",
-                    subtitle: "Required for speech-to-text pipeline.",
-                    options: viewModel.asrModels,
-                    selection: Binding(
-                        get: { viewModel.selectedASRModelID },
-                        set: { viewModel.selectASRModel($0) }
-                    ),
-                    kind: .asr,
-                    allowsNone: false
-                )
+                if viewModel.selectedASRBackend == .whisperCpp {
+                    modelPickerCard(
+                        title: "Transcription Model",
+                        subtitle: "Required for speech-to-text pipeline.",
+                        options: viewModel.asrModels,
+                        selection: Binding(
+                            get: { viewModel.selectedASRModelID },
+                            set: { viewModel.selectASRModel($0) }
+                        ),
+                        kind: .asr,
+                        allowsNone: false
+                    )
+                } else {
+                    fluidAudioProvisioningCard
+                }
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Transcription Language")
@@ -122,6 +126,51 @@ struct ModelSettingsView: View {
         .onAppear { viewModel.refresh() }
     }
 
+
+    private var fluidAudioProvisioningCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("FluidAudio Model")
+                .font(.headline)
+            Text("FluidAudio uses SDK-managed provisioning (v3). Download once, then transcribe immediately.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            switch viewModel.fluidProvisioningState {
+            case .ready:
+                Text("FluidAudio v3 model is installed and ready.")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            case .needsDownload:
+                Text("No FluidAudio model installed.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            case .downloading:
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Downloading FluidAudio v3 model...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            case .failed(let message):
+                Text("Download failed: \(message)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            Button("Download FluidAudio v3 Model") {
+                viewModel.downloadFluidAudioModel()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!viewModel.canDownloadFluidModel)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+        )
+    }
+
     private func modelPickerCard(
         title: String,
         subtitle: String,
@@ -155,32 +204,9 @@ struct ModelSettingsView: View {
                     .lineLimit(2)
             } else if options.isEmpty {
                 if kind == .asr {
-                    Text("No compatible \(viewModel.selectedASRBackend.displayName) models found. \(viewModel.selectedASRBackend == .fluidAudio ? "FluidAudio needs a staged model folder with CoreML bundles." : "WhisperCpp needs a .bin model file.")")
+                    Text("No compatible WhisperCpp .bin models found.")
                         .font(.caption)
                         .foregroundStyle(.orange)
-
-                    if viewModel.canDownloadFluidModel {
-                        Button("Download FluidAudio v3 Model") {
-                            viewModel.downloadFluidAudioModel()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-
-                    if viewModel.isDownloadingFluidModel {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Downloading FluidAudio model...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    if let error = viewModel.fluidDownloadError {
-                        Text("Download failed: \(error)")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
                 } else {
                     Text("No compatible model files found in configured folders.")
                         .font(.caption)
