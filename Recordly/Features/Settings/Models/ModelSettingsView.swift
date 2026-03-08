@@ -154,9 +154,38 @@ struct ModelSettingsView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             } else if options.isEmpty {
-                Text("No compatible model files found in configured folders.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if kind == .asr {
+                    Text("No compatible \(viewModel.selectedASRBackend.displayName) models found. \(viewModel.selectedASRBackend == .fluidAudio ? "FluidAudio needs a staged model folder with CoreML bundles." : "WhisperCpp needs a .bin model file.")")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+
+                    if viewModel.canDownloadFluidModel {
+                        Button("Download FluidAudio v3 Model") {
+                            viewModel.downloadFluidAudioModel()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
+                    if viewModel.isDownloadingFluidModel {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Downloading FluidAudio model...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let error = viewModel.fluidDownloadError {
+                        Text("Download failed: \(error)")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                } else {
+                    Text("No compatible model files found in configured folders.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             HStack(spacing: 8) {

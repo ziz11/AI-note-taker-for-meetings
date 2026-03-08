@@ -1,5 +1,9 @@
 import Foundation
 
+#if arch(arm64) && canImport(FluidAudio)
+import FluidAudio
+#endif
+
 @MainActor
 final class ModelSettingsViewModel: ObservableObject {
     @Published private(set) var asrModels: [LocalModelOption] = []
@@ -12,6 +16,9 @@ final class ModelSettingsViewModel: ObservableObject {
     @Published var selectedDiarizationModelID: String?
     @Published var selectedSummarizationModelID: String?
 
+    @Published private(set) var isDownloadingFluidModel = false
+    @Published private(set) var fluidDownloadError: String?
+
     private let modelManager: ModelManager
 
     init(modelManager: ModelManager) {
@@ -20,15 +27,33 @@ final class ModelSettingsViewModel: ObservableObject {
     }
 
     func refresh() {
-        asrModels = modelManager.listLocalOptions(kind: .asr)
+        let allASRModels = modelManager.listLocalOptions(kind: .asr)
+        selectedASRBackend = modelManager.selectedASRBackend
+        asrModels = allASRModels.filter { isModelCompatible($0, with: selectedASRBackend) }
         diarizationModels = modelManager.listLocalOptions(kind: .diarization)
         summarizationModels = modelManager.listLocalOptions(kind: .summarization)
 
         selectedASRModelID = modelManager.selectedLocalOption(kind: .asr)?.id
-        selectedASRBackend = modelManager.selectedASRBackend
         selectedASRLanguage = modelManager.selectedASRLanguage
         selectedDiarizationModelID = modelManager.selectedLocalOption(kind: .diarization)?.id
         selectedSummarizationModelID = modelManager.selectedLocalOption(kind: .summarization)?.id
+
+        if let selectedID = selectedASRModelID,
+           !asrModels.contains(where: { $0.id == selectedID }),
+           let firstCompatible = asrModels.first {
+            modelManager.setSelectedModelID(firstCompatible.id, for: .asr)
+            selectedASRModelID = firstCompatible.id
+        }
+    }
+
+    private func isModelCompatible(_ option: LocalModelOption, with backend: ASRBackend) -> Bool {
+        switch backend {
+        case .fluidAudio:
+            return FluidAudioModelValidator.isValidModelDirectory(option.url)
+        case .whisperCpp:
+            let isFile = (try? option.url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+            return isFile && option.url.pathExtension.lowercased() == "bin"
+        }
     }
 
     var isASRLanguageEditable: Bool {
@@ -80,5 +105,28 @@ final class ModelSettingsViewModel: ObservableObject {
     func modelLabel(for option: LocalModelOption) -> String {
         let size = ByteCountFormatter.string(fromByteCount: option.sizeBytes, countStyle: .file)
         return "\(option.displayName) • \(size)"
+    }
+
+    var canDownloadFluidModel: Bool {
+        selectedASRBackend == .fluidAudio && asrModels.isEmpty && !isDownloadingFluidModel
+    }
+
+    func downloadFluidAudioModel() {
+#if arch(arm64) && canImport(FluidAudio)
+        guard !isDownloadingFluidModel else { return }
+        isDownloadingFluidModel = true
+        fluidDownloadError = nil
+        Task {
+            do {
+                _ = try await AsrModels.downloadAndLoad(version: .v3)
+                refresh()
+            } catch {
+                fluidDownloadError = error.localizedDescription
+            }
+            isDownloadingFluidModel = false
+        }
+#else
+        fluidDownloadError = "FluidAudio SDK is not available on this architecture."
+#endif
     }
 }

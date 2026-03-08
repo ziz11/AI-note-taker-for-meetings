@@ -5,6 +5,7 @@ struct ModelDiscoveryPaths {
     let sharedDirectory: (ModelKind) -> URL?
     let userDirectory: (ModelKind) -> URL?
     let projectDirectories: () -> [URL]
+    var fluidAudioSDKDirectory: () -> URL? = { nil }
 
     static func live() -> ModelDiscoveryPaths {
         ModelDiscoveryPaths(
@@ -19,6 +20,9 @@ struct ModelDiscoveryPaths {
             },
             projectDirectories: {
                 AppPaths.projectLocalModelsDirectories()
+            },
+            fluidAudioSDKDirectory: {
+                AppPaths.fluidAudioSDKModelsDirectory()
             }
         )
     }
@@ -139,6 +143,7 @@ final class ModelManager: ObservableObject {
 
     func listLocalOptions(kind: ModelKind) -> [LocalModelOption] {
         let options = loadAppSupportOptions(kind: kind)
+            + loadFluidAudioSDKOptions(kind: kind)
             + loadSharedOptions(kind: kind)
             + loadUserLocalOptions(kind: kind)
             + loadProjectLocalOptions(kind: kind)
@@ -378,13 +383,28 @@ final class ModelManager: ObservableObject {
             return .summarization
         }
         let name = url.deletingPathExtension().lastPathComponent.lowercased()
-        if name.contains("whisper") || name.contains("asr") {
-            return .asr
-        }
         if name.contains("diarization") {
             return .diarization
         }
+        if ext == "bin" && !name.contains("summarization") && !name.contains("summary") {
+            return .asr
+        }
         return .summarization
+    }
+
+    private func loadFluidAudioSDKOptions(kind: ModelKind) -> [LocalModelOption] {
+        guard kind == .asr else { return [] }
+        guard let directory = discoveryPaths.fluidAudioSDKDirectory() else { return [] }
+        let urls = (try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        return urls
+            .sorted(by: modelURLSort)
+            .filter { isSupportedFluidModelDirectory($0) }
+            .compactMap { buildLocalOption(url: $0, kind: .asr, source: .appSupport) }
     }
 
     private func loadUserLocalOptions(kind: ModelKind) -> [LocalModelOption] {

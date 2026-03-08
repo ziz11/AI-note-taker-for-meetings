@@ -1,6 +1,6 @@
 import Foundation
 
-#if canImport(FluidAudio)
+#if arch(arm64) && canImport(FluidAudio)
 import FluidAudio
 #endif
 
@@ -67,18 +67,21 @@ protocol FluidAudioTranscribing {
     ) async throws -> FluidAudioRunnerOutput
 }
 
-struct FluidAudioTranscriber: FluidAudioTranscribing {
+final class FluidAudioTranscriber: FluidAudioTranscribing {
+#if arch(arm64) && canImport(FluidAudio)
+    private var cachedManager: AsrManager?
+    private var cachedModelPath: String?
+#endif
+
     func transcribe(
         audioURL: URL,
         modelDirectoryURL: URL,
         channel: TranscriptChannel,
         languageCode: String?
     ) async throws -> FluidAudioRunnerOutput {
-#if canImport(FluidAudio)
+#if arch(arm64) && canImport(FluidAudio)
         _ = languageCode
-        let models = try await AsrModels.load(from: modelDirectoryURL, configuration: nil, version: .v3)
-        let manager = AsrManager(config: .default)
-        try await manager.initialize(models: models)
+        let manager = try await resolveManager(for: modelDirectoryURL)
         let source = fluidSource(for: channel)
         let rawResult = try await manager.transcribe(audioURL, source: source)
         return mapResult(rawResult)
@@ -89,7 +92,20 @@ struct FluidAudioTranscriber: FluidAudioTranscribing {
 #endif
     }
 
-#if canImport(FluidAudio)
+#if arch(arm64) && canImport(FluidAudio)
+    private func resolveManager(for modelDirectoryURL: URL) async throws -> AsrManager {
+        let modelPath = modelDirectoryURL.standardizedFileURL.path
+        if let manager = cachedManager, cachedModelPath == modelPath {
+            return manager
+        }
+        let models = try await AsrModels.load(from: modelDirectoryURL, configuration: nil, version: .v3)
+        let manager = AsrManager(config: .default)
+        try await manager.initialize(models: models)
+        cachedManager = manager
+        cachedModelPath = modelPath
+        return manager
+    }
+
     private func fluidSource(for channel: TranscriptChannel) -> AudioSource {
         switch channel {
         case .system:
@@ -98,22 +114,20 @@ struct FluidAudioTranscriber: FluidAudioTranscribing {
             return .microphone
         }
     }
-#endif
 
-    private func mapResult(_ result: Any) -> FluidAudioRunnerOutput {
-        let text = extractText(from: result)
-        let language = extractString(field: "language", from: result)
-        let confidence = extractDouble(field: "confidence", from: result)
-        let words = extractWords(from: result)
+    private func mapResult(_ result: ASRResult) -> FluidAudioRunnerOutput {
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let confidence = Double(result.confidence)
+        let words = mapTokenTimings(result.tokenTimings)
         let startMs = words.map(\.startMs).min() ?? 0
         let endMs = max(words.map(\.endMs).max() ?? (startMs + 1), startMs + 1)
 
         guard !text.isEmpty else {
-            return FluidAudioRunnerOutput(language: language, segments: [])
+            return FluidAudioRunnerOutput(language: nil, segments: [])
         }
 
         return FluidAudioRunnerOutput(
-            language: language,
+            language: nil,
             segments: [
                 FluidAudioSegment(
                     id: "seg-1",
@@ -127,77 +141,25 @@ struct FluidAudioTranscriber: FluidAudioTranscribing {
         )
     }
 
-    private func extractText(from result: Any) -> String {
-        if let text = extractString(field: "text", from: result),
-           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        if let transcript = extractString(field: "transcript", from: result),
-           !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        let tokens = extractWords(from: result).map(\.word)
-        return tokens.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+    private func mapTokenTimings(_ timings: [TokenTiming]?) -> [ASRWord] {
+        guard let timings else { return [] }
 
-    private func extractWords(from result: Any) -> [ASRWord] {
-        guard let tokenTimings = extractArray(field: "tokenTimings", from: result) else {
-            return []
-        }
+        return timings.compactMap { timing in
+            let cleanedToken = timing.token.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanedToken.isEmpty else { return nil }
 
-        return tokenTimings.compactMap { token in
-            let rawToken = extractString(field: "token", from: token) ?? extractString(field: "text", from: token) ?? ""
-            let cleanedToken = rawToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !cleanedToken.isEmpty else {
-                return nil
-            }
-
-            let startSeconds = extractDouble(field: "startTime", from: token) ?? 0
-            let endSeconds = extractDouble(field: "endTime", from: token) ?? max(startSeconds + 0.01, startSeconds)
-            let confidence = extractDouble(field: "confidence", from: token)
+            let startMs = max(0, Int(timing.startTime * 1_000))
+            let endMs = max(Int(timing.endTime * 1_000), startMs + 1)
 
             return ASRWord(
                 word: cleanedToken,
-                startMs: max(0, Int(startSeconds * 1_000)),
-                endMs: max(Int(endSeconds * 1_000), Int(startSeconds * 1_000) + 1),
-                confidence: confidence
+                startMs: startMs,
+                endMs: endMs,
+                confidence: Double(timing.confidence)
             )
         }
     }
-
-    private func extractArray(field: String, from value: Any) -> [Any]? {
-        Mirror(reflecting: value).children.first(where: { $0.label == field })?.value as? [Any]
-    }
-
-    private func extractString(field: String, from value: Any) -> String? {
-        if let string = Mirror(reflecting: value).children.first(where: { $0.label == field })?.value as? String {
-            return string
-        }
-
-        if let optional = Mirror(reflecting: value).children.first(where: { $0.label == field })?.value {
-            let optionalMirror = Mirror(reflecting: optional)
-            if optionalMirror.displayStyle == .optional,
-               let first = optionalMirror.children.first,
-               let string = first.value as? String {
-                return string
-            }
-        }
-
-        return nil
-    }
-
-    private func extractDouble(field: String, from value: Any) -> Double? {
-        if let double = Mirror(reflecting: value).children.first(where: { $0.label == field })?.value as? Double {
-            return double
-        }
-        if let int = Mirror(reflecting: value).children.first(where: { $0.label == field })?.value as? Int {
-            return Double(int)
-        }
-        if let number = Mirror(reflecting: value).children.first(where: { $0.label == field })?.value as? NSNumber {
-            return number.doubleValue
-        }
-        return nil
-    }
+#endif
 }
 
 struct FluidAudioASREngine: ASREngine {

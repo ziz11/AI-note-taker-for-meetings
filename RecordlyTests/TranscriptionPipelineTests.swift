@@ -704,6 +704,231 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertTrue(result.degradedReasons.contains(.diarizationDegraded))
     }
 
+    func testMicOnlyInputProducesTranscriptWithoutSystemASR() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
+        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: nil)
+        )
+
+        let result = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(result.state, .ready)
+        XCTAssertNotNil(result.micASRJSONFile)
+        XCTAssertNil(result.systemASRJSONFile)
+        XCTAssertNotNil(result.transcriptFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.txt").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.srt").path))
+    }
+
+    func testSystemOnlyInputProducesTranscriptWithoutMicASR() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: nil, systemAudioFile: "system.raw.caf")
+        )
+
+        let result = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(result.state, .ready)
+        XCTAssertNil(result.micASRJSONFile)
+        XCTAssertNotNil(result.systemASRJSONFile)
+        XCTAssertNotNil(result.transcriptFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.json").path))
+    }
+
+    func testMicFailsSystemSucceedsProducesDegradedTranscript() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: MicFailingASREngine(), diarizationEngine: FailingDiarizationEngine())
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        )
+
+        let result = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(result.state, .ready)
+        XCTAssertTrue(result.degradedReasons.contains(.micASRFailedFallbackUsed))
+        XCTAssertNil(result.micASRJSONFile)
+        XCTAssertNotNil(result.systemASRJSONFile)
+        XCTAssertNotNil(result.transcriptFile)
+    }
+
+    func testPipelineProducesAllExpectedArtifacts() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: SuccessfulDiarizationEngine())
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("diarization.bin").path, contents: Data("dmodel".utf8))
+        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        )
+
+        let result = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            runtimeProfile: makeRuntimeProfile(
+                asrModelURL: temp.appendingPathComponent("asr.bin"),
+                diarizationModelURL: temp.appendingPathComponent("diarization.bin")
+            ),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(result.micASRJSONFile, "mic.asr.json")
+        XCTAssertEqual(result.systemASRJSONFile, "system.asr.json")
+        XCTAssertEqual(result.transcriptJSONFile, "transcript.json")
+        XCTAssertEqual(result.transcriptFile, "transcript.txt")
+        XCTAssertEqual(result.srtFile, "transcript.srt")
+        XCTAssertEqual(result.systemDiarizationJSONFile, "system.diarization.json")
+
+        let expectedFiles = ["mic.asr.json", "system.asr.json", "transcript.json", "transcript.txt", "transcript.srt", "system.diarization.json"]
+        for file in expectedFiles {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent(file).path), "Missing artifact: \(file)")
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let micData = try Data(contentsOf: temp.appendingPathComponent("mic.asr.json"))
+        let micDoc = try decoder.decode(ASRDocument.self, from: micData)
+        XCTAssertEqual(micDoc.channel, .mic)
+        XCTAssertFalse(micDoc.segments.isEmpty)
+
+        let sysData = try Data(contentsOf: temp.appendingPathComponent("system.asr.json"))
+        let sysDoc = try decoder.decode(ASRDocument.self, from: sysData)
+        XCTAssertEqual(sysDoc.channel, .system)
+        XCTAssertFalse(sysDoc.segments.isEmpty)
+
+        let transcriptData = try Data(contentsOf: temp.appendingPathComponent("transcript.json"))
+        let transcriptDoc = try decoder.decode(TranscriptDocument.self, from: transcriptData)
+        XCTAssertFalse(transcriptDoc.segments.isEmpty)
+        XCTAssertTrue(transcriptDoc.diarizationApplied)
+    }
+
+    func testPipelineWithFluidAudioBackendUsesFluidFingerprint() async throws {
+        let asrEngine = RecordingASREngine()
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: asrEngine, diarizationEngine: FailingDiarizationEngine())
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        let model = temp.appendingPathComponent("model.bin")
+        try Data("model".utf8).write(to: model)
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        )
+
+        _ = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: model, diarizationModelURL: nil),
+            engineFactory: factory
+        )
+
+        let micFingerprint = try String(contentsOf: temp.appendingPathComponent("mic.asr.model.txt"), encoding: .utf8)
+        XCTAssertFalse(micFingerprint.isEmpty)
+
+        let systemFingerprint = try String(contentsOf: temp.appendingPathComponent("system.asr.model.txt"), encoding: .utf8)
+        XCTAssertFalse(systemFingerprint.isEmpty)
+    }
+
     func testWhisperEmptyTranscriptionArrayReturnsEmptyDocument() async throws {
         let outputBase = FileManager.default.temporaryDirectory.appendingPathComponent("whisper-output-\(UUID().uuidString)")
         let jsonURL = outputBase.appendingPathExtension("json")
@@ -792,6 +1017,30 @@ final class TranscriptionPipelineTests: XCTestCase {
             configuration: ASREngineConfiguration
         ) async throws -> ASRDocument {
             throw ASREngineRuntimeError.inferenceFailed(message: "\(channel.rawValue) failed")
+        }
+    }
+
+    private struct MicFailingASREngine: ASREngine {
+        var displayName: String { "mic-failing-mock" }
+
+        func transcribe(
+            audioURL: URL,
+            channel: TranscriptChannel,
+            sessionID: UUID,
+            configuration: ASREngineConfiguration
+        ) async throws -> ASRDocument {
+            if channel == .mic {
+                throw ASREngineRuntimeError.inferenceFailed(message: "mic audio corrupt")
+            }
+            return ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: [
+                    ASRSegment(id: "system-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
+                ]
+            )
         }
     }
 

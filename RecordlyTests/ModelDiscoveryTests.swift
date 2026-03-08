@@ -130,7 +130,7 @@ final class ModelDiscoveryTests: XCTestCase {
 
         XCTAssertEqual(
             Set(manager.listLocalOptions(kind: .asr).map { $0.url.lastPathComponent }),
-            ["whisper-large.bin", "team-asr.bin"]
+            ["whisper-large.bin", "team-asr.bin", "generic.bin"]
         )
         XCTAssertEqual(
             Set(manager.listLocalOptions(kind: .diarization).map { $0.url.lastPathComponent }),
@@ -138,7 +138,7 @@ final class ModelDiscoveryTests: XCTestCase {
         )
         XCTAssertEqual(
             Set(manager.listLocalOptions(kind: .summarization).map { $0.url.lastPathComponent }),
-            ["summary.gguf", "generic.bin"]
+            ["summary.gguf"]
         )
     }
 
