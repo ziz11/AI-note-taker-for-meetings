@@ -37,7 +37,7 @@ Short rationale: Recordly is designed so new backends, runtime mappings, and pre
 ### Runtime selection
 
 - `DefaultInferenceRuntimeProfileSelector` owns runtime profile resolution.
-- It may resolve stage selections, model artifacts, and runtime parameters.
+- It resolves ASR model via `FluidAudioModelProvider` (SDK-managed) and diarization/summarization via `ModelManager`.
 - It must not run inference, instantiate backends, mutate session artifacts, or decide product fallback behavior.
 
 ### Factory and routing
@@ -48,9 +48,9 @@ Short rationale: Recordly is designed so new backends, runtime mappings, and pre
 
 ### Model layer
 
-- `ModelManager` owns model discovery, install state, selected model IDs, artifact resolution, and runtime settings persistence.
-- `ModelManager` must not become an orchestration center.
-- Do not put stage order, fallback policy, or backend execution logic into the model layer.
+- `ModelManager` owns model discovery, install state, selected model IDs, artifact resolution, and runtime settings persistence for diarization and summarization.
+- `FluidAudioModelProvider` owns ASR model provisioning (SDK-managed download/cache/resolve).
+- Model layers must not become orchestration centers.
 
 ### Backend modules
 
@@ -83,7 +83,7 @@ Put the work in:
 - `Recordly/Infrastructure/Inference/Audio/`
 - or a dedicated preprocessing module with similarly narrow scope
 
-Do not hide reusable preprocessing policy inside `WhisperCppASREngine` or another backend class.
+Do not hide reusable preprocessing policy inside a backend class.
 
 ### If you are adding a new stage
 
@@ -109,7 +109,8 @@ Decide first whether the capability is cross-backend or backend-private.
   - `merged-call.caf`
   - `merged-call.m4a`
 - Internal live-capture format remains normalized PCM in CAF.
-- If a backend needs WAV, FLAC, PCM buffers, or another representation, adapt at the consumer boundary.
+- FluidAudio SDK accepts CAF directly — no format conversion is needed at the ASR boundary.
+- If a future backend needs WAV, FLAC, PCM buffers, or another representation, adapt at the consumer boundary.
 
 ### Persistence invariants
 
@@ -120,8 +121,9 @@ Decide first whether the capability is cross-backend or backend-private.
 
 ### Model invariants
 
+- ASR model provisioning is SDK-managed via `FluidAudioModelProvider`. Do not force it into local-file picking patterns.
+- Diarization and summarization models remain local-file based via `ModelManager`.
 - Treat model artifact resolution and backend selection as separate concerns.
-- Local model policy is the current default; do not spread remote-install logic through orchestration layers.
 
 ## Extension Checklists
 
@@ -325,14 +327,6 @@ Steps: add or evolve a stable contract; add runtime selection support if selecta
 
 ### Quick recipes
 
-**Add FluidAudio for ASR:**
-- Create `Backends/FluidAudio/FluidAudioASREngine.swift`
-- Implement `ASREngine`
-- Add routing in `DefaultInferenceEngineFactory`
-- Change ASR stage selection in `DefaultInferenceComposition`
-- Run pipeline/workflow/recovery tests
-- Do not rewrite orchestration
-
 **Add ffmpeg silence trimming before ASR:**
 - Create a preprocessing component outside ASR backend
 - Accept/return `AudioInput`
@@ -341,9 +335,9 @@ Steps: add or evolve a stable contract; add runtime selection support if selecta
 - Validate timestamp implications
 - Verify diarization is not accidentally degraded
 
-**Add a backend-specific temporary WAV export:**
+**Add a backend-specific temporary format export:**
 - Keep it inside backend/adaptation layer
-- Do not expose WAV as the new system-wide source of truth
+- Do not expose it as the new system-wide source of truth
 
 **Add a user-selectable backend setting later:**
 - Introduce a stage map source read by composition/selector
@@ -372,11 +366,12 @@ Use these files as the primary routing map for inference changes:
 - Workflow orchestration: `Recordly/Features/Recordings/Application/RecordingWorkflowController.swift`
 - Pipeline orchestration: `Recordly/Infrastructure/Transcription/TranscriptionPipeline.swift`
 - Model layer: `Recordly/Infrastructure/Models/ModelManager.swift`
+- ASR model provisioning: `Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioModelProvider.swift`
 - Persistence layer: `Recordly/Infrastructure/Persistence/RecordingsRepository.swift`
 
 Current backend modules:
 
-- ASR: `WhisperCppASREngine`
+- ASR: `FluidAudioASREngine` (FluidAudio SDK v3)
 - Diarization: `CliDiarizationEngine`
 - Summarization: `LlamaCppSummarizationEngine`
 

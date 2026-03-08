@@ -5,7 +5,6 @@ final class ModelPreferencesStore {
         static let selectedProfile = "model.selectedProfile"
         static let pendingProfile = "model.pendingProfile"
         static let onboardingSeen = "model.onboardingSeen"
-        static let selectedASRModelID = "model.selectedASRModelID"
         static let selectedASRLanguage = "model.selectedASRLanguage"
         static let selectedASRBackend = "model.selectedASRBackend"
         static let selectedDiarizationModelID = "model.selectedDiarizationModelID"
@@ -19,6 +18,7 @@ final class ModelPreferencesStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        normalizeLegacyASRPreferences()
     }
 
     var selectedProfile: ModelProfile {
@@ -43,33 +43,6 @@ final class ModelPreferencesStore {
     var onboardingSeen: Bool {
         get { defaults.bool(forKey: Keys.onboardingSeen) }
         set { defaults.set(newValue, forKey: Keys.onboardingSeen) }
-    }
-
-    var selectedASRModelID: String? {
-        get { defaults.string(forKey: Keys.selectedASRModelID) }
-        set { defaults.set(newValue, forKey: Keys.selectedASRModelID) }
-    }
-
-    var selectedASRLanguage: ASRLanguage {
-        get {
-            guard let rawValue = defaults.string(forKey: Keys.selectedASRLanguage),
-                  let value = ASRLanguage(rawValue: rawValue) else {
-                return .ru
-            }
-            return value
-        }
-        set { defaults.set(newValue.rawValue, forKey: Keys.selectedASRLanguage) }
-    }
-
-    var selectedASRBackend: ASRBackend {
-        get {
-            guard let rawValue = defaults.string(forKey: Keys.selectedASRBackend),
-                  let value = ASRBackend(rawValue: rawValue) else {
-                return .fluidAudio
-            }
-            return value
-        }
-        set { defaults.set(newValue.rawValue, forKey: Keys.selectedASRBackend) }
     }
 
     var selectedDiarizationModelID: String? {
@@ -100,6 +73,16 @@ final class ModelPreferencesStore {
             defaults.set(newValue.contextSize, forKey: Keys.summarizationContextSize)
             defaults.set(newValue.temperature, forKey: Keys.summarizationTemperature)
             defaults.set(newValue.topP, forKey: Keys.summarizationTopP)
+        }
+    }
+
+    private func normalizeLegacyASRPreferences() {
+        if defaults.object(forKey: Keys.selectedASRBackend) != nil {
+            defaults.set("fluidAudio", forKey: Keys.selectedASRBackend)
+        }
+
+        if defaults.object(forKey: Keys.selectedASRLanguage) != nil {
+            defaults.set(ASRLanguage.auto.rawValue, forKey: Keys.selectedASRLanguage)
         }
     }
 }

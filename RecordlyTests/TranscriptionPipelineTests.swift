@@ -50,7 +50,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(calls.map(\.modelName), ["model-a.bin", "model-a.bin", "model-b.bin", "model-b.bin"])
     }
 
-    func testPipelineRebuildsASRWhenLanguageFingerprintChanges() async throws {
+    func testPipelineRebuildsASRWhenFingerprintChanges() async throws {
         let asrEngine = RecordingASREngine()
         let pipeline = TranscriptionPipeline()
         let factory = StaticInferenceEngineFactory(asrEngine: asrEngine, diarizationEngine: FailingDiarizationEngine())
@@ -80,7 +80,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         _ = try await pipeline.process(
             recording: recording,
             in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: model, diarizationModelURL: nil, asrLanguage: .ru),
+            runtimeProfile: makeRuntimeProfile(asrModelURL: model, diarizationModelURL: nil),
             engineFactory: factory
         )
 
@@ -88,7 +88,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         _ = try await pipeline.process(
             recording: recording,
             in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: model, diarizationModelURL: nil, asrLanguage: .en),
+            runtimeProfile: makeRuntimeProfile(asrModelURL: model, diarizationModelURL: nil),
             engineFactory: factory
         )
 
@@ -377,147 +377,6 @@ final class TranscriptionPipelineTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? DiarizationRuntimeError, .binaryMissing)
         }
-    }
-
-    func testProcessWhisperCppRunnerUsesInjectedBinaryResolver() async throws {
-        let outputBase = FileManager.default.temporaryDirectory.appendingPathComponent("whisper-output-\(UUID().uuidString)")
-        let jsonURL = outputBase.appendingPathExtension("json")
-        let json = """
-        {
-          "result": { "language": "en" },
-          "transcription": [
-            {
-              "text": "hello",
-              "offsets": { "from": 0, "to": 1000 }
-            }
-          ]
-        }
-        """
-        try XCTUnwrap(json.data(using: .utf8)).write(to: jsonURL)
-
-        let executor = CapturingWhisperProcessExecutor(
-            result: WhisperProcessResult(exitCode: 0, stdout: "", stderr: "")
-        )
-        let expectedBinaryURL = URL(fileURLWithPath: "/opt/homebrew/bin/whisper-cli")
-        let runner = ProcessWhisperCppRunner(
-            processExecutor: executor,
-            temporaryDirectory: FileManager.default.temporaryDirectory,
-            environment: [:],
-            resolveBinaryURL: { expectedBinaryURL },
-            outputBaseURLFactory: { outputBase }
-        )
-
-        let output = try await runner.transcribe(
-            audioURL: URL(fileURLWithPath: "/tmp/audio.wav"),
-            modelURL: URL(fileURLWithPath: "/tmp/model.bin")
-        )
-
-        XCTAssertEqual(output.language, "en")
-        XCTAssertEqual(output.segments.count, 1)
-        XCTAssertEqual(executor.capturedExecutableURL, expectedBinaryURL)
-        XCTAssertTrue(executor.capturedArguments.contains("--language"))
-        guard let languageIndex = executor.capturedArguments.firstIndex(of: "--language"),
-              executor.capturedArguments.indices.contains(languageIndex + 1) else {
-            XCTFail("Expected --language argument")
-            return
-        }
-        XCTAssertEqual(executor.capturedArguments[languageIndex + 1], "ru")
-    }
-
-    func testProcessWhisperCppRunnerUsesConfiguredLanguageEN() async throws {
-        let outputBase = FileManager.default.temporaryDirectory.appendingPathComponent("whisper-output-\(UUID().uuidString)")
-        let jsonURL = outputBase.appendingPathExtension("json")
-        let json = """
-        {
-          "result": { "language": "en" },
-          "transcription": [
-            {
-              "text": "hello",
-              "offsets": { "from": 0, "to": 1000 }
-            }
-          ]
-        }
-        """
-        try XCTUnwrap(json.data(using: .utf8)).write(to: jsonURL)
-
-        let executor = CapturingWhisperProcessExecutor(
-            result: WhisperProcessResult(exitCode: 0, stdout: "", stderr: "")
-        )
-        let runner = ProcessWhisperCppRunner(
-            processExecutor: executor,
-            temporaryDirectory: FileManager.default.temporaryDirectory,
-            environment: [:],
-            languageCode: "en",
-            resolveBinaryURL: { URL(fileURLWithPath: "/opt/homebrew/bin/whisper-cli") },
-            outputBaseURLFactory: { outputBase }
-        )
-
-        _ = try await runner.transcribe(
-            audioURL: URL(fileURLWithPath: "/tmp/audio.wav"),
-            modelURL: URL(fileURLWithPath: "/tmp/model.bin")
-        )
-
-        guard let languageIndex = executor.capturedArguments.firstIndex(of: "--language"),
-              executor.capturedArguments.indices.contains(languageIndex + 1) else {
-            XCTFail("Expected --language argument")
-            return
-        }
-        XCTAssertEqual(executor.capturedArguments[languageIndex + 1], "en")
-    }
-
-    func testProcessWhisperCppRunnerUsesConfiguredLanguageAuto() async throws {
-        let outputBase = FileManager.default.temporaryDirectory.appendingPathComponent("whisper-output-\(UUID().uuidString)")
-        let jsonURL = outputBase.appendingPathExtension("json")
-        let json = """
-        {
-          "result": { "language": "ru" },
-          "transcription": [
-            {
-              "text": "privet",
-              "offsets": { "from": 0, "to": 1000 }
-            }
-          ]
-        }
-        """
-        try XCTUnwrap(json.data(using: .utf8)).write(to: jsonURL)
-
-        let executor = CapturingWhisperProcessExecutor(
-            result: WhisperProcessResult(exitCode: 0, stdout: "", stderr: "")
-        )
-        let runner = ProcessWhisperCppRunner(
-            processExecutor: executor,
-            temporaryDirectory: FileManager.default.temporaryDirectory,
-            environment: [:],
-            languageCode: "auto",
-            resolveBinaryURL: { URL(fileURLWithPath: "/opt/homebrew/bin/whisper-cli") },
-            outputBaseURLFactory: { outputBase }
-        )
-
-        _ = try await runner.transcribe(
-            audioURL: URL(fileURLWithPath: "/tmp/audio.wav"),
-            modelURL: URL(fileURLWithPath: "/tmp/model.bin")
-        )
-
-        guard let languageIndex = executor.capturedArguments.firstIndex(of: "--language"),
-              executor.capturedArguments.indices.contains(languageIndex + 1) else {
-            XCTFail("Expected --language argument")
-            return
-        }
-        XCTAssertEqual(executor.capturedArguments[languageIndex + 1], "auto")
-    }
-
-    func testDefaultWhisperBinaryResolverFindsWhisperCLIInPATH() throws {
-        let expected = URL(fileURLWithPath: "/opt/homebrew/bin/whisper-cli")
-        let runner = ProcessWhisperCppRunner(
-            fileManager: FakeWhisperBinaryFileManager(executablePaths: [expected.path]),
-            processExecutor: MockWhisperProcessExecutor(result: WhisperProcessResult(exitCode: 0, stdout: "", stderr: "")),
-            temporaryDirectory: FileManager.default.temporaryDirectory,
-            environment: ["PATH": "/usr/bin:/opt/homebrew/bin:/bin"]
-        )
-
-        let resolved = try runner.defaultResolveWhisperBinaryURL()
-
-        XCTAssertEqual(resolved, expected)
     }
 
     func testCliDiarizationEngineModelMissingThrows() async throws {
@@ -929,37 +788,6 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertFalse(systemFingerprint.isEmpty)
     }
 
-    func testWhisperEmptyTranscriptionArrayReturnsEmptyDocument() async throws {
-        let outputBase = FileManager.default.temporaryDirectory.appendingPathComponent("whisper-output-\(UUID().uuidString)")
-        let jsonURL = outputBase.appendingPathExtension("json")
-        let json = """
-        {
-          "result": { "language": "ru" },
-          "transcription": []
-        }
-        """
-        try XCTUnwrap(json.data(using: .utf8)).write(to: jsonURL)
-
-        let executor = CapturingWhisperProcessExecutor(
-            result: WhisperProcessResult(exitCode: 0, stdout: "", stderr: "")
-        )
-        let runner = ProcessWhisperCppRunner(
-            processExecutor: executor,
-            temporaryDirectory: FileManager.default.temporaryDirectory,
-            environment: [:],
-            resolveBinaryURL: { URL(fileURLWithPath: "/opt/homebrew/bin/whisper-cli") },
-            outputBaseURLFactory: { outputBase }
-        )
-
-        let output = try await runner.transcribe(
-            audioURL: URL(fileURLWithPath: "/tmp/audio.wav"),
-            modelURL: URL(fileURLWithPath: "/tmp/model.bin")
-        )
-
-        XCTAssertEqual(output.language, "ru")
-        XCTAssertTrue(output.segments.isEmpty)
-    }
-
     // MARK: - Phase 1 mock engines
 
     private struct EmptySystemASREngine: ASREngine {
@@ -1066,7 +894,7 @@ final class TranscriptionPipelineTests: XCTestCase {
     private func makeRuntimeProfile(
         asrModelURL: URL,
         diarizationModelURL: URL?,
-        asrLanguage: ASRLanguage = .ru
+        asrLanguage: ASRLanguage = .auto
     ) -> InferenceRuntimeProfile {
         InferenceRuntimeProfile(
             stageSelection: .defaultLocal,
@@ -1112,7 +940,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         ) async throws -> ASRDocument {
             if channel == .system {
                 throw ASREngineRuntimeError.inferenceFailed(
-                    message: "whisper-cli produced no output file. stderr: error: failed to read the frames of the audio data (Invalid argument)"
+                    message: "ASR backend failed to read the frames of the audio data (Invalid argument)"
                 )
             }
 
@@ -1253,42 +1081,6 @@ final class TranscriptionPipelineTests: XCTestCase {
         }
     }
 
-    private final class CapturingWhisperProcessExecutor: WhisperProcessExecutor {
-        private(set) var capturedExecutableURL: URL?
-        private(set) var capturedArguments: [String] = []
-        private let result: WhisperProcessResult
-
-        init(result: WhisperProcessResult) {
-            self.result = result
-        }
-
-        func run(executableURL: URL, arguments: [String]) async throws -> WhisperProcessResult {
-            capturedExecutableURL = executableURL
-            capturedArguments = arguments
-            return result
-        }
-    }
-
-    private struct MockWhisperProcessExecutor: WhisperProcessExecutor {
-        let result: WhisperProcessResult
-
-        func run(executableURL: URL, arguments: [String]) async throws -> WhisperProcessResult {
-            result
-        }
-    }
-
-    private final class FakeWhisperBinaryFileManager: FileManager {
-        private let executablePaths: Set<String>
-
-        init(executablePaths: Set<String>) {
-            self.executablePaths = executablePaths
-            super.init()
-        }
-
-        override func isExecutableFile(atPath path: String) -> Bool {
-            executablePaths.contains(path)
-        }
-    }
 }
 
 private func XCTAssertThrowsErrorAsync<T>(

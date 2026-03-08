@@ -14,8 +14,7 @@ enum DefaultInferenceComposition {
         modelManager: ModelManager,
         fluidAudioModelProvider: any FluidAudioModelProviding
     ) -> InferenceComposition {
-        var stageSelection = StageRuntimeSelection.defaultLocal
-        stageSelection.setBackend(modelManager.selectedASRBackend == .fluidAudio ? .fluidAudio : .whisperCpp, for: .asr)
+        let stageSelection = StageRuntimeSelection.defaultLocal
         let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(
             modelManager: modelManager,
             fluidAudioModelProvider: fluidAudioModelProvider,
@@ -25,7 +24,7 @@ enum DefaultInferenceComposition {
         let bootstrapProfile = InferenceRuntimeProfile(
             stageSelection: stageSelection,
             modelArtifacts: .empty,
-            asrLanguage: modelManager.selectedASRLanguage,
+            asrLanguage: .auto,
             summarizationRuntimeSettings: modelManager.summarizationRuntimeSettings
         )
         let audioCaptureEngine = (try? engineFactory.makeAudioCaptureEngine(for: bootstrapProfile)) ?? AudioCaptureService()

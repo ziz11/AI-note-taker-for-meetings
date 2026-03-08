@@ -476,13 +476,9 @@ final class RecordingWorkflowController {
             runtimeProfile = try runtimeProfileSelector.resolveTranscriptionProfile(for: selectedModelProfile)
         } catch let error as InferenceRuntimeProfileError {
             switch error {
-            case .missingASRModel:
-                throw RecordingWorkflowError.transcriptionUnavailable(.requiresASRModel(profileOptions: ModelProfile.allCases))
-            case .missingFluidAudioModel, .fluidAudioProvisioningFailed:
+            case .missingFluidAudioModel, .fluidAudioProvisioningFailed, .invalidFluidAudioModel:
                 throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
             case .missingSummarizationModel:
-                throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
-            case .invalidASRBackendModel:
                 throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
             }
         }

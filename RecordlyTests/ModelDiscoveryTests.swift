@@ -66,9 +66,9 @@ final class ModelDiscoveryTests: XCTestCase {
         let repoRoot = tempDirectory.appendingPathComponent("repo", isDirectory: true)
         let projectModels = repoRoot.appendingPathComponent("Models", isDirectory: true)
 
-        try createModel(named: "whisper-small.bin", in: appSupportRoot.appendingPathComponent("asr", isDirectory: true))
-        try createModel(named: "whisper-small.bin", in: sharedRoot.appendingPathComponent("asr", isDirectory: true))
-        try createModel(named: "whisper-small.bin", in: projectModels)
+        try createModel(named: "diarization-enhanced.bin", in: appSupportRoot.appendingPathComponent("diarization", isDirectory: true))
+        try createModel(named: "diarization-enhanced.bin", in: sharedRoot.appendingPathComponent("diarization", isDirectory: true))
+        try createModel(named: "diarization-enhanced.bin", in: projectModels)
 
         let manager = makeManager(
             appSupportRoot: appSupportRoot,
@@ -76,18 +76,18 @@ final class ModelDiscoveryTests: XCTestCase {
             projectDirectories: [projectModels]
         )
 
-        let options = manager.listLocalOptions(kind: .asr)
+        let options = manager.listLocalOptions(kind: .diarization)
 
         XCTAssertEqual(options.count, 1)
         XCTAssertEqual(options.first?.source, .appSupport)
         XCTAssertEqual(
             options.first?.url.deletingLastPathComponent().resolvingSymlinksInPath(),
-            appSupportRoot.appendingPathComponent("asr", isDirectory: true).resolvingSymlinksInPath()
+            appSupportRoot.appendingPathComponent("diarization", isDirectory: true).resolvingSymlinksInPath()
         )
     }
 
     @MainActor
-    func testSelectedLocalOptionUsesHighestPriorityAvailableSourceForASRFallback() throws {
+    func testSelectedLocalOptionLeavesASRUnmanagedByLocalSelection() throws {
         let sharedRoot = tempDirectory.appendingPathComponent("shared", isDirectory: true)
         let repoRoot = tempDirectory.appendingPathComponent("repo", isDirectory: true)
         let projectModels = repoRoot.appendingPathComponent("Models", isDirectory: true)
@@ -101,14 +101,8 @@ final class ModelDiscoveryTests: XCTestCase {
             projectDirectories: [projectModels]
         )
 
-        let selected = manager.selectedLocalOption(kind: .asr)
-
-        XCTAssertEqual(selected?.source, .shared)
-        XCTAssertEqual(
-            selected?.url.deletingLastPathComponent().resolvingSymlinksInPath(),
-            sharedRoot.appendingPathComponent("asr", isDirectory: true).resolvingSymlinksInPath()
-        )
-        XCTAssertEqual(manager.selectedASRModelID, selected?.id)
+        XCTAssertNil(manager.selectedLocalOption(kind: .asr))
+        XCTAssertTrue(manager.listLocalOptions(kind: .asr).isEmpty)
     }
 
     @MainActor
@@ -117,7 +111,6 @@ final class ModelDiscoveryTests: XCTestCase {
         let modelsDirectory = repoRoot.appendingPathComponent("Models", isDirectory: true)
 
         try createModel(named: "whisper-large.bin", in: modelsDirectory)
-        try createModel(named: "team-asr.bin", in: modelsDirectory)
         try createModel(named: "diarization-enhanced.bin", in: modelsDirectory)
         try createModel(named: "summary.gguf", in: modelsDirectory)
         try createModel(named: "generic.bin", in: modelsDirectory)
@@ -128,25 +121,22 @@ final class ModelDiscoveryTests: XCTestCase {
             projectDirectories: [modelsDirectory]
         )
 
-        XCTAssertEqual(
-            Set(manager.listLocalOptions(kind: .asr).map { $0.url.lastPathComponent }),
-            ["whisper-large.bin", "team-asr.bin", "generic.bin"]
-        )
+        XCTAssertTrue(manager.listLocalOptions(kind: .asr).isEmpty)
         XCTAssertEqual(
             Set(manager.listLocalOptions(kind: .diarization).map { $0.url.lastPathComponent }),
             ["diarization-enhanced.bin"]
         )
         XCTAssertEqual(
             Set(manager.listLocalOptions(kind: .summarization).map { $0.url.lastPathComponent }),
-            ["summary.gguf"]
+            ["summary.gguf", "generic.bin", "whisper-large.bin"]
         )
     }
 
     @MainActor
-    func testASRDiscoveryIncludesValidFluidAudioStagedDirectory() throws {
+    func testASRDiscoveryIsProviderManagedAndSkipsLocalDirectories() throws {
         let repoRoot = tempDirectory.appendingPathComponent("repo", isDirectory: true)
         let modelsDirectory = repoRoot.appendingPathComponent("Models", isDirectory: true)
-        let fluidDirectory = try createFluidModelDirectory(named: "ParakeetV3", in: modelsDirectory)
+        _ = try createFluidModelDirectory(named: "ParakeetV3", in: modelsDirectory)
 
         let manager = makeManager(
             appSupportRoot: nil,
@@ -154,8 +144,7 @@ final class ModelDiscoveryTests: XCTestCase {
             projectDirectories: [modelsDirectory]
         )
 
-        let discoveredPaths = Set(manager.listLocalOptions(kind: .asr).map { $0.url.resolvingSymlinksInPath().path })
-        XCTAssertTrue(discoveredPaths.contains(fluidDirectory.resolvingSymlinksInPath().path))
+        XCTAssertTrue(manager.listLocalOptions(kind: .asr).isEmpty)
     }
 
     @MainActor
@@ -172,8 +161,7 @@ final class ModelDiscoveryTests: XCTestCase {
             projectDirectories: [modelsDirectory]
         )
 
-        let discoveredPaths = Set(manager.listLocalOptions(kind: .asr).map { $0.url.resolvingSymlinksInPath().path })
-        XCTAssertFalse(discoveredPaths.contains(invalidDirectory.resolvingSymlinksInPath().path))
+        XCTAssertTrue(manager.listLocalOptions(kind: .asr).isEmpty)
     }
 
     @MainActor

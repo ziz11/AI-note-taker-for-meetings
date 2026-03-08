@@ -13,8 +13,6 @@ struct DefaultInferenceEngineFactory: InferenceEngineFactory {
 
     func makeASREngine(for profile: InferenceRuntimeProfile) throws -> any ASREngine {
         switch profile.stageSelection.backend(for: .asr) {
-        case .whisperCpp:
-            return WhisperCppASREngine()
         case .fluidAudio:
             return FluidAudioASREngine()
         case let backend:
@@ -51,8 +49,6 @@ struct DefaultInferenceEngineFactory: InferenceEngineFactory {
 
     func transcriptionEngineDisplayName(for stageSelection: StageRuntimeSelection) -> String {
         switch stageSelection.backend(for: .asr) {
-        case .whisperCpp:
-            return "WhisperCpp"
         case .fluidAudio:
             return "FluidAudio"
         default:

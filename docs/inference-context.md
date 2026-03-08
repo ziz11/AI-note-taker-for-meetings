@@ -15,6 +15,8 @@ Optimized for:
 
 Recordly stores canonical session artifacts, orchestrates by stage contracts, resolves runtime via a profile, creates engines through a factory, and keeps backend-specific behavior inside backend modules.
 
+This branch is FluidAudio-only for ASR. Do not search for or reintroduce `WhisperCppASREngine`, `whisper-cli`, or `CAF -> WAV` assumptions when working on the active transcription path.
+
 ## Architecture flow
 
 ```text
@@ -31,7 +33,7 @@ RecordlyApp
 Default local stage map:
 
 - `audioCapture -> nativeCapture`
-- `asr -> whisperCpp`
+- `asr -> fluidAudio`
 - `diarization -> cliDiarization`
 - `summarization -> llamaCpp`
 - `vad -> disabled`
@@ -47,7 +49,8 @@ Workflow and pipeline:
 Runtime selection:
 
 - `DefaultInferenceRuntimeProfileSelector` resolves `InferenceRuntimeProfile`.
-- It may resolve stage selections, model artifacts, ASR language, and summarization runtime settings.
+- It resolves ASR model via `FluidAudioModelProvider` (SDK-managed provisioning).
+- It resolves diarization/summarization model artifacts via `ModelManager`.
 - It must not run inference, instantiate engines, or decide product fallback policy.
 
 Factory and routing:
@@ -58,8 +61,10 @@ Factory and routing:
 
 Model layer:
 
-- `ModelManager` owns discovery, install state, selected model IDs, artifact resolution, and runtime settings persistence.
-- It must not become an orchestration or inference-execution layer.
+- `ModelManager` owns discovery, install state, selected model IDs, artifact resolution, and runtime settings persistence for diarization and summarization.
+- `FluidAudioModelProvider` owns ASR model provisioning (SDK-managed download/cache/resolve).
+- Any legacy ASR preference fields that still exist are compatibility residue, not an active local-file Whisper path.
+- Model layers must not become orchestration or inference-execution layers.
 
 Backend modules:
 
@@ -119,9 +124,9 @@ Backend rule:
 ## Audio invariants
 
 - internal capture stays `CAF + PCM`
-- if a backend needs WAV, FLAC, buffers, or another representation, adapt at the consumer boundary
+- FluidAudio SDK accepts CAF directly — no format conversion is needed at the ASR boundary
+- if a future backend needs WAV, FLAC, buffers, or another representation, adapt at the consumer boundary
 - do not rewrite the capture pipeline for one backend format preference
-- `whisper.cpp` is a boundary adapter, not the source of truth for capture or storage decisions
 
 ## Current behavior to preserve
 
@@ -130,6 +135,7 @@ Transcription pipeline:
 - `TranscriptionPipeline.process(...)` receives `InferenceRuntimeProfile` and `InferenceEngineFactory`
 - it resolves prepared inputs through `AudioInputAdapter`
 - it requires ASR model information in the runtime profile
+- the active ASR engine is `FluidAudioASREngine`
 - it may run diarization, but diarization failure degrades speaker labeling rather than failing transcription
 
 Artifacts written by the pipeline:

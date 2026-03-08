@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import Recordly
 
@@ -55,8 +56,7 @@ final class FluidAudioASREngineTests: XCTestCase {
     }
 
     func testEngineThrowsWhenModelDirectoryMissing() async throws {
-        let audioURL = tempDirectory.appendingPathComponent("input.wav")
-        try Data("audio".utf8).write(to: audioURL)
+        let audioURL = try createAudioFile(named: "input.wav")
         let missingModel = tempDirectory.appendingPathComponent("missing-model", isDirectory: true)
 
         let engine = FluidAudioASREngine(transcriber: StubFluidAudioTranscriber(
@@ -79,8 +79,7 @@ final class FluidAudioASREngineTests: XCTestCase {
     }
 
     func testEngineThrowsWhenModelDirectoryInvalid() async throws {
-        let audioURL = tempDirectory.appendingPathComponent("input.wav")
-        try Data("audio".utf8).write(to: audioURL)
+        let audioURL = try createAudioFile(named: "input.wav")
         let invalidModel = tempDirectory.appendingPathComponent("invalid-model", isDirectory: true)
         try FileManager.default.createDirectory(at: invalidModel, withIntermediateDirectories: true)
         try Data("vocab".utf8).write(to: invalidModel.appendingPathComponent("parakeet_vocab.json"))
@@ -105,9 +104,9 @@ final class FluidAudioASREngineTests: XCTestCase {
         }
     }
 
-    func testEngineThrowsForUnsupportedAudioFormat() async throws {
+    func testEngineThrowsForCorruptAudioInput() async throws {
         let audioURL = tempDirectory.appendingPathComponent("input.aiff")
-        try Data("audio".utf8).write(to: audioURL)
+        try Data("not-audio".utf8).write(to: audioURL)
         let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-format")
 
         let engine = FluidAudioASREngine(transcriber: StubFluidAudioTranscriber(
@@ -127,6 +126,37 @@ final class FluidAudioASREngineTests: XCTestCase {
                 return XCTFail("Expected unsupportedFormat, got \(error)")
             }
         }
+    }
+
+    func testEngineAcceptsAIFFWhenInputPreparerSucceeds() async throws {
+        let audioURL = tempDirectory.appendingPathComponent("input.aiff")
+        try Data("placeholder".utf8).write(to: audioURL)
+        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-aiff")
+        let expectedBuffer = try makePCMBuffer(frameCount: 16_000, sampleRate: 48_000, channels: 2)
+        let transcriber = RecordingFluidAudioTranscriber(
+            output: FluidAudioRunnerOutput(
+                language: "en",
+                segments: [
+                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1000, text: "ok", confidence: nil, words: nil)
+                ]
+            )
+        )
+        let preparer = StubFluidAudioInputPreparer(buffer: expectedBuffer)
+        let engine = FluidAudioASREngine(transcriber: transcriber, inputPreparer: preparer)
+
+        let document = try await engine.transcribe(
+            audioURL: audioURL,
+            channel: .mic,
+            sessionID: UUID(),
+            configuration: ASREngineConfiguration(modelURL: modelDirectory, language: .auto)
+        )
+
+        XCTAssertEqual(document.segments.first?.text, "ok")
+        XCTAssertEqual(preparer.preparedURLs, [audioURL])
+        XCTAssertEqual(transcriber.callCount, 1)
+        XCTAssertEqual(transcriber.lastBufferFrameLength, expectedBuffer.frameLength)
+        XCTAssertEqual(transcriber.lastBufferSampleRate, expectedBuffer.format.sampleRate)
+        XCTAssertEqual(transcriber.lastBufferChannelCount, expectedBuffer.format.channelCount)
     }
 
     func testEngineThrowsWhenAudioFileMissing() async throws {
@@ -162,8 +192,7 @@ final class FluidAudioASREngineTests: XCTestCase {
     }
 
     func testEngineProducesEmptyDocumentForEmptyTranscriberOutput() async throws {
-        let audioURL = tempDirectory.appendingPathComponent("silence.wav")
-        try Data("audio".utf8).write(to: audioURL)
+        let audioURL = try createAudioFile(named: "silence.wav")
         let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-empty")
 
         let transcriber = StubFluidAudioTranscriber(output: FluidAudioRunnerOutput(
@@ -184,8 +213,7 @@ final class FluidAudioASREngineTests: XCTestCase {
     }
 
     func testEngineMapsBothChannels() async throws {
-        let audioURL = tempDirectory.appendingPathComponent("input.caf")
-        try Data("audio".utf8).write(to: audioURL)
+        let audioURL = try createAudioFile(named: "input.caf")
         let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-channels")
 
         let transcriber = StubFluidAudioTranscriber(output: FluidAudioRunnerOutput(
@@ -216,8 +244,7 @@ final class FluidAudioASREngineTests: XCTestCase {
     }
 
     func testEngineMapsTranscriberOutputToASRDocument() async throws {
-        let audioURL = tempDirectory.appendingPathComponent("input.wav")
-        try Data("audio".utf8).write(to: audioURL)
+        let audioURL = try createAudioFile(named: "input.wav")
         let modelDirectory = try createFluidModelDirectory(named: "fluid-v3")
 
         let transcriber = StubFluidAudioTranscriber(output: FluidAudioRunnerOutput(
@@ -251,6 +278,54 @@ final class FluidAudioASREngineTests: XCTestCase {
         XCTAssertEqual(document.segments.first?.words?.count, 2)
     }
 
+    func testInputPreparerDecodesToFloat32NonInterleavedPCM() throws {
+        let sourceURL = try createAudioFile(
+            named: "decode-source.caf",
+            sampleRate: 44_100,
+            channels: 1,
+            frameCount: 2_048
+        )
+        let preparer = FluidAudioInputPreparer()
+
+        let prepared = try preparer.prepareInput(from: sourceURL)
+
+        XCTAssertEqual(prepared.frameLength, 2_048)
+        XCTAssertEqual(prepared.format.commonFormat, .pcmFormatFloat32)
+        XCTAssertFalse(prepared.format.isInterleaved)
+    }
+
+    func testInputPreparerRejectsCorruptFileAsUnsupportedFormat() throws {
+        let sourceURL = tempDirectory.appendingPathComponent("corrupt.caf")
+        try Data("not-a-real-audio-file".utf8).write(to: sourceURL)
+        let preparer = FluidAudioInputPreparer()
+
+        XCTAssertThrowsError(try preparer.prepareInput(from: sourceURL)) { error in
+            guard case ASREngineRuntimeError.unsupportedFormat(let failedURL) = error else {
+                return XCTFail("Expected unsupportedFormat, got \(error)")
+            }
+            XCTAssertEqual(failedURL, sourceURL)
+        }
+    }
+
+    func testInputPreparerRejectsEmptyAudioFileAsUnsupportedFormat() throws {
+        let sourceURL = tempDirectory.appendingPathComponent("empty.caf")
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        )!
+        _ = try AVAudioFile(forWriting: sourceURL, settings: format.settings)
+        let preparer = FluidAudioInputPreparer()
+
+        XCTAssertThrowsError(try preparer.prepareInput(from: sourceURL)) { error in
+            guard case ASREngineRuntimeError.unsupportedFormat(let failedURL) = error else {
+                return XCTFail("Expected unsupportedFormat, got \(error)")
+            }
+            XCTAssertEqual(failedURL, sourceURL)
+        }
+    }
+
     private func createFluidModelDirectory(named name: String) throws -> URL {
         let directory = tempDirectory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -264,17 +339,141 @@ final class FluidAudioASREngineTests: XCTestCase {
         }
         return directory
     }
+
+    private func createAudioFile(
+        named fileName: String,
+        commonFormat: AVAudioCommonFormat = .pcmFormatFloat32,
+        sampleRate: Double = 16_000,
+        channels: AVAudioChannelCount = 1,
+        interleaved: Bool = false,
+        frameCount: AVAudioFrameCount = 16_000
+    ) throws -> URL {
+        let url = tempDirectory.appendingPathComponent(fileName)
+        let format = AVAudioFormat(
+            commonFormat: commonFormat,
+            sampleRate: sampleRate,
+            channels: channels,
+            interleaved: interleaved
+        )!
+        let audioFile = try AVAudioFile(forWriting: url, settings: format.settings)
+        let buffer = try makePCMBuffer(
+            frameCount: frameCount,
+            sampleRate: sampleRate,
+            channels: channels,
+            commonFormat: commonFormat,
+            interleaved: interleaved
+        )
+        try audioFile.write(from: buffer)
+        return url
+    }
+
+    private func makePCMBuffer(
+        frameCount: AVAudioFrameCount,
+        sampleRate: Double,
+        channels: AVAudioChannelCount,
+        commonFormat: AVAudioCommonFormat = .pcmFormatFloat32,
+        interleaved: Bool = false
+    ) throws -> AVAudioPCMBuffer {
+        guard let format = AVAudioFormat(
+            commonFormat: commonFormat,
+            sampleRate: sampleRate,
+            channels: channels,
+            interleaved: interleaved
+        ) else {
+            throw NSError(domain: "FluidAudioASREngineTests", code: 1)
+        }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            throw NSError(domain: "FluidAudioASREngineTests", code: 2)
+        }
+        buffer.frameLength = frameCount
+
+        switch commonFormat {
+        case .pcmFormatFloat32:
+            if let channelData = buffer.floatChannelData {
+                if format.isInterleaved {
+                    let sampleCount = Int(frameCount) * Int(channels)
+                    for sample in 0..<sampleCount {
+                        channelData[0][sample] = Float(sample % 64) / 64.0
+                    }
+                } else {
+                    for channel in 0..<Int(channels) {
+                        for frame in 0..<Int(frameCount) {
+                            channelData[channel][frame] = Float(frame % 64) / 64.0
+                        }
+                    }
+                }
+            }
+        case .pcmFormatInt16:
+            if let channelData = buffer.int16ChannelData {
+                if format.isInterleaved {
+                    let sampleCount = Int(frameCount) * Int(channels)
+                    for sample in 0..<sampleCount {
+                        channelData[0][sample] = Int16(sample % 128)
+                    }
+                } else {
+                    for channel in 0..<Int(channels) {
+                        for frame in 0..<Int(frameCount) {
+                            channelData[channel][frame] = Int16(frame % 128)
+                        }
+                    }
+                }
+            }
+        default:
+            break
+        }
+
+        return buffer
+    }
 }
 
 private struct StubFluidAudioTranscriber: FluidAudioTranscribing {
     let output: FluidAudioRunnerOutput
 
     func transcribe(
-        audioURL: URL,
+        audioBuffer: AVAudioPCMBuffer,
         modelDirectoryURL: URL,
         channel: TranscriptChannel,
         languageCode: String?
     ) async throws -> FluidAudioRunnerOutput {
         output
+    }
+}
+
+private final class RecordingFluidAudioTranscriber: FluidAudioTranscribing, @unchecked Sendable {
+    let output: FluidAudioRunnerOutput
+    private(set) var callCount: Int = 0
+    private(set) var lastBufferFrameLength: AVAudioFrameCount = 0
+    private(set) var lastBufferSampleRate: Double = 0
+    private(set) var lastBufferChannelCount: AVAudioChannelCount = 0
+
+    init(output: FluidAudioRunnerOutput) {
+        self.output = output
+    }
+
+    func transcribe(
+        audioBuffer: AVAudioPCMBuffer,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel,
+        languageCode: String?
+    ) async throws -> FluidAudioRunnerOutput {
+        callCount += 1
+        lastBufferFrameLength = audioBuffer.frameLength
+        lastBufferSampleRate = audioBuffer.format.sampleRate
+        lastBufferChannelCount = audioBuffer.format.channelCount
+        return output
+    }
+}
+
+private final class StubFluidAudioInputPreparer: FluidAudioInputPreparing {
+    let buffer: AVAudioPCMBuffer
+    private(set) var preparedURLs: [URL] = []
+
+    init(buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func prepareInput(from audioURL: URL) throws -> AVAudioPCMBuffer {
+        preparedURLs.append(audioURL)
+        return buffer
     }
 }

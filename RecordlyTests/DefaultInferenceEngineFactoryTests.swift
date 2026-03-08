@@ -35,7 +35,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
                 diarizationModelURL: nil,
                 summarizationModelURL: nil
             ),
-            asrLanguage: .ru,
+            asrLanguage: .auto,
             summarizationRuntimeSettings: .default
         )
 

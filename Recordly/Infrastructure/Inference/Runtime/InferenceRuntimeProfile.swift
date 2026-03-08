@@ -10,7 +10,6 @@ enum InferenceStage: String, CaseIterable, Sendable {
 
 enum InferenceBackend: String, Equatable, Sendable {
     case nativeCapture
-    case whisperCpp
     case cliDiarization
     case llamaCpp
     case fluidAudio

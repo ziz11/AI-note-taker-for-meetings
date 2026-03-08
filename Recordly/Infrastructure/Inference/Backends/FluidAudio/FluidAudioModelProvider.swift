@@ -36,6 +36,8 @@ protocol FluidAudioModelProviding: AnyObject {
     func resolveForRuntime() throws -> URL
 }
 
+/// Resolves FluidAudio v3 models from the SDK's local storage directory.
+/// Downloads are delegated to `AsrModels.downloadAndLoad` which handles caching internally.
 @MainActor
 final class FluidAudioModelProvider: ObservableObject, FluidAudioModelProviding {
     @Published private(set) var state: FluidAudioModelProvisioningState = .needsDownload

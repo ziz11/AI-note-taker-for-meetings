@@ -18,83 +18,16 @@ struct ModelSettingsView: View {
                     .buttonStyle(.bordered)
                 }
 
-                Text("Select local models directly from your model folders. No hardcoded profile switching.")
+                Text("FluidAudio SDK manages ASR model provisioning. Configure diarization and summarization models below.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Transcription Backend")
-                        .font(.headline)
-                    Text("Choose the ASR engine while keeping the same transcription pipeline.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                fluidAudioProvisioningCard
 
-                    Picker("Transcription Backend", selection: Binding(
-                        get: { viewModel.selectedASRBackend },
-                        set: { viewModel.selectASRBackend($0) }
-                    )) {
-                        ForEach(ASRBackend.allCases, id: \.self) { backend in
-                            Text(backend.displayName).tag(backend)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    if viewModel.selectedASRBackend == .fluidAudio {
-                        Text("FluidAudio uses SDK-managed multilingual v3 provisioning. Local ASR file picking is not required.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.white.opacity(0.04))
-                )
-
-                if viewModel.selectedASRBackend == .whisperCpp {
-                    modelPickerCard(
-                        title: "Transcription Model",
-                        subtitle: "Required for speech-to-text pipeline.",
-                        options: viewModel.asrModels,
-                        selection: Binding(
-                            get: { viewModel.selectedASRModelID },
-                            set: { viewModel.selectASRModel($0) }
-                        ),
-                        kind: .asr,
-                        allowsNone: false
-                    )
-                } else {
-                    fluidAudioProvisioningCard
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Transcription Language")
-                        .font(.headline)
-                    Text("Controls language hint for ASR decoding.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if viewModel.isASRLanguageEditable {
-                        Picker("Transcription Language", selection: Binding(
-                            get: { viewModel.selectedASRLanguage },
-                            set: { viewModel.selectASRLanguage($0) }
-                        )) {
-                            ForEach(ASRLanguage.allCases, id: \.self) { language in
-                                Text(language.displayName).tag(language)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                    } else {
-                        Text("Language override is disabled for FluidAudio (multilingual v3).")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.white.opacity(0.04))
-                )
+                Text("Language override is not required — FluidAudio v3 is multilingual.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
 
                 modelPickerCard(
                     title: "Speaker Separation Model",
@@ -203,15 +136,9 @@ struct ModelSettingsView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             } else if options.isEmpty {
-                if kind == .asr {
-                    Text("No compatible WhisperCpp .bin models found.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                } else {
-                    Text("No compatible model files found in configured folders.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("No compatible model files found in configured folders.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             HStack(spacing: 8) {

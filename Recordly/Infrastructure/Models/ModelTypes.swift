@@ -7,16 +7,10 @@ enum ModelKind: String, Codable, CaseIterable {
 }
 
 enum ASRLanguage: String, Codable, CaseIterable {
-    case ru
-    case en
     case auto
 
     var displayName: String {
         switch self {
-        case .ru:
-            return "RU"
-        case .en:
-            return "EN"
         case .auto:
             return "AUTO"
         }
@@ -41,20 +35,6 @@ enum ModelProfile: String, Codable, CaseIterable {
         case .compact: return "Fastest install and smallest local footprint."
         case .balanced: return "Recommended quality/performance tradeoff."
         case .enhanced: return "Best quality with optional speaker separation model."
-        }
-    }
-}
-
-enum ASRBackend: String, Codable, CaseIterable {
-    case whisperCpp
-    case fluidAudio
-
-    var displayName: String {
-        switch self {
-        case .whisperCpp:
-            return "WhisperCpp"
-        case .fluidAudio:
-            return "FluidAudio"
         }
     }
 }
@@ -99,11 +79,6 @@ enum TranscriptionAvailability: Equatable {
     case degradedNoDiarization
     case requiresASRModel(profileOptions: [ModelProfile])
     case unavailable(reason: String)
-}
-
-struct RequiredModelsResolution: Equatable {
-    let asrModelURL: URL
-    let diarizationModelURL: URL?
 }
 
 struct ModelRuntimeStatus: Identifiable, Equatable {

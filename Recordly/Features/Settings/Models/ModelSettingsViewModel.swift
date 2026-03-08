@@ -2,13 +2,9 @@ import Foundation
 
 @MainActor
 final class ModelSettingsViewModel: ObservableObject {
-    @Published private(set) var asrModels: [LocalModelOption] = []
     @Published private(set) var diarizationModels: [LocalModelOption] = []
     @Published private(set) var summarizationModels: [LocalModelOption] = []
 
-    @Published var selectedASRModelID: String?
-    @Published var selectedASRBackend: ASRBackend = .fluidAudio
-    @Published var selectedASRLanguage: ASRLanguage = .ru
     @Published var selectedDiarizationModelID: String?
     @Published var selectedSummarizationModelID: String?
 
@@ -27,56 +23,14 @@ final class ModelSettingsViewModel: ObservableObject {
     }
 
     func refresh() {
-        let allASRModels = modelManager.listLocalOptions(kind: .asr)
-        selectedASRBackend = modelManager.selectedASRBackend
-        asrModels = allASRModels.filter { isModelCompatible($0, with: selectedASRBackend) }
         diarizationModels = modelManager.listLocalOptions(kind: .diarization)
         summarizationModels = modelManager.listLocalOptions(kind: .summarization)
 
-        selectedASRModelID = modelManager.selectedLocalOption(kind: .asr)?.id
-        selectedASRLanguage = modelManager.selectedASRLanguage
         selectedDiarizationModelID = modelManager.selectedLocalOption(kind: .diarization)?.id
         selectedSummarizationModelID = modelManager.selectedLocalOption(kind: .summarization)?.id
 
-        if selectedASRBackend == .whisperCpp,
-           let selectedID = selectedASRModelID,
-           !asrModels.contains(where: { $0.id == selectedID }),
-           let firstCompatible = asrModels.first {
-            modelManager.setSelectedModelID(firstCompatible.id, for: .asr)
-            selectedASRModelID = firstCompatible.id
-        }
-
         fluidAudioModelProvider.refreshState()
         fluidProvisioningState = fluidAudioModelProvider.state
-    }
-
-    private func isModelCompatible(_ option: LocalModelOption, with backend: ASRBackend) -> Bool {
-        switch backend {
-        case .fluidAudio:
-            return false
-        case .whisperCpp:
-            let isFile = (try? option.url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
-            return isFile && option.url.pathExtension.lowercased() == "bin"
-        }
-    }
-
-    var isASRLanguageEditable: Bool {
-        selectedASRBackend == .whisperCpp
-    }
-
-    func selectASRModel(_ modelID: String?) {
-        modelManager.setSelectedModelID(modelID, for: .asr)
-        refresh()
-    }
-
-    func selectASRBackend(_ backend: ASRBackend) {
-        modelManager.selectedASRBackend = backend
-        refresh()
-    }
-
-    func selectASRLanguage(_ language: ASRLanguage) {
-        modelManager.selectedASRLanguage = language
-        refresh()
     }
 
     func selectDiarizationModel(_ modelID: String?) {
@@ -112,7 +66,7 @@ final class ModelSettingsViewModel: ObservableObject {
     }
 
     var canDownloadFluidModel: Bool {
-        selectedASRBackend == .fluidAudio && !isDownloadingFluidModel && !isFluidModelReady
+        !isDownloadingFluidModel && !isFluidModelReady
     }
 
     var isDownloadingFluidModel: Bool {
