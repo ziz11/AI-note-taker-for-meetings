@@ -281,7 +281,7 @@ struct FoundationWhisperProcessExecutor: WhisperProcessExecutor {
 }
 
 struct WhisperCppASREngine: ASREngine {
-    let displayName: String = "WhisperCpp (RU+EN)"
+    let displayName: String = "WhisperCpp"
     private let runnerFactory: (ASRLanguage) -> WhisperCppRunner
 
     init(
@@ -291,14 +291,14 @@ struct WhisperCppASREngine: ASREngine {
             self.runnerFactory = { _ in runner }
         } else {
             self.runnerFactory = { language in
-                ProcessWhisperCppRunner(languageCode: language.whisperCode)
+                ProcessWhisperCppRunner(languageCode: language.rawValue)
             }
         }
     }
 
     func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
         let modelPath = configuration.modelURL.standardizedFileURL.path
-        let language = configuration.language.whisperCode
+        let language = configuration.language.rawValue
         return "\(modelPath)|lang:\(language)"
     }
 

@@ -7,6 +7,7 @@ final class ModelSettingsViewModel: ObservableObject {
     @Published private(set) var summarizationModels: [LocalModelOption] = []
 
     @Published var selectedASRModelID: String?
+    @Published var selectedASRBackend: ASRBackend = .whisperCpp
     @Published var selectedASRLanguage: ASRLanguage = .ru
     @Published var selectedDiarizationModelID: String?
     @Published var selectedSummarizationModelID: String?
@@ -24,13 +25,23 @@ final class ModelSettingsViewModel: ObservableObject {
         summarizationModels = modelManager.listLocalOptions(kind: .summarization)
 
         selectedASRModelID = modelManager.selectedLocalOption(kind: .asr)?.id
+        selectedASRBackend = modelManager.selectedASRBackend
         selectedASRLanguage = modelManager.selectedASRLanguage
         selectedDiarizationModelID = modelManager.selectedLocalOption(kind: .diarization)?.id
         selectedSummarizationModelID = modelManager.selectedLocalOption(kind: .summarization)?.id
     }
 
+    var isASRLanguageEditable: Bool {
+        selectedASRBackend == .whisperCpp
+    }
+
     func selectASRModel(_ modelID: String?) {
         modelManager.setSelectedModelID(modelID, for: .asr)
+        refresh()
+    }
+
+    func selectASRBackend(_ backend: ASRBackend) {
+        modelManager.selectedASRBackend = backend
         refresh()
     }
 

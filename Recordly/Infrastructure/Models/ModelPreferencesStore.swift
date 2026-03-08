@@ -7,6 +7,7 @@ final class ModelPreferencesStore {
         static let onboardingSeen = "model.onboardingSeen"
         static let selectedASRModelID = "model.selectedASRModelID"
         static let selectedASRLanguage = "model.selectedASRLanguage"
+        static let selectedASRBackend = "model.selectedASRBackend"
         static let selectedDiarizationModelID = "model.selectedDiarizationModelID"
         static let selectedSummarizationModelID = "model.selectedSummarizationModelID"
         static let summarizationContextSize = "model.summarization.contextSize"
@@ -58,6 +59,17 @@ final class ModelPreferencesStore {
             return value
         }
         set { defaults.set(newValue.rawValue, forKey: Keys.selectedASRLanguage) }
+    }
+
+    var selectedASRBackend: ASRBackend {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.selectedASRBackend),
+                  let value = ASRBackend(rawValue: rawValue) else {
+                return .whisperCpp
+            }
+            return value
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.selectedASRBackend) }
     }
 
     var selectedDiarizationModelID: String? {

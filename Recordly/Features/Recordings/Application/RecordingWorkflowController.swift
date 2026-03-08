@@ -480,6 +480,8 @@ final class RecordingWorkflowController {
                 throw RecordingWorkflowError.transcriptionUnavailable(.requiresASRModel(profileOptions: ModelProfile.allCases))
             case .missingSummarizationModel:
                 throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
+            case .invalidASRBackendModel:
+                throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
             }
         }
         return try await transcriptionPipeline.process(

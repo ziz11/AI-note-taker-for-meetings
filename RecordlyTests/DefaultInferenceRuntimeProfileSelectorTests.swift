@@ -54,6 +54,62 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         )
     }
 
+    func testResolveTranscriptionProfileInjectsFluidBackendWhenSelected() throws {
+        let fluidDirectory = try createFluidModelDirectory(named: "fluid-asr-v3")
+        let manager = makeModelManager()
+        let normalizedFluidPath = fluidDirectory.resolvingSymlinksInPath().path
+        let asrOption = try XCTUnwrap(
+            manager.listLocalOptions(kind: .asr).first(where: {
+                $0.url.resolvingSymlinksInPath().path == normalizedFluidPath
+            })
+        )
+        manager.selectedASRBackend = .fluidAudio
+        manager.setSelectedModelID(asrOption.id, for: .asr)
+
+        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager)
+        let profile = try selector.resolveTranscriptionProfile(for: .balanced)
+
+        XCTAssertEqual(profile.stageSelection.backend(for: .asr), .fluidAudio)
+        XCTAssertEqual(profile.asrLanguage, .auto)
+    }
+
+    func testResolveTranscriptionProfileRejectsFluidBackendWhenModelIsNotStagedDirectory() throws {
+        _ = try writeModel(named: "whisper-small.bin")
+        let manager = makeModelManager()
+        let asrOption = try XCTUnwrap(manager.listLocalOptions(kind: .asr).first)
+        manager.selectedASRBackend = .fluidAudio
+        manager.setSelectedModelID(asrOption.id, for: .asr)
+
+        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager)
+
+        XCTAssertThrowsError(try selector.resolveTranscriptionProfile(for: .balanced)) { error in
+            guard case .invalidASRBackendModel(.fluidAudio, _) = error as? InferenceRuntimeProfileError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testResolveTranscriptionProfileRejectsWhisperBackendWhenModelIsNotBin() throws {
+        let fluidDirectory = try createFluidModelDirectory(named: "fluid-asr-v3")
+        let manager = makeModelManager()
+        let normalizedFluidPath = fluidDirectory.resolvingSymlinksInPath().path
+        let asrOption = try XCTUnwrap(
+            manager.listLocalOptions(kind: .asr).first(where: {
+                $0.url.resolvingSymlinksInPath().path == normalizedFluidPath
+            })
+        )
+        manager.selectedASRBackend = .whisperCpp
+        manager.setSelectedModelID(asrOption.id, for: .asr)
+
+        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager)
+
+        XCTAssertThrowsError(try selector.resolveTranscriptionProfile(for: .balanced)) { error in
+            guard case .invalidASRBackendModel(.whisperCpp, _) = error as? InferenceRuntimeProfileError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
     func testResolveSummarizationProfileUsesLlamaCppAndRuntimeSettings() throws {
         _ = try writeModel(named: "summarization-compact-v1.gguf")
         let manager = makeModelManager()
@@ -104,5 +160,19 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         let url = tempDirectory.appendingPathComponent(name)
         try Data("model".utf8).write(to: url)
         return url
+    }
+
+    private func createFluidModelDirectory(named name: String) throws -> URL {
+        let directory = tempDirectory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for marker in FluidAudioModelValidator.requiredMarkers {
+            let markerURL = directory.appendingPathComponent(marker)
+            if marker.hasSuffix(".mlmodelc") {
+                try FileManager.default.createDirectory(at: markerURL, withIntermediateDirectories: true)
+            } else {
+                try Data("marker".utf8).write(to: markerURL)
+            }
+        }
+        return directory
     }
 }

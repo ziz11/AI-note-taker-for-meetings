@@ -21,10 +21,6 @@ enum ASRLanguage: String, Codable, CaseIterable {
             return "AUTO"
         }
     }
-
-    var whisperCode: String {
-        rawValue
-    }
 }
 
 enum ModelProfile: String, Codable, CaseIterable {
@@ -45,6 +41,20 @@ enum ModelProfile: String, Codable, CaseIterable {
         case .compact: return "Fastest install and smallest local footprint."
         case .balanced: return "Recommended quality/performance tradeoff."
         case .enhanced: return "Best quality with optional speaker separation model."
+        }
+    }
+}
+
+enum ASRBackend: String, Codable, CaseIterable {
+    case whisperCpp
+    case fluidAudio
+
+    var displayName: String {
+        switch self {
+        case .whisperCpp:
+            return "WhisperCpp"
+        case .fluidAudio:
+            return "FluidAudio"
         }
     }
 }

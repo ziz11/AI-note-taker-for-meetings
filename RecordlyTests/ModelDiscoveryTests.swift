@@ -143,6 +143,40 @@ final class ModelDiscoveryTests: XCTestCase {
     }
 
     @MainActor
+    func testASRDiscoveryIncludesValidFluidAudioStagedDirectory() throws {
+        let repoRoot = tempDirectory.appendingPathComponent("repo", isDirectory: true)
+        let modelsDirectory = repoRoot.appendingPathComponent("Models", isDirectory: true)
+        let fluidDirectory = try createFluidModelDirectory(named: "ParakeetV3", in: modelsDirectory)
+
+        let manager = makeManager(
+            appSupportRoot: nil,
+            sharedRoot: nil,
+            projectDirectories: [modelsDirectory]
+        )
+
+        let discoveredPaths = Set(manager.listLocalOptions(kind: .asr).map { $0.url.resolvingSymlinksInPath().path })
+        XCTAssertTrue(discoveredPaths.contains(fluidDirectory.resolvingSymlinksInPath().path))
+    }
+
+    @MainActor
+    func testASRDiscoverySkipsInvalidFluidAudioDirectoryWithoutRequiredMarkers() throws {
+        let repoRoot = tempDirectory.appendingPathComponent("repo", isDirectory: true)
+        let modelsDirectory = repoRoot.appendingPathComponent("Models", isDirectory: true)
+        let invalidDirectory = modelsDirectory.appendingPathComponent("InvalidFluid", isDirectory: true)
+        try FileManager.default.createDirectory(at: invalidDirectory, withIntermediateDirectories: true)
+        try Data("marker".utf8).write(to: invalidDirectory.appendingPathComponent("parakeet_vocab.json"))
+
+        let manager = makeManager(
+            appSupportRoot: nil,
+            sharedRoot: nil,
+            projectDirectories: [modelsDirectory]
+        )
+
+        let discoveredPaths = Set(manager.listLocalOptions(kind: .asr).map { $0.url.resolvingSymlinksInPath().path })
+        XCTAssertFalse(discoveredPaths.contains(invalidDirectory.resolvingSymlinksInPath().path))
+    }
+
+    @MainActor
     private func makeManager(
         appSupportRoot: URL?,
         sharedRoot: URL?,
@@ -171,5 +205,19 @@ final class ModelDiscoveryTests: XCTestCase {
     private func createModel(named name: String, in directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("model".utf8).write(to: directory.appendingPathComponent(name, isDirectory: false))
+    }
+
+    private func createFluidModelDirectory(named name: String, in parentDirectory: URL) throws -> URL {
+        let directory = parentDirectory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for marker in FluidAudioModelValidator.requiredMarkers {
+            let markerURL = directory.appendingPathComponent(marker)
+            if marker.hasSuffix(".mlmodelc") {
+                try FileManager.default.createDirectory(at: markerURL, withIntermediateDirectories: true)
+            } else {
+                try Data("marker".utf8).write(to: markerURL)
+            }
+        }
+        return directory
     }
 }

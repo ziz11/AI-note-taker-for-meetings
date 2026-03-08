@@ -52,7 +52,7 @@ struct DefaultInferenceEngineFactory: InferenceEngineFactory {
     func transcriptionEngineDisplayName(for stageSelection: StageRuntimeSelection) -> String {
         switch stageSelection.backend(for: .asr) {
         case .whisperCpp:
-            return "WhisperCpp (RU+EN)"
+            return "WhisperCpp"
         case .fluidAudio:
             return "FluidAudio"
         default:

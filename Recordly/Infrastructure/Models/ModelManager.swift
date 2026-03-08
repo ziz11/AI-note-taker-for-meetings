@@ -75,6 +75,11 @@ final class ModelManager: ObservableObject {
         set { preferences.selectedASRLanguage = newValue }
     }
 
+    var selectedASRBackend: ASRBackend {
+        get { preferences.selectedASRBackend }
+        set { preferences.selectedASRBackend = newValue }
+    }
+
     var selectedDiarizationModelID: String? {
         get { preferences.selectedDiarizationModelID }
         set { preferences.selectedDiarizationModelID = newValue }
@@ -339,16 +344,17 @@ final class ModelManager: ObservableObject {
             guard scannedPaths.insert(resolved).inserted else { continue }
             let urls = (try? fileManager.contentsOfDirectory(
                 at: directory,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                 options: [.skipsHiddenFiles]
             )) ?? []
 
             for url in urls.sorted(by: modelURLSort) {
-                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-                let ext = url.pathExtension.lowercased()
-                guard ext == "gguf" || ext == "bin" else { continue }
                 let inferredKind = classifyModelKind(url: url)
                 guard inferredKind == kind else { continue }
+                if !isModelCandidate(url, kind: kind) {
+                    continue
+                }
+
                 if let option = buildLocalOption(url: url, kind: kind, source: .projectLocal) {
                     results.append(option)
                 }
@@ -358,6 +364,15 @@ final class ModelManager: ObservableObject {
     }
 
     private func classifyModelKind(url: URL) -> ModelKind {
+        if isSupportedFluidModelDirectory(url) {
+            return .asr
+        }
+
+        let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+        if resourceValues?.isDirectory == true {
+            return .summarization
+        }
+
         let ext = url.pathExtension.lowercased()
         if ext == "gguf" {
             return .summarization
@@ -401,7 +416,7 @@ final class ModelManager: ObservableObject {
     ) -> [LocalModelOption] {
         let urls: [URL]
         if recursive {
-            let keys: [URLResourceKey] = [.isRegularFileKey]
+            let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey]
             let enumerator = fileManager.enumerator(
                 at: directory,
                 includingPropertiesForKeys: keys,
@@ -411,16 +426,37 @@ final class ModelManager: ObservableObject {
         } else {
             urls = (try? fileManager.contentsOfDirectory(
                 at: directory,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                 options: [.skipsHiddenFiles]
             )) ?? []
         }
 
         return urls
             .sorted(by: modelURLSort)
-            .filter { supportedModelExtensions(for: kind).contains($0.pathExtension.lowercased()) }
-            .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+            .filter { isModelCandidate($0, kind: kind) }
+            .filter { classifyModelKind(url: $0) == kind }
             .compactMap { buildLocalOption(url: $0, kind: kind, source: source) }
+    }
+
+    private func isModelCandidate(_ url: URL, kind: ModelKind) -> Bool {
+        switch kind {
+        case .asr:
+            return isSupportedModelFile(url) || isSupportedFluidModelDirectory(url)
+        case .diarization:
+            return isSupportedModelFile(url, extensions: ["bin"])
+        case .summarization:
+            return isSupportedModelFile(url, extensions: ["gguf", "bin"])
+        }
+    }
+
+    private func isSupportedModelFile(_ url: URL, extensions: Set<String>? = nil) -> Bool {
+        let allowedExtensions = extensions ?? supportedModelExtensions(for: .summarization)
+        let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+        return values?.isRegularFile == true && allowedExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    private func isSupportedFluidModelDirectory(_ url: URL) -> Bool {
+        FluidAudioModelValidator.isValidModelDirectory(url, fileManager: fileManager)
     }
 
     private func supportedModelExtensions(for kind: ModelKind) -> Set<String> {
