@@ -26,6 +26,17 @@ enum TranscriptionPipelineError: LocalizedError {
     }
 }
 
+enum PipelineDegradationReason: String, Codable, Equatable {
+    case emptyMicASR
+    case emptySystemASR
+    case micASRFailedFallbackUsed
+    case systemASRFailedFallbackUsed
+    case diarizationDegraded
+    case summaryFallbackUsed
+    case mergeDegraded
+    case captureSystemUnavailable
+}
+
 struct TranscriptionResult {
     var transcriptFile: String?
     var srtFile: String?
@@ -36,6 +47,7 @@ struct TranscriptionResult {
     var diarizationApplied: Bool
     var diarizationDegradedReason: String?
     var diarizationModelUsed: String?
+    var degradedReasons: [PipelineDegradationReason]
     var state: TranscriptPipelineState
     var summary: String
 }
@@ -118,8 +130,10 @@ struct TranscriptionPipeline {
         let transcriptTXTFile = "transcript.txt"
         let transcriptSRTFile = "transcript.srt"
 
+        var degradedReasons: [PipelineDegradationReason] = []
+
         await onStateChange?(.transcribingMic)
-        let micDoc = try await loadOrRunASR(
+        let micASROutcome = await resilientASR(
             asrEngine: asrEngine,
             existingFile: micASRFile,
             modelFingerprintFile: micASRModelFile,
@@ -131,7 +145,7 @@ struct TranscriptionPipeline {
         )
 
         await onStateChange?(.transcribingSystem)
-        let systemDoc = try await loadOrRunASR(
+        let systemASROutcome = await resilientASR(
             asrEngine: asrEngine,
             existingFile: systemASRFile,
             modelFingerprintFile: systemASRModelFile,
@@ -141,6 +155,40 @@ struct TranscriptionPipeline {
             sessionDirectory: sessionDirectory,
             configuration: asrConfiguration
         )
+
+        let micDoc: ASRDocument?
+        let systemDoc: ASRDocument?
+
+        switch (micASROutcome, systemASROutcome) {
+        case let (.success(mic), .success(sys)):
+            micDoc = mic
+            systemDoc = sys
+            if mic?.segments.isEmpty == true { degradedReasons.append(.emptyMicASR) }
+            if sys?.segments.isEmpty == true { degradedReasons.append(.emptySystemASR) }
+
+        case let (.success(mic), .failure(sysError)):
+            if mic != nil {
+                micDoc = mic
+                systemDoc = nil
+                degradedReasons.append(.systemASRFailedFallbackUsed)
+                if mic?.segments.isEmpty == true { degradedReasons.append(.emptyMicASR) }
+            } else {
+                throw sysError
+            }
+
+        case let (.failure(micError), .success(sys)):
+            if sys != nil {
+                micDoc = nil
+                systemDoc = sys
+                degradedReasons.append(.micASRFailedFallbackUsed)
+                if sys?.segments.isEmpty == true { degradedReasons.append(.emptySystemASR) }
+            } else {
+                throw micError
+            }
+
+        case let (.failure(micError), .failure):
+            throw micError
+        }
 
         let diarizationEngine: (any DiarizationEngine)?
         let diarizationBackendError: String?
@@ -214,8 +262,14 @@ struct TranscriptionPipeline {
         )
 
         let summary: String
+        if diarizationOutcome.degradedReason != nil {
+            degradedReasons.append(.diarizationDegraded)
+        }
+
         if let degradedReason = diarizationOutcome.degradedReason, systemDoc != nil {
             summary = "Transcript ready. System diarization degraded: \(degradedReason). Speaker labels fallback to Remote."
+        } else if !degradedReasons.isEmpty {
+            summary = "Transcript ready (degraded: \(degradedReasons.map(\.rawValue).joined(separator: ", ")))."
         } else {
             summary = "Transcript ready."
         }
@@ -231,6 +285,7 @@ struct TranscriptionPipeline {
             diarizationApplied: diarizationOutcome.document != nil,
             diarizationDegradedReason: diarizationOutcome.degradedReason,
             diarizationModelUsed: diarizationOutcome.modelUsed,
+            degradedReasons: degradedReasons,
             state: .ready,
             summary: summary
         )
@@ -263,6 +318,33 @@ struct TranscriptionPipeline {
         )
     }
 
+    private func resilientASR(
+        asrEngine: any ASREngine,
+        existingFile: String,
+        modelFingerprintFile: String,
+        channel: TranscriptChannel,
+        preferredAudioURL: URL?,
+        sessionID: UUID,
+        sessionDirectory: URL,
+        configuration: ASREngineConfiguration
+    ) async -> Result<ASRDocument?, Error> {
+        do {
+            let doc = try await loadOrRunASR(
+                asrEngine: asrEngine,
+                existingFile: existingFile,
+                modelFingerprintFile: modelFingerprintFile,
+                channel: channel,
+                preferredAudioURL: preferredAudioURL,
+                sessionID: sessionID,
+                sessionDirectory: sessionDirectory,
+                configuration: configuration
+            )
+            return .success(doc)
+        } catch {
+            return .failure(error)
+        }
+    }
+
     private func loadOrRunASR(
         asrEngine: any ASREngine,
         existingFile: String,
@@ -293,10 +375,6 @@ struct TranscriptionPipeline {
                 sessionID: sessionID,
                 configuration: configuration
             )
-
-            guard !document.segments.isEmpty else {
-                throw TranscriptionPipelineError.inferenceFailed("ASR returned empty segments")
-            }
 
             try writeJSON(document, to: destination)
             try currentFingerprint.write(to: fingerprintURL, atomically: true, encoding: .utf8)

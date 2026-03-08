@@ -682,6 +682,72 @@ final class RecordingsStoreSummarizationTests: XCTestCase {
 }
 
 @MainActor
+final class SummaryIsolationTests: XCTestCase {
+    func testSummaryFailureDoesNotMarkSessionAsFailed() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("summary-isolation-\(recordingID.uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
+        let transcriptFile = "transcript.txt"
+        try "Caller: important meeting notes.".write(
+            to: sessionDirectory.appendingPathComponent(transcriptFile),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Test call",
+            createdAt: Date(),
+            duration: 60,
+            lifecycleState: .ready,
+            transcriptState: .ready,
+            source: .importedAudio,
+            notes: "Transcript ready.",
+            assets: RecordingAssets(
+                importedAudioFile: "audio.m4a",
+                transcriptFile: transcriptFile
+            )
+        )
+
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory]
+        )
+
+        let failingEngine = MockSummaryEngine(result: .failure(SummarizationError.inferenceFailed(message: "boom")))
+        let engineFactory = TestInferenceEngineFactory(summarizationEngine: failingEngine)
+
+        let modelManager = ModelManager(
+            discoveryPaths: ModelDiscoveryPaths(
+                appSupportDirectory: { _ in nil },
+                sharedDirectory: { _ in nil },
+                userDirectory: { _ in nil },
+                projectDirectories: { [] }
+            )
+        )
+        let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(modelManager: modelManager)
+
+        let workflow = RecordingWorkflowController(
+            audioCaptureEngine: AudioCaptureService(),
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: runtimeProfileSelector,
+            inferenceEngineFactory: engineFactory,
+            repository: repository
+        )
+
+        let updated = try await workflow.summarize(recording: recording)
+
+        XCTAssertEqual(updated.assets.summaryFile, "summary.md")
+        XCTAssertNotEqual(updated.lifecycleState, .failed)
+        XCTAssertEqual(updated.lifecycleState, .ready)
+        XCTAssertNotNil(repository.summaryText(for: updated))
+    }
+}
+
+@MainActor
 final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
     private var tempDirectory: URL!
     private var defaultsSuiteName: String!
