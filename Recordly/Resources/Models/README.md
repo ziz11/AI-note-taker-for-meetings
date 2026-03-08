@@ -20,4 +20,4 @@ Installed copies are managed under:
 - `~/Library/Application Support/Recordly/Models/summarization/<model-id>/`
 
 For the integration contract, see:
-- [MODEL_INTEGRATION.md](../../../MODEL_INTEGRATION.md)
+- [Model Integration](../../../docs/model-integration.md)

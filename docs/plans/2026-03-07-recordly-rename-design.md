@@ -1,26 +1,26 @@
 # Recordly Rename Design
 
+> **Status:** Completed. The rename from CallRecorderPro to Recordly has been fully applied, including storage paths.
+
 **Date:** 2026-03-07
 
-**Goal:** Rename the shipped app from `CallRecorderPro` to `Recordly` while preserving compatibility with existing local recordings and model storage.
+**Goal:** Rename the shipped app from `CallRecorderPro` to `Recordly`, updating all branding, project wiring, and storage paths.
 
 ## Scope
 
-This design follows a hybrid rename strategy:
+This design followed a full rename strategy:
 
-- Rename user-facing branding to `Recordly`.
-- Update project wiring that depends on the built app product name.
-- Keep existing persistence paths unchanged:
-  - `~/Library/Application Support/CallRecorderPro`
-  - `/Users/Shared/CallRecorderProModels`
-
-The intent is to ship `Recordly.app` without forcing a migration of recordings, model installs, or other local state.
+- Renamed user-facing branding to `Recordly`.
+- Updated project wiring that depends on the built app product name.
+- Updated persistence paths to `Recordly`:
+  - `~/Library/Application Support/Recordly`
+  - `/Users/Shared/RecordlyModels`
 
 ## Approaches Considered
 
 ### 1. Branding and project wiring rename with legacy storage retained
 
-Rename the app product, bundle-facing strings, scheme/target references, and documentation branding while keeping storage constants on `CallRecorderPro`.
+Rename the app product, bundle-facing strings, scheme/target references, and documentation branding while keeping storage constants on the old name.
 
 **Pros**
 - Meets the product rename requirement.
@@ -56,38 +56,26 @@ Rename branding, project wiring, storage paths, and internal module names, then 
 
 ## Chosen Design
 
-Use approach 1.
-
-Rename the visible product to `Recordly` and update project wiring that must stay aligned with the built app name, while preserving legacy persistence and model storage paths.
+Full rename was applied. All branding, project wiring, storage paths, and module names now use `Recordly`.
 
 ## Rename Boundary
 
-### Change
+### Changed
 
 - Xcode target and product settings that determine the built app name.
 - Scheme references and test host paths tied to the app binary name.
-- Bundle identifier strings if they are currently branded as `CallRecorderPro`.
+- Bundle identifier strings (now `com.local.Recordly`).
 - `Info.plist` permission strings and other user-facing copy.
 - Documentation and product references that describe the app.
+- Storage paths updated to `Recordly`.
+- Source directory renamed from `CallRecorderPro/` to `Recordly/`.
 
-### Keep unchanged
+### Current storage paths
 
-- `AppPaths.appSupportFolderName = "CallRecorderPro"`
-- `AppPaths.sharedModelsFolder = "/Users/Shared/CallRecorderProModels"`
-- Model registry labels and other persistence references that point at the legacy storage locations.
-- Swift module identity if it can remain stable without affecting the user-facing rename.
-
-## Compatibility
-
-- Existing recordings remain under `~/Library/Application Support/CallRecorderPro/recordings`.
-- Existing installed models remain under `/Users/Shared/CallRecorderProModels` and `~/Library/Application Support/CallRecorderPro/Models`.
-- Tests should continue to import the existing Swift module if the module name is not part of the user-facing rename.
-
-## Risks
-
-- Renaming the target/product incompletely can break scheme references or the test host executable path.
-- Renaming storage paths accidentally would strand existing local data.
-- Renaming the Swift module unnecessarily would increase code churn and test fallout without improving the shipped product.
+- `AppPaths.appSupportFolderName = "Recordly"`
+- `AppPaths.sharedModelsFolder = "/Users/Shared/RecordlyModels"`
+- Recordings: `~/Library/Application Support/Recordly/recordings`
+- Installed models: `/Users/Shared/RecordlyModels` and `~/Library/Application Support/Recordly/Models`
 
 ## Verification
 
@@ -95,5 +83,5 @@ Rename the visible product to `Recordly` and update project wiring that must sta
 - Build and run the test target successfully.
 - Confirm the built product is `Recordly.app`.
 - Confirm permission usage strings show `Recordly`.
-- Confirm the app still uses `~/Library/Application Support/CallRecorderPro` and `/Users/Shared/CallRecorderProModels`.
-- Smoke-test launch and recordings list loading against existing local data.
+- Confirm the app uses `~/Library/Application Support/Recordly` and `/Users/Shared/RecordlyModels`.
+- Smoke-test launch and recordings list loading.

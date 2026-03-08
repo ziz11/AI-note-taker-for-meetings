@@ -129,10 +129,15 @@ final class RecordingsPhaseOneTests: XCTestCase {
     }
 
     private func makeStore(repository: InMemoryRecordingsRepository) -> RecordingsStore {
-        RecordingsStore(
-            audioCaptureService: AudioCaptureService(),
+        let modelManager = ModelManager()
+        let composition = DefaultInferenceComposition.make(modelManager: modelManager)
+        return RecordingsStore(
+            audioCaptureEngine: composition.audioCaptureEngine,
             transcriptionPipeline: TranscriptionPipeline(),
-            modelManager: ModelManager(),
+            runtimeProfileSelector: composition.runtimeProfileSelector,
+            inferenceEngineFactory: composition.engineFactory,
+            transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
+            modelManager: modelManager,
             repository: repository,
             previewMode: false
         )

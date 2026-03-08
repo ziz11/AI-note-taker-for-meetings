@@ -1,9 +1,5 @@
 import Foundation
 
-struct DiarizationServiceConfiguration: Sendable {
-    var modelURL: URL
-}
-
 enum DiarizationRuntimeError: LocalizedError, Equatable {
     case binaryMissing
     case modelMissing(URL)
@@ -34,14 +30,6 @@ enum DiarizationRuntimeError: LocalizedError, Equatable {
             return "Diarization was cancelled."
         }
     }
-}
-
-protocol SystemDiarizationService {
-    func diarize(
-        systemAudioURL: URL,
-        sessionID: UUID,
-        configuration: DiarizationServiceConfiguration
-    ) async throws -> DiarizationDocument
 }
 
 protocol DiarizationProcessExecutor {
@@ -210,14 +198,14 @@ struct ProcessDiarizationRunner: DiarizationRunner {
     }
 }
 
-struct CliSystemDiarizationService: SystemDiarizationService {
+struct CliDiarizationEngine: DiarizationEngine {
     private let fileManager: FileManager
     private let runnerFactory: () throws -> DiarizationRunner
 
     init(
         fileManager: FileManager = .default,
         runnerFactory: @escaping () throws -> DiarizationRunner = {
-            try ProcessDiarizationRunner(resolveBinaryURL: { try resolveDiarizationBinaryURL() })
+            ProcessDiarizationRunner(resolveBinaryURL: { try resolveDiarizationBinaryURL() })
         }
     ) {
         self.fileManager = fileManager
@@ -227,7 +215,7 @@ struct CliSystemDiarizationService: SystemDiarizationService {
     func diarize(
         systemAudioURL: URL,
         sessionID: UUID,
-        configuration: DiarizationServiceConfiguration
+        configuration: DiarizationEngineConfiguration
     ) async throws -> DiarizationDocument {
         if Task.isCancelled {
             throw DiarizationRuntimeError.cancelled
@@ -272,11 +260,11 @@ struct CliSystemDiarizationService: SystemDiarizationService {
 }
 
 // Kept only for tests/previews where diarization runner is intentionally bypassed.
-struct PlaceholderSystemDiarizationService: SystemDiarizationService {
+struct PlaceholderDiarizationEngine: DiarizationEngine {
     func diarize(
         systemAudioURL: URL,
         sessionID: UUID,
-        configuration: DiarizationServiceConfiguration
+        configuration: DiarizationEngineConfiguration
     ) async throws -> DiarizationDocument {
         let exists = FileManager.default.fileExists(atPath: systemAudioURL.path)
         guard exists else {

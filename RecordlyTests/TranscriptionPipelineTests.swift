@@ -4,10 +4,8 @@ import XCTest
 final class TranscriptionPipelineTests: XCTestCase {
     func testPipelineRebuildsASRWhenModelChanges() async throws {
         let asrEngine = RecordingASREngine()
-        let pipeline = TranscriptionPipeline(
-            asrEngine: asrEngine,
-            diarizationService: FailingDiarizationService()
-        )
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: asrEngine, diarizationEngine: FailingDiarizationEngine())
 
         let sessionID = UUID()
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
@@ -36,13 +34,15 @@ final class TranscriptionPipelineTests: XCTestCase {
         _ = try await pipeline.process(
             recording: recording,
             in: temp,
-            modelResolution: RequiredModelsResolution(asrModelURL: modelA, diarizationModelURL: nil)
+            runtimeProfile: makeRuntimeProfile(asrModelURL: modelA, diarizationModelURL: nil),
+            engineFactory: factory
         )
 
         _ = try await pipeline.process(
             recording: recording,
             in: temp,
-            modelResolution: RequiredModelsResolution(asrModelURL: modelB, diarizationModelURL: nil)
+            runtimeProfile: makeRuntimeProfile(asrModelURL: modelB, diarizationModelURL: nil),
+            engineFactory: factory
         )
 
         let calls = asrEngine.calls
@@ -52,10 +52,8 @@ final class TranscriptionPipelineTests: XCTestCase {
 
     func testPipelineRebuildsASRWhenLanguageFingerprintChanges() async throws {
         let asrEngine = RecordingASREngine()
-        let pipeline = TranscriptionPipeline(
-            asrEngine: asrEngine,
-            diarizationService: FailingDiarizationService()
-        )
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: asrEngine, diarizationEngine: FailingDiarizationEngine())
 
         let sessionID = UUID()
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
@@ -82,14 +80,16 @@ final class TranscriptionPipelineTests: XCTestCase {
         _ = try await pipeline.process(
             recording: recording,
             in: temp,
-            modelResolution: RequiredModelsResolution(asrModelURL: model, diarizationModelURL: nil)
+            runtimeProfile: makeRuntimeProfile(asrModelURL: model, diarizationModelURL: nil, asrLanguage: .ru),
+            engineFactory: factory
         )
 
         asrEngine.setFingerprintTag("en")
         _ = try await pipeline.process(
             recording: recording,
             in: temp,
-            modelResolution: RequiredModelsResolution(asrModelURL: model, diarizationModelURL: nil)
+            runtimeProfile: makeRuntimeProfile(asrModelURL: model, diarizationModelURL: nil, asrLanguage: .en),
+            engineFactory: factory
         )
 
         let calls = asrEngine.calls
@@ -97,10 +97,8 @@ final class TranscriptionPipelineTests: XCTestCase {
     }
 
     func testPipelineNoDiarizationModelFallsBackToRemote() async throws {
-        let pipeline = TranscriptionPipeline(
-            asrEngine: MockASREngine(),
-            diarizationService: FailingDiarizationService()
-        )
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
 
         let sessionID = UUID()
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
@@ -129,7 +127,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         let result = try await pipeline.process(
             recording: recording,
             in: temp,
-            modelResolution: RequiredModelsResolution(asrModelURL: modelURL, diarizationModelURL: nil)
+            runtimeProfile: makeRuntimeProfile(asrModelURL: modelURL, diarizationModelURL: nil),
+            engineFactory: factory
         )
 
         XCTAssertEqual(result.state, .ready)
@@ -146,10 +145,8 @@ final class TranscriptionPipelineTests: XCTestCase {
     }
 
     func testPipelineDiarizationFailureFallsBackToRemote() async throws {
-        let pipeline = TranscriptionPipeline(
-            asrEngine: MockASREngine(),
-            diarizationService: FailingDiarizationService()
-        )
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
 
         let sessionID = UUID()
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
@@ -180,7 +177,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         let result = try await pipeline.process(
             recording: recording,
             in: temp,
-            modelResolution: RequiredModelsResolution(asrModelURL: asrModelURL, diarizationModelURL: diarizationModel)
+            runtimeProfile: makeRuntimeProfile(asrModelURL: asrModelURL, diarizationModelURL: diarizationModel),
+            engineFactory: factory
         )
 
         XCTAssertEqual(result.state, .ready)
@@ -190,10 +188,8 @@ final class TranscriptionPipelineTests: XCTestCase {
     }
 
     func testPipelineSuccessfulDiarizationWritesArtifact() async throws {
-        let pipeline = TranscriptionPipeline(
-            asrEngine: MockASREngine(),
-            diarizationService: SuccessfulDiarizationService()
-        )
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: SuccessfulDiarizationEngine())
 
         let sessionID = UUID()
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
@@ -219,10 +215,11 @@ final class TranscriptionPipelineTests: XCTestCase {
         let result = try await pipeline.process(
             recording: recording,
             in: temp,
-            modelResolution: RequiredModelsResolution(
+            runtimeProfile: makeRuntimeProfile(
                 asrModelURL: temp.appendingPathComponent("asr.bin"),
                 diarizationModelURL: temp.appendingPathComponent("diarization.bin")
-            )
+            ),
+            engineFactory: factory
         )
 
         XCTAssertTrue(result.diarizationApplied)
@@ -232,10 +229,8 @@ final class TranscriptionPipelineTests: XCTestCase {
     }
 
     func testPipelineCreatesEmptySystemASRWhenSystemAudioUnavailable() async throws {
-        let pipeline = TranscriptionPipeline(
-            asrEngine: SystemUnavailableASREngine(),
-            diarizationService: FailingDiarizationService()
-        )
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: SystemUnavailableASREngine(), diarizationEngine: FailingDiarizationEngine())
 
         let sessionID = UUID()
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
@@ -262,10 +257,11 @@ final class TranscriptionPipelineTests: XCTestCase {
         let result = try await pipeline.process(
             recording: recording,
             in: temp,
-            modelResolution: RequiredModelsResolution(
+            runtimeProfile: makeRuntimeProfile(
                 asrModelURL: temp.appendingPathComponent("asr.bin"),
                 diarizationModelURL: nil
-            )
+            ),
+            engineFactory: factory
         )
 
         XCTAssertEqual(result.state, .ready)
@@ -524,8 +520,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(resolved, expected)
     }
 
-    func testCliDiarizationServiceModelMissingThrows() async throws {
-        let service = CliSystemDiarizationService(
+    func testCliDiarizationEngineModelMissingThrows() async throws {
+        let service = CliDiarizationEngine(
             runnerFactory: {
                 ProcessDiarizationRunner(
                     processExecutor: MockDiarizationProcessExecutor(result: DiarizationProcessResult(exitCode: 0, stdout: "", stderr: "")),
@@ -543,13 +539,30 @@ final class TranscriptionPipelineTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(try await service.diarize(
             systemAudioURL: audioURL,
             sessionID: sessionID,
-            configuration: DiarizationServiceConfiguration(modelURL: missingModelURL)
+            configuration: DiarizationEngineConfiguration(modelURL: missingModelURL)
         )) { error in
             guard case DiarizationRuntimeError.modelMissing = error else {
                 XCTFail("Unexpected error: \(error)")
                 return
             }
         }
+    }
+
+    private func makeRuntimeProfile(
+        asrModelURL: URL,
+        diarizationModelURL: URL?,
+        asrLanguage: ASRLanguage = .ru
+    ) -> InferenceRuntimeProfile {
+        InferenceRuntimeProfile(
+            stageSelection: .defaultLocal,
+            modelArtifacts: InferenceModelArtifacts(
+                asrModelURL: asrModelURL,
+                diarizationModelURL: diarizationModelURL,
+                summarizationModelURL: nil
+            ),
+            asrLanguage: asrLanguage,
+            summarizationRuntimeSettings: .default
+        )
     }
 
     private struct MockASREngine: ASREngine {
@@ -583,7 +596,7 @@ final class TranscriptionPipelineTests: XCTestCase {
             configuration: ASREngineConfiguration
         ) async throws -> ASRDocument {
             if channel == .system {
-                throw WhisperCppError.inferenceFailed(
+                throw ASREngineRuntimeError.inferenceFailed(
                     message: "whisper-cli produced no output file. stderr: error: failed to read the frames of the audio data (Invalid argument)"
                 )
             }
@@ -660,21 +673,21 @@ final class TranscriptionPipelineTests: XCTestCase {
         }
     }
 
-    private struct FailingDiarizationService: SystemDiarizationService {
+    private struct FailingDiarizationEngine: DiarizationEngine {
         func diarize(
             systemAudioURL: URL,
             sessionID: UUID,
-            configuration: DiarizationServiceConfiguration
+            configuration: DiarizationEngineConfiguration
         ) async throws -> DiarizationDocument {
             throw DiarizationRuntimeError.nonZeroExit(code: 1, stderr: "mock failure")
         }
     }
 
-    private struct SuccessfulDiarizationService: SystemDiarizationService {
+    private struct SuccessfulDiarizationEngine: DiarizationEngine {
         func diarize(
             systemAudioURL: URL,
             sessionID: UUID,
-            configuration: DiarizationServiceConfiguration
+            configuration: DiarizationEngineConfiguration
         ) async throws -> DiarizationDocument {
             DiarizationDocument(
                 version: 1,
@@ -684,6 +697,32 @@ final class TranscriptionPipelineTests: XCTestCase {
                     DiarizationSegment(id: "d1", speaker: "Speaker A", startMs: 0, endMs: 1000, confidence: 0.9)
                 ]
             )
+        }
+    }
+
+    private struct StaticInferenceEngineFactory: InferenceEngineFactory {
+        let asrEngine: any ASREngine
+        let diarizationEngine: any DiarizationEngine
+
+        @MainActor
+        func makeAudioCaptureEngine(for profile: InferenceRuntimeProfile) throws -> any AudioCaptureEngine {
+            AudioCaptureService()
+        }
+
+        func makeASREngine(for profile: InferenceRuntimeProfile) throws -> any ASREngine {
+            asrEngine
+        }
+
+        func makeDiarizationEngine(for profile: InferenceRuntimeProfile) throws -> any DiarizationEngine {
+            diarizationEngine
+        }
+
+        func makeSummarizationEngine(for profile: InferenceRuntimeProfile) throws -> any SummarizationEngine {
+            LlamaCppSummarizationEngine()
+        }
+
+        func makeVoiceActivityDetectionEngine(for profile: InferenceRuntimeProfile) throws -> (any VoiceActivityDetectionEngine)? {
+            nil
         }
     }
 

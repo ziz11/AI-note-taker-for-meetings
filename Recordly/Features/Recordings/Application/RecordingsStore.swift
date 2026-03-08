@@ -47,8 +47,11 @@ final class RecordingsStore: ObservableObject {
     private var summarizationTasks: [UUID: Task<Void, Never>] = [:]
 
     init(
-        audioCaptureService: AudioCaptureService,
+        audioCaptureEngine: any AudioCaptureEngine,
         transcriptionPipeline: TranscriptionPipeline,
+        runtimeProfileSelector: any InferenceRuntimeProfileSelecting,
+        inferenceEngineFactory: any InferenceEngineFactory,
+        transcriptionEngineDisplayName: String,
         modelManager: ModelManager,
         repository: RecordingsPersistence = RecordingsRepository(),
         previewMode: Bool = false
@@ -57,15 +60,15 @@ final class RecordingsStore: ObservableObject {
         self.modelManager = modelManager
         self.modelSettingsViewModel = ModelSettingsViewModel(modelManager: modelManager)
         self.modelOnboardingCoordinator = ModelOnboardingCoordinator(modelManager: modelManager)
-        var initialViewState = RecordingsViewState(activeEngineName: transcriptionPipeline.engineDisplayName)
+        var initialViewState = RecordingsViewState(activeEngineName: transcriptionEngineDisplayName)
         initialViewState.selectedModelProfile = modelManager.selectedProfile
         self.viewState = initialViewState
         self.workflow = RecordingWorkflowController(
-            audioCaptureService: audioCaptureService,
+            audioCaptureEngine: audioCaptureEngine,
             transcriptionPipeline: transcriptionPipeline,
+            runtimeProfileSelector: runtimeProfileSelector,
+            inferenceEngineFactory: inferenceEngineFactory,
             repository: repository,
-            modelManager: modelManager,
-            summaryEngine: LlamaCppSummaryEngine(),
             selectedModelProfile: initialViewState.selectedModelProfile
         )
         self.playbackController = PlaybackController(repository: repository, previewMode: previewMode)
@@ -96,10 +99,15 @@ final class RecordingsStore: ObservableObject {
     }
 
     convenience init(previewMode: Bool = false) {
+        let modelManager = ModelManager()
+        let composition = DefaultInferenceComposition.make(modelManager: modelManager)
         self.init(
-            audioCaptureService: AudioCaptureService(),
+            audioCaptureEngine: composition.audioCaptureEngine,
             transcriptionPipeline: TranscriptionPipeline(),
-            modelManager: ModelManager(),
+            runtimeProfileSelector: composition.runtimeProfileSelector,
+            inferenceEngineFactory: composition.engineFactory,
+            transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
+            modelManager: modelManager,
             previewMode: previewMode
         )
     }
