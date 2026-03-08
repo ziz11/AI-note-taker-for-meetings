@@ -31,10 +31,15 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
     }
 
     func testResolveTranscriptionProfileUsesExpectedBackendsAndArtifacts() throws {
-        _ = try writeModel(named: "asr-balanced-v1.bin")
+        let fluidDirectory = try createFluidModelDirectory(named: "fluid-asr-default")
         _ = try writeModel(named: "diarization-enhanced-v1.bin")
         let manager = makeModelManager()
-        let asrOption = try XCTUnwrap(manager.listLocalOptions(kind: .asr).first)
+        let normalizedFluidPath = fluidDirectory.resolvingSymlinksInPath().path
+        let asrOption = try XCTUnwrap(
+            manager.listLocalOptions(kind: .asr).first(where: {
+                $0.url.resolvingSymlinksInPath().path == normalizedFluidPath
+            })
+        )
         let diarizationOption = try XCTUnwrap(manager.listLocalOptions(kind: .diarization).first)
         manager.setSelectedModelID(asrOption.id, for: .asr)
         manager.setSelectedModelID(diarizationOption.id, for: .diarization)
@@ -42,7 +47,7 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager)
         let profile = try selector.resolveTranscriptionProfile(for: .balanced)
 
-        XCTAssertEqual(profile.stageSelection.backend(for: .asr), .whisperCpp)
+        XCTAssertEqual(profile.stageSelection.backend(for: .asr), .fluidAudio)
         XCTAssertEqual(profile.stageSelection.backend(for: .diarization), .cliDiarization)
         XCTAssertEqual(
             profile.modelArtifacts.asrModelURL?.resolvingSymlinksInPath().path,

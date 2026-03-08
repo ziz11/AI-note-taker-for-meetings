@@ -7,7 +7,7 @@ final class ModelSettingsViewModel: ObservableObject {
     @Published private(set) var summarizationModels: [LocalModelOption] = []
 
     @Published var selectedASRModelID: String?
-    @Published var selectedASRBackend: ASRBackend = .whisperCpp
+    @Published var selectedASRBackend: ASRBackend = .fluidAudio
     @Published var selectedASRLanguage: ASRLanguage = .ru
     @Published var selectedDiarizationModelID: String?
     @Published var selectedSummarizationModelID: String?

@@ -32,7 +32,7 @@ struct StageRuntimeSelection: Equatable, Sendable {
         StageRuntimeSelection(
             stageBackends: [
                 .audioCapture: .nativeCapture,
-                .asr: .whisperCpp,
+                .asr: .fluidAudio,
                 .diarization: .cliDiarization,
                 .summarization: .llamaCpp,
                 .vad: .disabled

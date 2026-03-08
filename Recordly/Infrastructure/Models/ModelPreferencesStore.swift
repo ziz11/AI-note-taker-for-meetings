@@ -65,7 +65,7 @@ final class ModelPreferencesStore {
         get {
             guard let rawValue = defaults.string(forKey: Keys.selectedASRBackend),
                   let value = ASRBackend(rawValue: rawValue) else {
-                return .whisperCpp
+                return .fluidAudio
             }
             return value
         }

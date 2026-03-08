@@ -7,11 +7,11 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         let profile = InferenceRuntimeProfile(
             stageSelection: .defaultLocal,
             modelArtifacts: InferenceModelArtifacts(
-                asrModelURL: URL(fileURLWithPath: "/tmp/asr.bin"),
+                asrModelURL: URL(fileURLWithPath: "/tmp/asr-fluid"),
                 diarizationModelURL: URL(fileURLWithPath: "/tmp/diarization.bin"),
                 summarizationModelURL: URL(fileURLWithPath: "/tmp/summary.gguf")
             ),
-            asrLanguage: .ru,
+            asrLanguage: .auto,
             summarizationRuntimeSettings: .default
         )
 
@@ -19,7 +19,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         let diarizationEngine = try factory.makeDiarizationEngine(for: profile)
         let summarizationEngine = try factory.makeSummarizationEngine(for: profile)
 
-        XCTAssertEqual(String(describing: type(of: asrEngine)), "WhisperCppASREngine")
+        XCTAssertEqual(String(describing: type(of: asrEngine)), "FluidAudioASREngine")
         XCTAssertEqual(String(describing: type(of: diarizationEngine)), "CliDiarizationEngine")
         XCTAssertEqual(String(describing: type(of: summarizationEngine)), "LlamaCppSummarizationEngine")
     }
