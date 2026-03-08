@@ -1,9 +1,5 @@
 import Foundation
 
-#if arch(arm64) && canImport(FluidAudio)
-import FluidAudio
-#endif
-
 @MainActor
 final class ModelSettingsViewModel: ObservableObject {
     @Published private(set) var asrModels: [LocalModelOption] = []
@@ -16,13 +12,17 @@ final class ModelSettingsViewModel: ObservableObject {
     @Published var selectedDiarizationModelID: String?
     @Published var selectedSummarizationModelID: String?
 
-    @Published private(set) var isDownloadingFluidModel = false
-    @Published private(set) var fluidDownloadError: String?
+    @Published private(set) var fluidProvisioningState: FluidAudioModelProvisioningState = .needsDownload
 
     private let modelManager: ModelManager
+    private let fluidAudioModelProvider: any FluidAudioModelProviding
 
-    init(modelManager: ModelManager) {
+    init(
+        modelManager: ModelManager,
+        fluidAudioModelProvider: any FluidAudioModelProviding
+    ) {
         self.modelManager = modelManager
+        self.fluidAudioModelProvider = fluidAudioModelProvider
         refresh()
     }
 
@@ -38,18 +38,22 @@ final class ModelSettingsViewModel: ObservableObject {
         selectedDiarizationModelID = modelManager.selectedLocalOption(kind: .diarization)?.id
         selectedSummarizationModelID = modelManager.selectedLocalOption(kind: .summarization)?.id
 
-        if let selectedID = selectedASRModelID,
+        if selectedASRBackend == .whisperCpp,
+           let selectedID = selectedASRModelID,
            !asrModels.contains(where: { $0.id == selectedID }),
            let firstCompatible = asrModels.first {
             modelManager.setSelectedModelID(firstCompatible.id, for: .asr)
             selectedASRModelID = firstCompatible.id
         }
+
+        fluidAudioModelProvider.refreshState()
+        fluidProvisioningState = fluidAudioModelProvider.state
     }
 
     private func isModelCompatible(_ option: LocalModelOption, with backend: ASRBackend) -> Bool {
         switch backend {
         case .fluidAudio:
-            return FluidAudioModelValidator.isValidModelDirectory(option.url)
+            return false
         case .whisperCpp:
             let isFile = (try? option.url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
             return isFile && option.url.pathExtension.lowercased() == "bin"
@@ -108,25 +112,28 @@ final class ModelSettingsViewModel: ObservableObject {
     }
 
     var canDownloadFluidModel: Bool {
-        selectedASRBackend == .fluidAudio && asrModels.isEmpty && !isDownloadingFluidModel
+        selectedASRBackend == .fluidAudio && !isDownloadingFluidModel && !isFluidModelReady
+    }
+
+    var isDownloadingFluidModel: Bool {
+        if case .downloading = fluidProvisioningState {
+            return true
+        }
+        return false
+    }
+
+    var isFluidModelReady: Bool {
+        if case .ready = fluidProvisioningState {
+            return true
+        }
+        return false
     }
 
     func downloadFluidAudioModel() {
-#if arch(arm64) && canImport(FluidAudio)
-        guard !isDownloadingFluidModel else { return }
-        isDownloadingFluidModel = true
-        fluidDownloadError = nil
         Task {
-            do {
-                _ = try await AsrModels.downloadAndLoad(version: .v3)
-                refresh()
-            } catch {
-                fluidDownloadError = error.localizedDescription
-            }
-            isDownloadingFluidModel = false
+            await fluidAudioModelProvider.downloadDefaultModel()
+            fluidProvisioningState = fluidAudioModelProvider.state
+            refresh()
         }
-#else
-        fluidDownloadError = "FluidAudio SDK is not available on this architecture."
-#endif
     }
 }

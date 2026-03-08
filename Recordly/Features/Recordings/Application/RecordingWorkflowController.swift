@@ -478,6 +478,8 @@ final class RecordingWorkflowController {
             switch error {
             case .missingASRModel:
                 throw RecordingWorkflowError.transcriptionUnavailable(.requiresASRModel(profileOptions: ModelProfile.allCases))
+            case .missingFluidAudioModel, .fluidAudioProvisioningFailed:
+                throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
             case .missingSummarizationModel:
                 throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
             case .invalidASRBackendModel:
