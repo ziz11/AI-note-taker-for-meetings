@@ -434,18 +434,9 @@ final class RecordingWorkflowController {
             }
 
             let mergedM4A = sessionDirectory.appendingPathComponent("merged-call.m4a")
-            let mergedCAF = sessionDirectory.appendingPathComponent("merged-call.caf")
 
             if FileManager.default.fileExists(atPath: mergedM4A.path) {
                 recordings[index].assets.mergedCallFile = "merged-call.m4a"
-                if recordings[index].lifecycleState != .failed {
-                    recordings[index].lifecycleState = .ready
-                }
-                recordings[index].notes = "Offline merge completed."
-                try? repository.save(recordings[index])
-            } else if FileManager.default.fileExists(atPath: mergedCAF.path),
-                      recordings[index].assets.mergedCallFile == nil {
-                recordings[index].assets.mergedCallFile = "merged-call.caf"
                 if recordings[index].lifecycleState != .failed {
                     recordings[index].lifecycleState = .ready
                 }
