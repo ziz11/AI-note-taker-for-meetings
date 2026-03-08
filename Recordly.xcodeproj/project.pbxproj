@@ -22,6 +22,7 @@
 		6C21B2A77926FB977C286632 /* TranscriptionPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */; };
 		8754BE5E6A83DDC122A462CC /* ASRDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE471CED942092CB3514DA68 /* ASRDocument.swift */; };
 		894C4B7F338F3AA85AAE8A44 /* WhisperCppASREngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D591A145B4A823FA9F0337 /* WhisperCppASREngine.swift */; };
+		8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */; };
 		8A1000012D82A10000A13B02 /* ModelTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000112D82A10000A13B02 /* ModelTypes.swift */; };
 		8A1000022D82A10000A13B02 /* ModelRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000122D82A10000A13B02 /* ModelRegistry.swift */; };
 		8A1000032D82A10000A13B02 /* ModelStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000132D82A10000A13B02 /* ModelStorage.swift */; };
@@ -97,6 +98,7 @@
 		74AC31327248529A315C55DE /* RecordingSessionCompatibilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RecordingSessionCompatibilityTests.swift; path = RecordingSessionCompatibilityTests.swift; sourceTree = "<group>"; };
 		83340338D9A97D1FCCE50966 /* TranscriptRenderService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscriptRenderService.swift; sourceTree = "<group>"; };
 		86D591A145B4A823FA9F0337 /* WhisperCppASREngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ../Inference/Backends/WhisperCpp/WhisperCppASREngine.swift; sourceTree = "<group>"; };
+		A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioASREngine.swift; sourceTree = "<group>"; };
 		8A1000112D82A10000A13B02 /* ModelTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTypes.swift; sourceTree = "<group>"; };
 		8A1000122D82A10000A13B02 /* ModelRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelRegistry.swift; sourceTree = "<group>"; };
 		8A1000132D82A10000A13B02 /* ModelStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelStorage.swift; sourceTree = "<group>"; };
@@ -231,6 +233,7 @@
 				AB1100152EBC1D6F00000001 /* InferenceEngineFactory.swift */,
 				AB1100162EBC1D6F00000001 /* DefaultInferenceEngineFactory.swift */,
 				AB1100172EBC1D6F00000001 /* DefaultInferenceComposition.swift */,
+				A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */,
 			);
 			path = Infrastructure;
 			sourceTree = "<group>";
@@ -555,6 +558,7 @@
 				CAB301012EBC1D6F00000001 /* SessionMergeService.swift in Sources */,
 				CAB301032EBC1D6F00000001 /* DirectPCMMixService.swift in Sources */,
 				894C4B7F338F3AA85AAE8A44 /* WhisperCppASREngine.swift in Sources */,
+				8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */,
 				D26338CDE7591CE9EB66AA72 /* CliDiarizationEngine.swift in Sources */,
 				F0DC2B834E4BE6EFD06B9228 /* SummaryEngine.swift in Sources */,
 				15CD5138FCA0BCCED1F11FA5 /* SummaryPromptBuilder.swift in Sources */,

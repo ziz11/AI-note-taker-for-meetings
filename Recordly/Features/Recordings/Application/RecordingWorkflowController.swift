@@ -144,7 +144,23 @@ final class RecordingWorkflowController {
         runTranscription: Bool,
         onTranscriptionStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
     ) async throws -> RecordingCompletionResult {
-        let captureArtifacts = try await audioCaptureEngine.stopCapture()
+        let captureArtifacts: CaptureArtifacts
+        do {
+            captureArtifacts = try await audioCaptureEngine.stopCapture()
+        } catch {
+            var failedRecording = recording
+            failedRecording.duration = duration
+            failedRecording.lifecycleState = .failed
+            failedRecording.transcriptState = .failed
+            failedRecording.notes = "Capture finalization failed: \(error.localizedDescription)"
+            try? repository.save(failedRecording)
+            return RecordingCompletionResult(
+                recording: failedRecording,
+                transcriptionResult: nil,
+                systemAudioLabel: audioCaptureEngine.systemAudioStatusLabel,
+                processingError: error
+            )
+        }
 
         var updatedRecording = recording
         updatedRecording.duration = duration
@@ -166,15 +182,7 @@ final class RecordingWorkflowController {
                     onStateChange: onTranscriptionStateChange
                 )
                 if let transcriptionResult {
-                    updatedRecording.assets.transcriptFile = transcriptionResult.transcriptFile
-                    updatedRecording.assets.srtFile = transcriptionResult.srtFile
-                    updatedRecording.assets.transcriptJSONFile = transcriptionResult.transcriptJSONFile
-                    updatedRecording.assets.micASRJSONFile = transcriptionResult.micASRJSONFile
-                    updatedRecording.assets.systemASRJSONFile = transcriptionResult.systemASRJSONFile
-                    updatedRecording.assets.systemDiarizationJSONFile = transcriptionResult.systemDiarizationJSONFile
-                    updatedRecording.transcriptState = transcriptionResult.state
-                    updatedRecording.lifecycleState = .ready
-                    updatedRecording.notes = transcriptionResult.summary
+                    updatedRecording = applyTranscriptionResult(transcriptionResult, to: updatedRecording)
                     try repository.save(updatedRecording)
                 }
                 processingError = nil
@@ -228,15 +236,7 @@ final class RecordingWorkflowController {
                     onStateChange: onTranscriptionStateChange
                 )
                 if let transcriptionResult {
-                    recording.assets.transcriptFile = transcriptionResult.transcriptFile
-                    recording.assets.srtFile = transcriptionResult.srtFile
-                    recording.assets.transcriptJSONFile = transcriptionResult.transcriptJSONFile
-                    recording.assets.micASRJSONFile = transcriptionResult.micASRJSONFile
-                    recording.assets.systemASRJSONFile = transcriptionResult.systemASRJSONFile
-                    recording.assets.systemDiarizationJSONFile = transcriptionResult.systemDiarizationJSONFile
-                    recording.transcriptState = transcriptionResult.state
-                    recording.lifecycleState = .ready
-                    recording.notes = transcriptionResult.summary
+                    recording = applyTranscriptionResult(transcriptionResult, to: recording)
                     try repository.save(recording)
                 }
                 processingError = nil
@@ -273,15 +273,7 @@ final class RecordingWorkflowController {
                 for: updatedRecording,
                 onStateChange: onStateChange
             )
-            updatedRecording.assets.transcriptFile = transcriptionResult.transcriptFile
-            updatedRecording.assets.srtFile = transcriptionResult.srtFile
-            updatedRecording.assets.transcriptJSONFile = transcriptionResult.transcriptJSONFile
-            updatedRecording.assets.micASRJSONFile = transcriptionResult.micASRJSONFile
-            updatedRecording.assets.systemASRJSONFile = transcriptionResult.systemASRJSONFile
-            updatedRecording.assets.systemDiarizationJSONFile = transcriptionResult.systemDiarizationJSONFile
-            updatedRecording.transcriptState = transcriptionResult.state
-            updatedRecording.lifecycleState = .ready
-            updatedRecording.notes = transcriptionResult.summary
+            updatedRecording = applyTranscriptionResult(transcriptionResult, to: updatedRecording)
             try repository.save(updatedRecording)
             return updatedRecording
         } catch {
@@ -497,6 +489,26 @@ final class RecordingWorkflowController {
             engineFactory: inferenceEngineFactory,
             onStateChange: onStateChange
         )
+    }
+
+    private func applyTranscriptionResult(
+        _ result: TranscriptionResult,
+        to recording: RecordingSession
+    ) -> RecordingSession {
+        var updated = recording
+        updated.assets.transcriptFile = result.transcriptFile
+        updated.assets.srtFile = result.srtFile
+        updated.assets.transcriptJSONFile = result.transcriptJSONFile
+        updated.assets.micASRJSONFile = result.micASRJSONFile
+        updated.assets.systemASRJSONFile = result.systemASRJSONFile
+        updated.assets.systemDiarizationJSONFile = result.systemDiarizationJSONFile
+        updated.transcriptState = result.state
+        updated.lifecycleState = .ready
+        updated.notes = result.summary
+        if !result.degradedReasons.isEmpty {
+            updated.assets.degradedReasons = result.degradedReasons.map(\.rawValue)
+        }
+        return updated
     }
 
     private func shouldRecoverTranscription(for recording: RecordingSession) -> Bool {

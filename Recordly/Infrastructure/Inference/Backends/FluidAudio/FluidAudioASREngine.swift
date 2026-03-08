@@ -1,15 +1,15 @@
 import Foundation
 
-protocol WhisperCppRunner {
-    func transcribe(audioURL: URL, modelURL: URL) async throws -> WhisperCppRunnerOutput
+protocol FluidAudioRunner {
+    func transcribe(audioURL: URL, modelURL: URL) async throws -> FluidAudioRunnerOutput
 }
 
-struct WhisperCppRunnerOutput {
+struct FluidAudioRunnerOutput {
     var language: String?
-    var segments: [WhisperCppSegment]
+    var segments: [FluidAudioSegment]
 }
 
-struct WhisperCppSegment {
+struct FluidAudioSegment {
     var id: String
     var startMs: Int
     var endMs: Int
@@ -18,21 +18,19 @@ struct WhisperCppSegment {
     var words: [ASRWord]?
 }
 
-struct ProcessWhisperCppRunner: WhisperCppRunner {
+struct ProcessFluidAudioRunner: FluidAudioRunner {
     private let fileManager: FileManager
-    private let processExecutor: WhisperProcessExecutor
+    private let processExecutor: FluidAudioProcessExecutor
     private let temporaryDirectory: URL
     private let environment: [String: String]
-    private let languageCodeProvider: () -> String
     private let resolveBinaryURL: () throws -> URL
     private let outputBaseURLFactory: () -> URL
 
     init(
         fileManager: FileManager = .default,
-        processExecutor: WhisperProcessExecutor = FoundationWhisperProcessExecutor(),
+        processExecutor: FluidAudioProcessExecutor = FoundationFluidAudioProcessExecutor(),
         temporaryDirectory: URL = FileManager.default.temporaryDirectory,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        languageCode: String = "ru",
         resolveBinaryURL: (() throws -> URL)? = nil,
         outputBaseURLFactory: (() -> URL)? = nil
     ) {
@@ -40,44 +38,18 @@ struct ProcessWhisperCppRunner: WhisperCppRunner {
         self.processExecutor = processExecutor
         self.temporaryDirectory = temporaryDirectory
         self.environment = environment
-        self.languageCodeProvider = { languageCode }
         self.resolveBinaryURL = resolveBinaryURL ?? {
-            try Self.resolveWhisperBinaryURL(
+            try Self.resolveFluidAudioBinaryURL(
                 fileManager: fileManager,
                 environment: environment
             )
         }
         self.outputBaseURLFactory = outputBaseURLFactory ?? {
-            temporaryDirectory.appendingPathComponent("whisper-output-\(UUID().uuidString)")
+            temporaryDirectory.appendingPathComponent("fluidaudio-output-\(UUID().uuidString)")
         }
     }
 
-    init(
-        fileManager: FileManager = .default,
-        processExecutor: WhisperProcessExecutor = FoundationWhisperProcessExecutor(),
-        temporaryDirectory: URL = FileManager.default.temporaryDirectory,
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        languageCodeProvider: @escaping () -> String,
-        resolveBinaryURL: (() throws -> URL)? = nil,
-        outputBaseURLFactory: (() -> URL)? = nil
-    ) {
-        self.fileManager = fileManager
-        self.processExecutor = processExecutor
-        self.temporaryDirectory = temporaryDirectory
-        self.environment = environment
-        self.languageCodeProvider = languageCodeProvider
-        self.resolveBinaryURL = resolveBinaryURL ?? {
-            try Self.resolveWhisperBinaryURL(
-                fileManager: fileManager,
-                environment: environment
-            )
-        }
-        self.outputBaseURLFactory = outputBaseURLFactory ?? {
-            temporaryDirectory.appendingPathComponent("whisper-output-\(UUID().uuidString)")
-        }
-    }
-
-    func transcribe(audioURL: URL, modelURL: URL) async throws -> WhisperCppRunnerOutput {
+    func transcribe(audioURL: URL, modelURL: URL) async throws -> FluidAudioRunnerOutput {
         let binaryURL = try resolveBinaryURL()
         let outputBaseURL = outputBaseURLFactory()
         let outputJSONURL = outputBaseURL.appendingPathExtension("json")
@@ -92,40 +64,40 @@ struct ProcessWhisperCppRunner: WhisperCppRunner {
         }
 
         let args = [
-            "-m", modelURL.path,
-            "-f", effectiveAudioURL.path,
-            "--language", languageCodeProvider(),
+            "transcribe",
+            effectiveAudioURL.path,
+            "--model-path", modelURL.path,
             "--output-json",
-            "--output-file", outputBaseURL.path,
-            "--no-prints"
+            "--output-file", outputBaseURL.path
         ]
 
         let result = try await processExecutor.run(executableURL: binaryURL, arguments: args)
         guard result.exitCode == 0 else {
-            throw ASREngineRuntimeError.inferenceFailed(message: result.stderr.isEmpty ? "exit code \(result.exitCode)" : result.stderr)
+            throw ASREngineRuntimeError.inferenceFailed(
+                message: result.stderr.isEmpty ? "exit code \(result.exitCode)" : result.stderr
+            )
         }
 
         guard fileManager.fileExists(atPath: outputJSONURL.path) else {
             let detail = result.stderr.isEmpty ? "" : " stderr: \(result.stderr)"
             throw ASREngineRuntimeError.inferenceFailed(
-                message: "whisper-cli produced no output file for \(effectiveAudioURL.lastPathComponent).\(detail)"
+                message: "fluidaudio produced no output file for \(effectiveAudioURL.lastPathComponent).\(detail)"
             )
         }
 
         let data = try Data(contentsOf: outputJSONURL)
         try? fileManager.removeItem(at: outputJSONURL)
 
-        return try parseWhisperJSONOutput(data)
+        return try parseFluidAudioJSONOutput(data)
     }
 
     private func convertToWAVIfNeeded(_ audioURL: URL) throws -> URL {
-        let supportedByWhisper: Set<String> = ["wav", "flac", "mp3", "ogg"]
         let ext = audioURL.pathExtension.lowercased()
-        if supportedByWhisper.contains(ext) {
+        if ext == "wav" {
             return audioURL
         }
 
-        let wavURL = temporaryDirectory.appendingPathComponent("whisper-input-\(UUID().uuidString).wav")
+        let wavURL = temporaryDirectory.appendingPathComponent("fluidaudio-input-\(UUID().uuidString).wav")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/afconvert")
         process.arguments = [
@@ -158,41 +130,27 @@ struct ProcessWhisperCppRunner: WhisperCppRunner {
         return wavURL
     }
 
-    func defaultResolveWhisperBinaryURL() throws -> URL {
-        try Self.resolveWhisperBinaryURL(fileManager: fileManager, environment: environment)
-    }
-
-    private static func resolveWhisperBinaryURL(
+    private static func resolveFluidAudioBinaryURL(
         fileManager: FileManager,
         environment: [String: String]
     ) throws -> URL {
-        let binaryNames = ["whisper-main", "whisper-cli", "main"]
+        let binaryName = "fluidaudio"
         var candidateURLs: [URL] = []
 
         if let resourceURL = Bundle.main.resourceURL {
-            candidateURLs.append(contentsOf: binaryNames.flatMap { name in
-                [
-                    resourceURL.appendingPathComponent("Binaries/\(name)"),
-                    resourceURL.appendingPathComponent(name)
-                ]
-            })
+            candidateURLs.append(resourceURL.appendingPathComponent("Binaries/\(binaryName)"))
+            candidateURLs.append(resourceURL.appendingPathComponent(binaryName))
         }
 
         candidateURLs.append(contentsOf: [
             "/usr/local/bin",
             "/opt/homebrew/bin"
-        ].flatMap { directory in
-            binaryNames.map { name in
-                URL(fileURLWithPath: directory).appendingPathComponent(name)
-            }
-        })
+        ].map { URL(fileURLWithPath: $0).appendingPathComponent(binaryName) })
 
         if let path = environment["PATH"], !path.isEmpty {
             let directories = path.split(separator: ":").map(String.init)
-            candidateURLs.append(contentsOf: directories.flatMap { directory in
-                binaryNames.map { name in
-                    URL(fileURLWithPath: directory).appendingPathComponent(name)
-                }
+            candidateURLs.append(contentsOf: directories.map { directory in
+                URL(fileURLWithPath: directory).appendingPathComponent(binaryName)
             })
         }
 
@@ -201,52 +159,64 @@ struct ProcessWhisperCppRunner: WhisperCppRunner {
         }
 
         throw ASREngineRuntimeError.inferenceFailed(
-            message: "whisper binary not found (looked for whisper-main, whisper-cli, or main in app resources, Homebrew paths, and PATH)"
+            message: "fluidaudio binary not found (looked in app resources, Homebrew paths, and PATH)"
         )
     }
 
-    private func parseWhisperJSONOutput(_ data: Data) throws -> WhisperCppRunnerOutput {
+    private func parseFluidAudioJSONOutput(_ data: Data) throws -> FluidAudioRunnerOutput {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ASREngineRuntimeError.outputParseFailed
         }
 
-        let language = (root["result"] as? [String: Any])?["language"] as? String
-        let transcription = root["transcription"] as? [[String: Any]] ?? []
+        let language = root["language"] as? String
+        let transcription = root["transcription"] as? [[String: Any]]
+            ?? root["segments"] as? [[String: Any]]
+            ?? []
 
-        let segments: [WhisperCppSegment] = transcription.enumerated().compactMap { index, item in
+        let segments: [FluidAudioSegment] = transcription.enumerated().compactMap { index, item in
             let text = (item["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !text.isEmpty else { return nil }
 
             let offsets = item["offsets"] as? [String: Any]
-            let start = (offsets?["from"] as? NSNumber)?.intValue ?? 0
-            let end = (offsets?["to"] as? NSNumber)?.intValue ?? max(start + 1, start)
+            let start = (offsets?["from"] as? NSNumber)?.intValue
+                ?? (item["start_ms"] as? NSNumber)?.intValue
+                ?? (item["startMs"] as? NSNumber)?.intValue
+                ?? 0
+            let end = (offsets?["to"] as? NSNumber)?.intValue
+                ?? (item["end_ms"] as? NSNumber)?.intValue
+                ?? (item["endMs"] as? NSNumber)?.intValue
+                ?? max(start + 1, start)
 
-            return WhisperCppSegment(
+            return FluidAudioSegment(
                 id: "seg-\(index + 1)",
                 startMs: max(0, start),
                 endMs: max(start + 1, end),
                 text: text,
-                confidence: nil,
+                confidence: item["confidence"] as? Double,
                 words: nil
             )
         }
 
-        return WhisperCppRunnerOutput(language: language, segments: segments)
+        guard !segments.isEmpty else {
+            throw ASREngineRuntimeError.outputParseFailed
+        }
+
+        return FluidAudioRunnerOutput(language: language, segments: segments)
     }
 }
 
-protocol WhisperProcessExecutor {
-    func run(executableURL: URL, arguments: [String]) async throws -> WhisperProcessResult
+protocol FluidAudioProcessExecutor {
+    func run(executableURL: URL, arguments: [String]) async throws -> FluidAudioProcessResult
 }
 
-struct WhisperProcessResult {
+struct FluidAudioProcessResult {
     var exitCode: Int32
     var stdout: String
     var stderr: String
 }
 
-struct FoundationWhisperProcessExecutor: WhisperProcessExecutor {
-    func run(executableURL: URL, arguments: [String]) async throws -> WhisperProcessResult {
+struct FoundationFluidAudioProcessExecutor: FluidAudioProcessExecutor {
+    func run(executableURL: URL, arguments: [String]) async throws -> FluidAudioProcessResult {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
@@ -267,7 +237,7 @@ struct FoundationWhisperProcessExecutor: WhisperProcessExecutor {
                     let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
                     let stderr = String(data: stderrData, encoding: .utf8) ?? ""
 
-                    continuation.resume(returning: WhisperProcessResult(
+                    continuation.resume(returning: FluidAudioProcessResult(
                         exitCode: process.terminationStatus,
                         stdout: stdout,
                         stderr: stderr
@@ -280,26 +250,21 @@ struct FoundationWhisperProcessExecutor: WhisperProcessExecutor {
     }
 }
 
-struct WhisperCppASREngine: ASREngine {
-    let displayName: String = "WhisperCpp (RU+EN)"
-    private let runnerFactory: (ASRLanguage) -> WhisperCppRunner
+struct FluidAudioASREngine: ASREngine {
+    let displayName: String = "FluidAudio"
+    private let runnerFactory: () -> FluidAudioRunner
 
-    init(
-        runner: WhisperCppRunner? = nil
-    ) {
+    init(runner: FluidAudioRunner? = nil) {
         if let runner {
-            self.runnerFactory = { _ in runner }
+            self.runnerFactory = { runner }
         } else {
-            self.runnerFactory = { language in
-                ProcessWhisperCppRunner(languageCode: language.whisperCode)
-            }
+            self.runnerFactory = { ProcessFluidAudioRunner() }
         }
     }
 
     func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
         let modelPath = configuration.modelURL.standardizedFileURL.path
-        let language = configuration.language.whisperCode
-        return "\(modelPath)|lang:\(language)"
+        return "\(modelPath)|fluidaudio"
     }
 
     func transcribe(
@@ -325,7 +290,7 @@ struct WhisperCppASREngine: ASREngine {
             throw ASREngineRuntimeError.unsupportedFormat(audioURL)
         }
 
-        let runner = runnerFactory(configuration.language)
+        let runner = runnerFactory()
         let output = try await runner.transcribe(audioURL: audioURL, modelURL: configuration.modelURL)
 
         if Task.isCancelled {

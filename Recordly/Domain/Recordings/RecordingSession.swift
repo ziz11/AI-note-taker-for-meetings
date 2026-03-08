@@ -155,6 +155,7 @@ struct RecordingAssets: Codable, Hashable {
     var systemDiarizationJSONFile: String? = nil
     var summaryFile: String? = nil
     var connectorNotesFile: String? = nil
+    var degradedReasons: [String]? = nil
 }
 
 struct RecordingSession: Identifiable, Codable, Hashable {

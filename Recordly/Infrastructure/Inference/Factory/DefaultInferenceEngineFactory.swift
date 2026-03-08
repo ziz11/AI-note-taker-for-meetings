@@ -15,6 +15,8 @@ struct DefaultInferenceEngineFactory: InferenceEngineFactory {
         switch profile.stageSelection.backend(for: .asr) {
         case .whisperCpp:
             return WhisperCppASREngine()
+        case .fluidAudio:
+            return FluidAudioASREngine()
         case let backend:
             throw InferenceEngineFactoryError.unsupportedBackend(stage: .asr, backend: backend)
         }

@@ -27,7 +27,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
     func testFactoryThrowsWhenBackendNotSupportedForStage() {
         let factory = DefaultInferenceEngineFactory()
         var selection = StageRuntimeSelection.defaultLocal
-        selection.setBackend(.fluidAudio, for: .asr)
+        selection.setBackend(.llamaCpp, for: .asr)
         let profile = InferenceRuntimeProfile(
             stageSelection: selection,
             modelArtifacts: InferenceModelArtifacts(
@@ -42,7 +42,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         XCTAssertThrowsError(try factory.makeASREngine(for: profile)) { error in
             XCTAssertEqual(
                 error as? InferenceEngineFactoryError,
-                .unsupportedBackend(stage: .asr, backend: .fluidAudio)
+                .unsupportedBackend(stage: .asr, backend: .llamaCpp)
             )
         }
     }
