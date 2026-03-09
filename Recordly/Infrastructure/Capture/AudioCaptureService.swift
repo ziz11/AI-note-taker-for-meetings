@@ -12,7 +12,6 @@ struct CaptureArtifacts {
 
 enum AudioCaptureError: LocalizedError {
     case microphonePermissionDenied
-    case screenRecordingPermissionDenied
     case captureAlreadyRunning
     case noActiveCapture
     case recorderFailedToStart
@@ -29,8 +28,6 @@ enum AudioCaptureError: LocalizedError {
         switch self {
         case .microphonePermissionDenied:
             return "Microphone permission was denied."
-        case .screenRecordingPermissionDenied:
-            return "Screen Recording permission is required to capture system audio. Please grant access in System Settings > Privacy & Security > Screen Recording."
         case .captureAlreadyRunning:
             return "A recording is already in progress."
         case .noActiveCapture:
