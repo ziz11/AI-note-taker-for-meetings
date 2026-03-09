@@ -11,8 +11,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
 
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
 
         let recording = RecordingSession(
             id: sessionID,
@@ -58,8 +58,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         let sessionID = UUID()
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
 
         let recording = RecordingSession(
             id: sessionID,
@@ -105,8 +105,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         let micFile = temp.appendingPathComponent("mic.raw.caf")
         let systemFile = temp.appendingPathComponent("system.raw.caf")
-        FileManager.default.createFile(atPath: micFile.path, contents: Data())
-        FileManager.default.createFile(atPath: systemFile.path, contents: Data())
+        FileManager.default.createFile(atPath: micFile.path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: systemFile.path, contents: Data("audio".utf8))
 
         let recording = RecordingSession(
             id: sessionID,
@@ -155,8 +155,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         let micFile = temp.appendingPathComponent("mic.raw.caf")
         let systemFile = temp.appendingPathComponent("system.raw.caf")
         let diarizationModel = temp.appendingPathComponent("diarization.bin")
-        FileManager.default.createFile(atPath: micFile.path, contents: Data())
-        FileManager.default.createFile(atPath: systemFile.path, contents: Data())
+        FileManager.default.createFile(atPath: micFile.path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: systemFile.path, contents: Data("audio".utf8))
         FileManager.default.createFile(atPath: diarizationModel.path, contents: Data("dmodel".utf8))
 
         let recording = RecordingSession(
@@ -195,8 +195,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
 
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
         FileManager.default.createFile(atPath: temp.appendingPathComponent("diarization.bin").path, contents: Data("dmodel".utf8))
         try Data("asr-model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
 
@@ -274,6 +274,122 @@ final class TranscriptionPipelineTests: XCTestCase {
         let doc = try decoder.decode(ASRDocument.self, from: data)
         XCTAssertEqual(doc.channel, .system)
         XCTAssertTrue(doc.segments.isEmpty)
+    }
+
+    func testPipelineWithZeroByteSystemAudioFallsBackButSucceedsWithMicASR() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("mic".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        )
+
+        let result = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(result.state, .ready)
+        XCTAssertEqual(result.micASRJSONFile, "mic.asr.json")
+        XCTAssertEqual(result.systemASRJSONFile, "system.asr.json")
+        XCTAssertTrue(result.degradedReasons.contains(.systemASRFailedFallbackUsed))
+        XCTAssertTrue(result.degradedReasons.contains(.emptySystemASR))
+    }
+
+    func testPipelineWithUnsupportedSystemFormatFallsBackButSucceedsWithMicASR() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: SystemUnsupportedFormatASREngine(), diarizationEngine: FailingDiarizationEngine())
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("mic".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
+        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        )
+
+        let result = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(result.state, .ready)
+        XCTAssertEqual(result.micASRJSONFile, "mic.asr.json")
+        XCTAssertEqual(result.systemASRJSONFile, "system.asr.json")
+        XCTAssertTrue(result.degradedReasons.contains(.systemASRFailedFallbackUsed))
+        XCTAssertTrue(result.degradedReasons.contains(.emptySystemASR))
+    }
+
+    func testPipelineWithUnsupportedSystemFormatAndMicFailureStillFails() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: UnsupportedFormatAndMicFailASREngine(),
+            diarizationEngine: FailingDiarizationEngine()
+        )
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("mic".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
+        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await pipeline.process(
+                recording: recording,
+                in: temp,
+                runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
+                engineFactory: factory
+            )
+        )
     }
 
     func testProcessDiarizationRunnerParsesValidJSON() async throws {
@@ -418,8 +534,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
         try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
 
         let recording = RecordingSession(
@@ -457,8 +573,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
         try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
 
         let recording = RecordingSession(
@@ -495,8 +611,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
         try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
 
         let recording = RecordingSession(
@@ -530,8 +646,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
         try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
         FileManager.default.createFile(atPath: temp.appendingPathComponent("diarization.bin").path, contents: Data("dmodel".utf8))
 
@@ -612,7 +728,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
         try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
 
         let recording = RecordingSession(
@@ -650,8 +766,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
         try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
 
         let recording = RecordingSession(
@@ -689,8 +805,8 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
         FileManager.default.createFile(atPath: temp.appendingPathComponent("diarization.bin").path, contents: Data("dmodel".utf8))
         try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
 
@@ -951,6 +1067,47 @@ final class TranscriptionPipelineTests: XCTestCase {
                     ASRSegment(id: "mic-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
                 ]
             )
+        }
+    }
+
+    private struct SystemUnsupportedFormatASREngine: ASREngine {
+        var displayName: String { "system-unsupported-format-mock" }
+
+        func transcribe(
+            audioURL: URL,
+            channel: TranscriptChannel,
+            sessionID: UUID,
+            configuration: ASREngineConfiguration
+        ) async throws -> ASRDocument {
+            if channel == .system {
+                throw ASREngineRuntimeError.unsupportedFormat(audioURL)
+            }
+
+            return ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: [
+                    ASRSegment(id: "mic-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
+                ]
+            )
+        }
+    }
+
+    private struct UnsupportedFormatAndMicFailASREngine: ASREngine {
+        var displayName: String { "unsupported-format-and-mic-fail-mock" }
+
+        func transcribe(
+            audioURL: URL,
+            channel: TranscriptChannel,
+            sessionID: UUID,
+            configuration: ASREngineConfiguration
+        ) async throws -> ASRDocument {
+            if channel == .system {
+                throw ASREngineRuntimeError.unsupportedFormat(audioURL)
+            }
+            throw ASREngineRuntimeError.inferenceFailed(message: "mic audio corrupt")
         }
     }
 
