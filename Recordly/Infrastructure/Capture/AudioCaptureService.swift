@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import ApplicationServices
 import ScreenCaptureKit
 
 struct CaptureArtifacts {
@@ -20,6 +21,7 @@ enum AudioCaptureError: LocalizedError {
     case systemAudioUnsupported
     case systemAudioPermissionDenied
     case systemAudioFailedToStart
+    case systemAudioStartupTimeout
     case invalidSystemAudioFile
     case mixdownFailed
     case noScreenToCapture
@@ -44,6 +46,8 @@ enum AudioCaptureError: LocalizedError {
             return "System audio capture permission was denied."
         case .systemAudioFailedToStart:
             return "The system audio recorder could not start."
+        case .systemAudioStartupTimeout:
+            return "System audio capture did not start in time."
         case .invalidSystemAudioFile:
             return "The system audio file was created, but the audio data is invalid or unreadable."
         case .mixdownFailed:
@@ -599,6 +603,10 @@ final class ScreenCaptureAudioService: NSObject {
     private let sampleQueue = DispatchQueue(label: "Recordly.ScreenCaptureSamples", qos: .userInitiated)
     private(set) var microphoneViaStreamEnabled = false
 
+    func hasSystemRecordingPermission() -> Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
     func startCapture(
         onSystemSample: @escaping (CMSampleBuffer) -> Void,
         onMicrophoneSample: @escaping (CMSampleBuffer) -> Void
@@ -665,6 +673,7 @@ final class AudioCaptureService: AudioCaptureEngine {
     private var microphoneLevelValue: Double = 0
     private var systemLevelValue: Double = 0
     private var systemStatusLabelValue = "Idle"
+    private let screenCaptureStartupTimeoutNanos: UInt64 = 2_000_000_000
 
     func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
         guard !isRunning else {
@@ -676,8 +685,7 @@ final class AudioCaptureService: AudioCaptureEngine {
             throw AudioCaptureError.microphonePermissionDenied
         }
 
-        // Do not hard-gate recording on Screen Recording permission here.
-        // If system capture setup fails later, we degrade to mic-only capture.
+        // Preflight system capture permission and degrade to mic-only capture if unavailable.
 
         let sessionID = UUID(uuidString: sessionDirectory.lastPathComponent) ?? UUID()
 
@@ -693,38 +701,49 @@ final class AudioCaptureService: AudioCaptureEngine {
         do {
             try await metadataStore.createSession(id: sessionID, in: sessionDirectory)
             var streamStartError: Error?
-            do {
-                try await screenCaptureService.startCapture(
-                    onSystemSample: { [weak self] sampleBuffer in
-                        guard let self else { return }
-                        Task {
-                            do {
-                                try await sysWriter.append(sampleBuffer: sampleBuffer)
-                                self.systemLevelValue = sampleBuffer.normalizedLevel
-                            } catch {
-                                // Keep recording alive if one buffer fails to convert.
+            var systemCaptureAttempted = false
+
+            if screenCaptureService.hasSystemRecordingPermission() {
+                systemCaptureAttempted = true
+                do {
+                    try await withStartupTimeout { [self] in
+                        try await self.screenCaptureService.startCapture(
+                            onSystemSample: { [weak self] sampleBuffer in
+                                guard let self else { return }
+                                Task {
+                                    do {
+                                        try await sysWriter.append(sampleBuffer: sampleBuffer)
+                                        self.systemLevelValue = sampleBuffer.normalizedLevel
+                                    } catch {
+                                        // Keep recording alive if one buffer fails to convert.
+                                    }
+                                }
+                            },
+                            onMicrophoneSample: { [weak self] sampleBuffer in
+                                guard let self else { return }
+                                Task {
+                                    do {
+                                        try await micWriter.append(sampleBuffer: sampleBuffer)
+                                        self.microphoneLevelValue = sampleBuffer.normalizedLevel
+                                    } catch {
+                                        // Keep recording alive if one buffer fails to convert.
+                                    }
+                                }
                             }
-                        }
-                    },
-                    onMicrophoneSample: { [weak self] sampleBuffer in
-                        guard let self else { return }
-                        Task {
-                            do {
-                                try await micWriter.append(sampleBuffer: sampleBuffer)
-                                self.microphoneLevelValue = sampleBuffer.normalizedLevel
-                            } catch {
-                                // Keep recording alive if one buffer fails to convert.
-                            }
-                        }
+                        )
                     }
-                )
-                systemStatusLabelValue = "Captured"
-            } catch {
-                streamStartError = error
-                systemStatusLabelValue = "Unavailable"
+                    systemStatusLabelValue = "Captured"
+                } catch {
+                    streamStartError = error
+                    systemStatusLabelValue = label(for: error)
+                }
+            } else {
+                streamStartError = AudioCaptureError.systemAudioPermissionDenied
+                systemStatusLabelValue = "Permission denied"
             }
 
-            if streamStartError != nil || !screenCaptureService.microphoneViaStreamEnabled {
+            if streamStartError != nil || !systemCaptureAttempted || !screenCaptureService.microphoneViaStreamEnabled {
+                try? await screenCaptureService.stopCapture()
                 try fallbackMicrophoneRecorder.startRecording(to: microphoneURL)
                 if let streamStartError {
                     try await metadataStore.appendNote(
@@ -763,6 +782,35 @@ final class AudioCaptureService: AudioCaptureEngine {
             self.activeSessionID = nil
             throw error
         }
+    }
+
+    private func withStartupTimeout<T: Sendable>(_ operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            let timeoutNanos = screenCaptureStartupTimeoutNanos
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanos)
+                throw AudioCaptureError.systemAudioStartupTimeout
+            }
+
+            guard let result = try await group.next() else {
+                throw CancellationError()
+            }
+
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private func label(for error: Error) -> String {
+        if let captureError = error as? AudioCaptureError,
+           captureError == .systemAudioPermissionDenied {
+            return "Permission denied"
+        }
+
+        return "Unavailable"
     }
 
     func stopCapture() async throws -> CaptureArtifacts {
@@ -873,6 +921,7 @@ final class AudioCaptureService: AudioCaptureEngine {
             }
         }
     }
+
 }
 
 private extension CMSampleBuffer {
