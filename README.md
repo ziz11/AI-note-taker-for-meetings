@@ -78,3 +78,9 @@ Diarization and summarization models remain local-file based. Common discovery l
 - `docs/inference-context.md` — compact canonical inference context for backend changes and agent prompts
 - `docs/research/diarization-options.md` — diarization backend research (FluidAudio, sherpa-onnx, etc.)
 - `docs/plans/` — completed implementation plans (historical)
+
+## Acknowledgments
+
+Recordly uses [FluidAudio](https://github.com/FluidInference/FluidAudio) for on-device speech recognition.
+
+FluidAudio is developed by FluidInference and licensed under the Apache License 2.0. See `THIRD_PARTY_LICENSES.md` for attribution details.
