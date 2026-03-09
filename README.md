@@ -6,13 +6,15 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 
 - Capture and merge pipeline: functional.
 - Import-audio flow is supported.
-- Model management UI is folder-based and model-kind based (ASR / diarization / summarization).
-- Model source in this build: local model files in model folders (`.bin` for ASR/diarization; `.bin`/`.gguf` for summarization).
-- Inference architecture is now backend-agnostic and stage-driven (`contracts -> runtime profile -> selector/factory -> backend modules`).
-- ASR inference is wired through `whisper-cli` runner in `WhisperCppASREngine` with automatic CAF→WAV conversion.
+- Model management UI supports FluidAudio SDK-managed ASR provisioning and folder-based local models for diarization/summarization.
+- Inference architecture is backend-agnostic and stage-driven (`contracts -> runtime profile -> selector/factory -> backend modules`).
+- ASR inference is FluidAudio-only in this branch. `FluidAudioASREngine` uses the FluidAudio SDK (v3, CoreML-based) and accepts CAF directly.
+- ASR model provisioning is SDK-managed via `FluidAudioModelProvider`. Models are downloaded and cached by the SDK, not picked from local `.bin` files.
+- Legacy ASR preference keys (`selectedASRBackend`, `selectedASRLanguage`) are preserved for migration compatibility only and do not affect active runtime language/backend behavior.
 - Diarization inference is CLI-based (`diarization-main`) via `CliDiarizationEngine` with degraded fallback when model/binary/output is unavailable.
 - Summarization inference is wired through llama.cpp-compatible runner (`main`/`llama-cli`) in `LlamaCppSummarizationEngine`. Falls back to template summary when LLM is unavailable.
 - Per-stage backend switching point is localized in `DefaultInferenceComposition` + `DefaultInferenceEngineFactory`.
+- Whisper / `whisper.cpp` is not part of the active ASR path in this branch.
 
 ## Reliability behavior
 
@@ -28,32 +30,30 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 
 ## Local models setup
 
-1. Place model files on disk (outside app bundle) under `/Users/Shared/RecordlyModels/`.
-2. Build and run app.
-3. Open `Models` (top-right toolbar button).
-4. Select model files for:
-   - `Transcription Model` (required)
-   - `Speaker Separation Model` (optional)
+1. Build and run app.
+2. Open `Models` (top-right toolbar button).
+3. Download the FluidAudio v3 model (one-time, SDK-managed).
+4. Optionally select local model files for:
+   - `Speaker Separation Model` (optional, improves remote speaker labeling)
    - `Summarization Model` (used by LLM summarization when `llama-cli` is available)
-5. Start transcription or summarization.
+5. Start live-recording transcription, imported-audio transcription, or summarization.
 
-`model-registry.json` is still kept for legacy/metadata flow and local install scripts, but active model choice in UI is now folder-based.
+Diarization and summarization models remain local-file based. Common discovery locations include:
 
-Current development source layout:
-
-- `/Users/Shared/RecordlyModels/asr/asr-compact-v1.bin`
-- `/Users/Shared/RecordlyModels/asr/asr-balanced-v1.bin`
 - `/Users/Shared/RecordlyModels/diarization/diarization-enhanced-v1.bin`
 - `/Users/Shared/RecordlyModels/summarization/summarization-compact-v1.bin`
+- `~/Library/Application Support/Recordly/Models/<kind>/<model-id>/model.bin`
+- `~/models/<kind>/`
+- `<repo>/Models/` and `<repo>/models/`
 
 ## Storage locations
 
 - Sessions:
   - `~/Library/Application Support/Recordly/recordings/<session-id>/`
-- Installed models:
-  - `~/Library/Application Support/Recordly/Models/asr/<model-id>/`
-  - `~/Library/Application Support/Recordly/Models/diarization/<model-id>/`
-  - `~/Library/Application Support/Recordly/Models/summarization/<model-id>/`
+- FluidAudio models (SDK-managed):
+  - `~/Library/Application Support/FluidAudio/Models/<version>/`
+- Local models (diarization, summarization):
+  - `~/Library/Application Support/Recordly/Models/<kind>/<model-id>/`
 
 ## Audio format decisions
 
@@ -64,12 +64,11 @@ Current development source layout:
 - `merged-call.caf` is an intermediate merged artifact. The app then exports `merged-call.m4a` for normal playback/export when that export succeeds.
 - Do not switch the internal recording pipeline to `WAV` just to satisfy a downstream tool. If a consumer requires another format, adapt at that integration boundary.
 
-## Whisper / transcription boundary
+## ASR audio boundary
 
-- `whisper.cpp` integration is treated as a boundary adapter, not as the source of truth for capture/storage format decisions.
-- Internal capture remains `CAF + PCM`. `whisper-cli` only supports `wav/flac/mp3/ogg` and silently fails on `.caf` (exit code 0, no output).
-- `ProcessWhisperCppRunner.convertToWAVIfNeeded()` converts `.caf` (and any other unsupported format) to a temporary `16kHz mono WAV` via `afconvert` before invoking whisper-cli, then cleans up the temp file.
-- This keeps capture, offline merge, recovery, and session asset contracts stable while satisfying tool-specific input requirements.
+- FluidAudio SDK accepts CAF files directly. No format conversion is needed at the ASR boundary.
+- Internal capture remains `CAF + PCM`. FluidAudio reads the stored session artifacts as-is.
+- Do not document or reintroduce a `CAF -> WAV -> whisper-cli` path for current ASR behavior.
 
 ## Documentation
 
@@ -79,3 +78,9 @@ Current development source layout:
 - `docs/inference-context.md` — compact canonical inference context for backend changes and agent prompts
 - `docs/research/diarization-options.md` — diarization backend research (FluidAudio, sherpa-onnx, etc.)
 - `docs/plans/` — completed implementation plans (historical)
+
+## Acknowledgments
+
+Recordly uses [FluidAudio](https://github.com/FluidInference/FluidAudio) for on-device speech recognition.
+
+FluidAudio is developed by FluidInference and licensed under the Apache License 2.0. See `THIRD_PARTY_LICENSES.md` for attribution details.

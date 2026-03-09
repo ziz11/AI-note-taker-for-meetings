@@ -37,6 +37,12 @@ enum PipelineDegradationReason: String, Codable, Equatable {
     case captureSystemUnavailable
 }
 
+private enum ASROutcome {
+    case success(ASRDocument?)
+    case systemUnavailableRecovered(ASRDocument)
+    case failure(Error)
+}
+
 struct TranscriptionResult {
     var transcriptFile: String?
     var srtFile: String?
@@ -117,8 +123,7 @@ struct TranscriptionPipeline {
 
         let asrEngine = try engineFactory.makeASREngine(for: runtimeProfile)
         let asrConfiguration = ASREngineConfiguration(
-            modelURL: asrModelURL,
-            language: runtimeProfile.asrLanguage
+            modelURL: asrModelURL
         )
 
         let micASRFile = "mic.asr.json"
@@ -133,7 +138,7 @@ struct TranscriptionPipeline {
         var degradedReasons: [PipelineDegradationReason] = []
 
         await onStateChange?(.transcribingMic)
-        let micASROutcome = await resilientASR(
+        let micASROutcome = await loadOrRunASR(
             asrEngine: asrEngine,
             existingFile: micASRFile,
             modelFingerprintFile: micASRModelFile,
@@ -145,7 +150,7 @@ struct TranscriptionPipeline {
         )
 
         await onStateChange?(.transcribingSystem)
-        let systemASROutcome = await resilientASR(
+        let systemASROutcome = await loadOrRunASR(
             asrEngine: asrEngine,
             existingFile: systemASRFile,
             modelFingerprintFile: systemASRModelFile,
@@ -163,31 +168,45 @@ struct TranscriptionPipeline {
         case let (.success(mic), .success(sys)):
             micDoc = mic
             systemDoc = sys
-            if mic?.segments.isEmpty == true { degradedReasons.append(.emptyMicASR) }
-            if sys?.segments.isEmpty == true { degradedReasons.append(.emptySystemASR) }
+            appendEmptyASRReason(for: mic, isMic: true, to: &degradedReasons)
+            appendEmptyASRReason(for: sys, isMic: false, to: &degradedReasons)
+
+        case let (.success(mic), .systemUnavailableRecovered(sys)):
+            guard let mic else {
+                throw TranscriptionPipelineError.inferenceFailed("System transcription recovered but microphone transcription unavailable.")
+            }
+            micDoc = mic
+            systemDoc = sys
+            degradedReasons.append(.systemASRFailedFallbackUsed)
+            appendEmptyASRReason(for: mic, isMic: true, to: &degradedReasons)
+            appendEmptyASRReason(for: sys, isMic: false, to: &degradedReasons)
 
         case let (.success(mic), .failure(sysError)):
-            if mic != nil {
-                micDoc = mic
-                systemDoc = nil
-                degradedReasons.append(.systemASRFailedFallbackUsed)
-                if mic?.segments.isEmpty == true { degradedReasons.append(.emptyMicASR) }
-            } else {
+            guard let mic else {
                 throw sysError
             }
+            micDoc = mic
+            systemDoc = nil
+            degradedReasons.append(.systemASRFailedFallbackUsed)
+            appendEmptyASRReason(for: mic, isMic: true, to: &degradedReasons)
 
         case let (.failure(micError), .success(sys)):
-            if sys != nil {
-                micDoc = nil
-                systemDoc = sys
-                degradedReasons.append(.micASRFailedFallbackUsed)
-                if sys?.segments.isEmpty == true { degradedReasons.append(.emptySystemASR) }
-            } else {
+            guard let sys else {
                 throw micError
             }
+            micDoc = nil
+            systemDoc = sys
+            degradedReasons.append(.micASRFailedFallbackUsed)
+            appendEmptyASRReason(for: sys, isMic: false, to: &degradedReasons)
 
-        case let (.failure(micError), .failure):
+        case let (.failure(micError), .failure(_)):
             throw micError
+
+        case let (.failure(micError), .systemUnavailableRecovered(_)):
+            throw micError
+
+        case (.systemUnavailableRecovered, _):
+            throw TranscriptionPipelineError.inferenceFailed("Microphone ASR failed while loading.")
         }
 
         let diarizationEngine: (any DiarizationEngine)?
@@ -318,33 +337,6 @@ struct TranscriptionPipeline {
         )
     }
 
-    private func resilientASR(
-        asrEngine: any ASREngine,
-        existingFile: String,
-        modelFingerprintFile: String,
-        channel: TranscriptChannel,
-        preferredAudioURL: URL?,
-        sessionID: UUID,
-        sessionDirectory: URL,
-        configuration: ASREngineConfiguration
-    ) async -> Result<ASRDocument?, Error> {
-        do {
-            let doc = try await loadOrRunASR(
-                asrEngine: asrEngine,
-                existingFile: existingFile,
-                modelFingerprintFile: modelFingerprintFile,
-                channel: channel,
-                preferredAudioURL: preferredAudioURL,
-                sessionID: sessionID,
-                sessionDirectory: sessionDirectory,
-                configuration: configuration
-            )
-            return .success(doc)
-        } catch {
-            return .failure(error)
-        }
-    }
-
     private func loadOrRunASR(
         asrEngine: any ASREngine,
         existingFile: String,
@@ -354,21 +346,42 @@ struct TranscriptionPipeline {
         sessionID: UUID,
         sessionDirectory: URL,
         configuration: ASREngineConfiguration
-    ) async throws -> ASRDocument? {
+    ) async -> ASROutcome {
         let destination = sessionDirectory.appendingPathComponent(existingFile)
         let fingerprintURL = sessionDirectory.appendingPathComponent(modelFingerprintFile)
         let currentFingerprint = asrEngine.cacheFingerprint(configuration: configuration)
-        let existing: ASRDocument? = try readJSONIfExists(from: destination)
+        let existing: ASRDocument?
+        let storedFingerprint: String?
 
-        if let existing, let storedFingerprint = try readTextIfExists(from: fingerprintURL), storedFingerprint == currentFingerprint {
-            return existing
+        do {
+            existing = try readJSONIfExists(from: destination)
+            storedFingerprint = try readTextIfExists(from: fingerprintURL)
+        } catch {
+            return .failure(error)
+        }
+
+        if let existing, let storedFingerprint, storedFingerprint == currentFingerprint {
+            return .success(existing)
         }
 
         guard let preferredAudioURL else {
-            return existing
+            return .success(existing)
         }
 
         do {
+            if channel == .system {
+                let isZeroByte = try isZeroByteAudioFile(preferredAudioURL)
+                if isZeroByte {
+                return attemptSystemRecovery(
+                    sessionID: sessionID,
+                    channel: channel,
+                    destination: destination,
+                    modelFingerprintURL: fingerprintURL,
+                    currentFingerprint: currentFingerprint
+                )
+                }
+            }
+
             let document = try await asrEngine.transcribe(
                 audioURL: preferredAudioURL,
                 channel: channel,
@@ -378,32 +391,90 @@ struct TranscriptionPipeline {
 
             try writeJSON(document, to: destination)
             try currentFingerprint.write(to: fingerprintURL, atomically: true, encoding: .utf8)
-            return document
+            return .success(document)
         } catch let error as ASREngineRuntimeError {
+            if let recovered = recoverableSystemASRFailure(
+                error: error,
+                channel: channel,
+                sessionID: sessionID,
+                destination: destination,
+                modelFingerprintURL: fingerprintURL,
+                currentFingerprint: currentFingerprint
+            ) {
+                return recovered
+            }
+
             switch error {
             case .modelMissing:
-                throw TranscriptionPipelineError.modelMissing
+                return .failure(TranscriptionPipelineError.modelMissing)
             case .inferenceFailed(let message):
-                if channel == .system, isSystemAudioUnavailableError(message) {
-                    let emptyDocument = ASRDocument(
-                        version: 1,
-                        sessionID: sessionID,
-                        channel: .system,
-                        createdAt: Date(),
-                        segments: []
-                    )
-                    try writeJSON(emptyDocument, to: destination)
-                    try currentFingerprint.write(to: fingerprintURL, atomically: true, encoding: .utf8)
-                    return emptyDocument
-                }
-                throw TranscriptionPipelineError.inferenceFailed(message)
+                return .failure(TranscriptionPipelineError.inferenceFailed(message))
             case .unsupportedFormat:
-                throw TranscriptionPipelineError.unsupportedFormat
+                return .failure(TranscriptionPipelineError.unsupportedFormat)
             case .outputParseFailed:
-                throw TranscriptionPipelineError.outputParseFailed
+                return .failure(TranscriptionPipelineError.outputParseFailed)
             case .cancelled:
-                throw TranscriptionPipelineError.cancelled
+                return .failure(TranscriptionPipelineError.cancelled)
             }
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func appendEmptyASRReason(for document: ASRDocument?, isMic: Bool, to reasons: inout [PipelineDegradationReason]) {
+        if document?.segments.isEmpty == true {
+            reasons.append(isMic ? .emptyMicASR : .emptySystemASR)
+        }
+    }
+
+    private func attemptSystemRecovery(
+        sessionID: UUID,
+        channel: TranscriptChannel,
+        destination: URL,
+        modelFingerprintURL: URL,
+        currentFingerprint: String
+    ) -> ASROutcome {
+        do {
+            let document = try emitRecoveredSystemASR(
+                sessionID: sessionID,
+                channel: channel,
+                destination: destination,
+                modelFingerprintURL: modelFingerprintURL,
+                currentFingerprint: currentFingerprint
+            )
+            return .systemUnavailableRecovered(document)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func recoverableSystemASRFailure(
+        error: ASREngineRuntimeError,
+        channel: TranscriptChannel,
+        sessionID: UUID,
+        destination: URL,
+        modelFingerprintURL: URL,
+        currentFingerprint: String
+    ) -> ASROutcome? {
+        switch error {
+        case .inferenceFailed(let message) where channel == .system && isRecoverableSystemInferenceFailure(message):
+            return attemptSystemRecovery(
+                sessionID: sessionID,
+                channel: channel,
+                destination: destination,
+                modelFingerprintURL: modelFingerprintURL,
+                currentFingerprint: currentFingerprint
+            )
+        case .unsupportedFormat where channel == .system:
+            return attemptSystemRecovery(
+                sessionID: sessionID,
+                channel: channel,
+                destination: destination,
+                modelFingerprintURL: modelFingerprintURL,
+                currentFingerprint: currentFingerprint
+            )
+        default:
+            return nil
         }
     }
 
@@ -438,7 +509,7 @@ struct TranscriptionPipeline {
             return DiarizationLoadOutcome(document: nil, degradedReason: "system audio track missing", modelUsed: nil)
         }
 
-        guard systemAudioURL.lastPathComponent == "system.raw.caf" else {
+        guard ["system.raw.caf", "system.raw.flac"].contains(systemAudioURL.lastPathComponent) else {
             return DiarizationLoadOutcome(document: nil, degradedReason: "unsupported system audio source", modelUsed: nil)
         }
 
@@ -517,5 +588,38 @@ struct TranscriptionPipeline {
         return normalized.contains("failed to read the frames of the audio data")
             || normalized.contains("failed to read audio file")
             || normalized.contains("invalid argument")
+    }
+
+    private func isRecoverableSystemInferenceFailure(_ message: String) -> Bool {
+        if isSystemAudioUnavailableError(message) {
+            return true
+        }
+        return message
+            .lowercased()
+            .contains("input audio format is not supported")
+    }
+
+    private func isZeroByteAudioFile(_ url: URL) throws -> Bool {
+        let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey])
+        return (resourceValues.fileSize ?? 0) == 0
+    }
+
+    private func emitRecoveredSystemASR(
+        sessionID: UUID,
+        channel: TranscriptChannel,
+        destination: URL,
+        modelFingerprintURL: URL,
+        currentFingerprint: String
+    ) throws -> ASRDocument {
+        let emptyDocument = ASRDocument(
+            version: 1,
+            sessionID: sessionID,
+            channel: channel,
+            createdAt: Date(),
+            segments: []
+        )
+        try writeJSON(emptyDocument, to: destination)
+        try currentFingerprint.write(to: modelFingerprintURL, atomically: true, encoding: .utf8)
+        return emptyDocument
     }
 }

@@ -10,7 +10,6 @@ enum InferenceStage: String, CaseIterable, Sendable {
 
 enum InferenceBackend: String, Equatable, Sendable {
     case nativeCapture
-    case whisperCpp
     case cliDiarization
     case llamaCpp
     case fluidAudio
@@ -32,7 +31,7 @@ struct StageRuntimeSelection: Equatable, Sendable {
         StageRuntimeSelection(
             stageBackends: [
                 .audioCapture: .nativeCapture,
-                .asr: .whisperCpp,
+                .asr: .fluidAudio,
                 .diarization: .cliDiarization,
                 .summarization: .llamaCpp,
                 .vad: .disabled
@@ -64,6 +63,5 @@ struct InferenceModelArtifacts: Equatable, Sendable {
 struct InferenceRuntimeProfile: Equatable, Sendable {
     var stageSelection: StageRuntimeSelection
     var modelArtifacts: InferenceModelArtifacts
-    var asrLanguage: ASRLanguage
     var summarizationRuntimeSettings: SummarizationRuntimeSettings
 }

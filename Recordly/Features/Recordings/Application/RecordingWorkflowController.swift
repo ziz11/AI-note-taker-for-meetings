@@ -11,8 +11,6 @@ enum RecordingWorkflowError: LocalizedError {
             return "No transcript is available for this recording yet."
         case let .transcriptionUnavailable(availability):
             switch availability {
-            case .requiresASRModel:
-                return "Required ASR model is not installed."
             case .degradedNoDiarization:
                 return "Transcription can run, but diarization package is missing."
             case let .unavailable(reason):
@@ -465,7 +463,7 @@ final class RecordingWorkflowController {
         let sessionDirectory = try repository.sessionDirectory(for: recording.id)
         let availability = runtimeProfileSelector.transcriptionAvailability(for: selectedModelProfile)
         switch availability {
-        case .requiresASRModel, .unavailable:
+        case .unavailable:
             throw RecordingWorkflowError.transcriptionUnavailable(availability)
         case .ready, .degradedNoDiarization:
             break
@@ -476,8 +474,8 @@ final class RecordingWorkflowController {
             runtimeProfile = try runtimeProfileSelector.resolveTranscriptionProfile(for: selectedModelProfile)
         } catch let error as InferenceRuntimeProfileError {
             switch error {
-            case .missingASRModel:
-                throw RecordingWorkflowError.transcriptionUnavailable(.requiresASRModel(profileOptions: ModelProfile.allCases))
+            case .missingFluidAudioModel, .fluidAudioProvisioningFailed, .invalidFluidAudioModel:
+                throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
             case .missingSummarizationModel:
                 throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
             }

@@ -652,7 +652,8 @@ final class RecordingsStoreSummarizationTests: XCTestCase {
                 projectDirectories: { [] }
             )
         )
-        let composition = DefaultInferenceComposition.make(modelManager: modelManager)
+        let fluidProvider = FluidAudioModelProvider()
+        let composition = DefaultInferenceComposition.make(modelManager: modelManager, fluidAudioModelProvider: fluidProvider)
         let store = RecordingsStore(
             audioCaptureEngine: composition.audioCaptureEngine,
             transcriptionPipeline: TranscriptionPipeline(),
@@ -660,6 +661,7 @@ final class RecordingsStoreSummarizationTests: XCTestCase {
             inferenceEngineFactory: composition.engineFactory,
             transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
             modelManager: modelManager,
+            fluidAudioModelProvider: fluidProvider,
             repository: repository,
             previewMode: false
         )
@@ -728,7 +730,7 @@ final class SummaryIsolationTests: XCTestCase {
                 projectDirectories: { [] }
             )
         )
-        let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(modelManager: modelManager)
+        let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(modelManager: modelManager, fluidAudioModelProvider: FluidAudioModelProvider())
 
         let workflow = RecordingWorkflowController(
             audioCaptureEngine: AudioCaptureService(),
@@ -741,7 +743,6 @@ final class SummaryIsolationTests: XCTestCase {
         let updated = try await workflow.summarize(recording: recording)
 
         XCTAssertEqual(updated.assets.summaryFile, "summary.md")
-        XCTAssertNotEqual(updated.lifecycleState, .failed)
         XCTAssertEqual(updated.lifecycleState, .ready)
         XCTAssertNotNil(repository.summaryText(for: updated))
     }
@@ -944,7 +945,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         summarizationEngine: any SummarizationEngine,
         summarizationTimeoutSeconds: UInt64
     ) -> RecordingWorkflowController {
-        let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(modelManager: modelManager)
+        let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(modelManager: modelManager, fluidAudioModelProvider: FluidAudioModelProvider())
         let engineFactory = TestInferenceEngineFactory(summarizationEngine: summarizationEngine)
         return RecordingWorkflowController(
             audioCaptureEngine: AudioCaptureService(),
@@ -1107,6 +1108,19 @@ final class ModelPreferencesStoreTests: XCTestCase {
 
         let reloadedStore = ModelPreferencesStore(defaults: defaults)
         XCTAssertEqual(reloadedStore.summarizationRuntimeSettings, expected)
+    }
+
+    func testNormalizesLegacyASRPreferencesToFluidAuto() {
+        let suiteName = "ModelPreferencesStoreTests-asr-legacy-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set("whisperCpp", forKey: "model.selectedASRBackend")
+        defaults.set("ru", forKey: "model.selectedASRLanguage")
+
+        _ = ModelPreferencesStore(defaults: defaults)
+
+        XCTAssertEqual(defaults.string(forKey: "model.selectedASRBackend"), "fluidAudio")
+        XCTAssertEqual(defaults.string(forKey: "model.selectedASRLanguage"), "auto")
     }
 }
 

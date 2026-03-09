@@ -1,7 +1,41 @@
+import AVFoundation
 import Foundation
 
-protocol FluidAudioRunner {
-    func transcribe(audioURL: URL, modelURL: URL) async throws -> FluidAudioRunnerOutput
+#if arch(arm64) && canImport(FluidAudio)
+import FluidAudio
+#endif
+
+// MARK: - Model validation
+
+/// Validates that a local directory contains the required CoreML bundles for FluidAudio v3.
+struct FluidAudioModelValidator {
+    static let requiredMarkers: [String] = [
+        "parakeet_vocab.json",
+        "Preprocessor.mlmodelc",
+        "Encoder.mlmodelc",
+        "Decoder.mlmodelc",
+        "JointDecision.mlmodelc"
+    ]
+
+    static func isValidModelDirectory(_ modelDirectoryURL: URL, fileManager: FileManager = .default) -> Bool {
+        guard let values = try? modelDirectoryURL.resourceValues(forKeys: [.isDirectoryKey]),
+              values.isDirectory == true,
+              fileManager.fileExists(atPath: modelDirectoryURL.path) else {
+            return false
+        }
+
+        return requiredMarkers.allSatisfy { marker in
+            fileManager.fileExists(atPath: modelDirectoryURL.appendingPathComponent(marker).path)
+        }
+    }
+
+    static func validateModelDirectory(_ modelDirectoryURL: URL, fileManager: FileManager = .default) throws {
+        guard isValidModelDirectory(modelDirectoryURL, fileManager: fileManager) else {
+            throw ASREngineRuntimeError.inferenceFailed(
+                message: "FluidAudio model directory is invalid. Expected staged assets: \(requiredMarkers.joined(separator: ", "))"
+            )
+        }
+    }
 }
 
 struct FluidAudioRunnerOutput {
@@ -18,253 +52,230 @@ struct FluidAudioSegment {
     var words: [ASRWord]?
 }
 
-struct ProcessFluidAudioRunner: FluidAudioRunner {
-    private let fileManager: FileManager
-    private let processExecutor: FluidAudioProcessExecutor
-    private let temporaryDirectory: URL
-    private let environment: [String: String]
-    private let resolveBinaryURL: () throws -> URL
-    private let outputBaseURLFactory: () -> URL
+// MARK: - Audio input boundary
 
-    init(
-        fileManager: FileManager = .default,
-        processExecutor: FluidAudioProcessExecutor = FoundationFluidAudioProcessExecutor(),
-        temporaryDirectory: URL = FileManager.default.temporaryDirectory,
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        resolveBinaryURL: (() throws -> URL)? = nil,
-        outputBaseURLFactory: (() -> URL)? = nil
-    ) {
-        self.fileManager = fileManager
-        self.processExecutor = processExecutor
-        self.temporaryDirectory = temporaryDirectory
-        self.environment = environment
-        self.resolveBinaryURL = resolveBinaryURL ?? {
-            try Self.resolveFluidAudioBinaryURL(
-                fileManager: fileManager,
-                environment: environment
-            )
-        }
-        self.outputBaseURLFactory = outputBaseURLFactory ?? {
-            temporaryDirectory.appendingPathComponent("fluidaudio-output-\(UUID().uuidString)")
-        }
-    }
+protocol FluidAudioInputPreparing {
+    func prepareInput(from audioURL: URL) throws -> AVAudioPCMBuffer
+}
 
-    func transcribe(audioURL: URL, modelURL: URL) async throws -> FluidAudioRunnerOutput {
-        let binaryURL = try resolveBinaryURL()
-        let outputBaseURL = outputBaseURLFactory()
-        let outputJSONURL = outputBaseURL.appendingPathExtension("json")
-
-        let effectiveAudioURL = try convertToWAVIfNeeded(audioURL)
-        let shouldCleanupConverted = (effectiveAudioURL != audioURL)
-
-        defer {
-            if shouldCleanupConverted {
-                try? fileManager.removeItem(at: effectiveAudioURL)
+/// Backend-local boundary that decodes session/import artifacts into Float32 non-interleaved PCM.
+struct FluidAudioInputPreparer: FluidAudioInputPreparing {
+    func prepareInput(from audioURL: URL) throws -> AVAudioPCMBuffer {
+        do {
+            let audioFile = try AVAudioFile(forReading: audioURL)
+            let fileLength = audioFile.length
+            guard fileLength > 0 else {
+                throw ASREngineRuntimeError.unsupportedFormat(audioURL)
             }
+
+            guard fileLength <= AVAudioFramePosition(UInt32.max),
+                  let sourceBuffer = AVAudioPCMBuffer(
+                      pcmFormat: audioFile.processingFormat,
+                      frameCapacity: AVAudioFrameCount(fileLength)
+                  ) else {
+                throw ASREngineRuntimeError.unsupportedFormat(audioURL)
+            }
+
+            try audioFile.read(into: sourceBuffer)
+            guard sourceBuffer.frameLength > 0 else {
+                throw ASREngineRuntimeError.unsupportedFormat(audioURL)
+            }
+
+            return try convertIfNeeded(sourceBuffer, audioURL: audioURL)
+        } catch let error as ASREngineRuntimeError {
+            throw error
+        } catch {
+            throw ASREngineRuntimeError.unsupportedFormat(audioURL)
         }
-
-        let args = [
-            "transcribe",
-            effectiveAudioURL.path,
-            "--model-path", modelURL.path,
-            "--output-json",
-            "--output-file", outputBaseURL.path
-        ]
-
-        let result = try await processExecutor.run(executableURL: binaryURL, arguments: args)
-        guard result.exitCode == 0 else {
-            throw ASREngineRuntimeError.inferenceFailed(
-                message: result.stderr.isEmpty ? "exit code \(result.exitCode)" : result.stderr
-            )
-        }
-
-        guard fileManager.fileExists(atPath: outputJSONURL.path) else {
-            let detail = result.stderr.isEmpty ? "" : " stderr: \(result.stderr)"
-            throw ASREngineRuntimeError.inferenceFailed(
-                message: "fluidaudio produced no output file for \(effectiveAudioURL.lastPathComponent).\(detail)"
-            )
-        }
-
-        let data = try Data(contentsOf: outputJSONURL)
-        try? fileManager.removeItem(at: outputJSONURL)
-
-        return try parseFluidAudioJSONOutput(data)
     }
 
-    private func convertToWAVIfNeeded(_ audioURL: URL) throws -> URL {
-        let ext = audioURL.pathExtension.lowercased()
-        if ext == "wav" {
-            return audioURL
+    private func convertIfNeeded(
+        _ inputBuffer: AVAudioPCMBuffer,
+        audioURL: URL
+    ) throws -> AVAudioPCMBuffer {
+        let inputFormat = inputBuffer.format
+
+        guard let decodeFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: inputFormat.sampleRate,
+            channels: inputFormat.channelCount,
+            interleaved: false
+        ) else {
+            throw ASREngineRuntimeError.unsupportedFormat(audioURL)
         }
 
-        let wavURL = temporaryDirectory.appendingPathComponent("fluidaudio-input-\(UUID().uuidString).wav")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/afconvert")
-        process.arguments = [
-            "-f", "WAVE",
-            "-d", "LEI16@16000",
-            "-c", "1",
-            audioURL.path,
-            wavURL.path
-        ]
-
-        let stderrPipe = Pipe()
-        process.standardError = stderrPipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            throw ASREngineRuntimeError.inferenceFailed(
-                message: "Failed to convert \(audioURL.lastPathComponent) to WAV: \(stderr)"
-            )
+        if inputFormat.sampleRate == decodeFormat.sampleRate,
+           inputFormat.channelCount == decodeFormat.channelCount,
+           inputFormat.commonFormat == decodeFormat.commonFormat,
+           inputFormat.isInterleaved == decodeFormat.isInterleaved {
+            return inputBuffer
         }
 
-        guard fileManager.fileExists(atPath: wavURL.path) else {
-            throw ASREngineRuntimeError.inferenceFailed(
-                message: "Audio conversion produced no output for \(audioURL.lastPathComponent)"
-            )
+        guard let converter = AVAudioConverter(from: inputFormat, to: decodeFormat) else {
+            throw ASREngineRuntimeError.unsupportedFormat(audioURL)
         }
 
-        return wavURL
+        let ratio = decodeFormat.sampleRate / max(inputFormat.sampleRate, 1)
+        let estimatedCapacity = AVAudioFrameCount((Double(inputBuffer.frameLength) * ratio).rounded(.up))
+        guard let outputBuffer = AVAudioPCMBuffer(
+            pcmFormat: decodeFormat,
+            frameCapacity: max(estimatedCapacity, 1)
+        ) else {
+            throw ASREngineRuntimeError.unsupportedFormat(audioURL)
+        }
+
+        var conversionError: NSError?
+        var didProvideInput = false
+        let status = converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
+            if didProvideInput {
+                outStatus.pointee = .endOfStream
+                return nil
+            }
+
+            didProvideInput = true
+            outStatus.pointee = .haveData
+            return inputBuffer
+        }
+
+        guard status != .error,
+              conversionError == nil,
+              outputBuffer.frameLength > 0 else {
+            throw ASREngineRuntimeError.unsupportedFormat(audioURL)
+        }
+
+        return outputBuffer
     }
+}
 
-    private static func resolveFluidAudioBinaryURL(
-        fileManager: FileManager,
-        environment: [String: String]
-    ) throws -> URL {
-        let binaryName = "fluidaudio"
-        var candidateURLs: [URL] = []
+// MARK: - Transcription runner
 
-        if let resourceURL = Bundle.main.resourceURL {
-            candidateURLs.append(resourceURL.appendingPathComponent("Binaries/\(binaryName)"))
-            candidateURLs.append(resourceURL.appendingPathComponent(binaryName))
-        }
+protocol FluidAudioTranscribing {
+    func transcribe(
+        audioBuffer: AVAudioPCMBuffer,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput
+}
 
-        candidateURLs.append(contentsOf: [
-            "/usr/local/bin",
-            "/opt/homebrew/bin"
-        ].map { URL(fileURLWithPath: $0).appendingPathComponent(binaryName) })
+/// Wraps the FluidAudio SDK's AsrManager. Caches the manager instance per model path
+/// to avoid reloading CoreML models across sequential channel transcriptions.
+final class FluidAudioTranscriber: FluidAudioTranscribing {
+#if arch(arm64) && canImport(FluidAudio)
+    private var cachedManager: AsrManager?
+    private var cachedModelPath: String?
+#endif
 
-        if let path = environment["PATH"], !path.isEmpty {
-            let directories = path.split(separator: ":").map(String.init)
-            candidateURLs.append(contentsOf: directories.map { directory in
-                URL(fileURLWithPath: directory).appendingPathComponent(binaryName)
-            })
-        }
-
-        for candidate in candidateURLs where fileManager.isExecutableFile(atPath: candidate.path) {
-            return candidate
-        }
-
+    func transcribe(
+        audioBuffer: AVAudioPCMBuffer,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput {
+#if arch(arm64) && canImport(FluidAudio)
+        let manager = try await resolveManager(for: modelDirectoryURL)
+        let source = fluidSource(for: channel)
+        let rawResult = try await manager.transcribe(audioBuffer, source: source)
+        return mapResult(rawResult)
+#else
         throw ASREngineRuntimeError.inferenceFailed(
-            message: "fluidaudio binary not found (looked in app resources, Homebrew paths, and PATH)"
+            message: "FluidAudio SDK is not available. Add the FluidAudio Swift Package to Recordly target."
+        )
+#endif
+    }
+
+#if arch(arm64) && canImport(FluidAudio)
+    private func resolveManager(for modelDirectoryURL: URL) async throws -> AsrManager {
+        let modelPath = modelDirectoryURL.standardizedFileURL.path
+        if let manager = cachedManager, cachedModelPath == modelPath {
+            return manager
+        }
+        let models = try await AsrModels.load(from: modelDirectoryURL, configuration: nil, version: .v3)
+        let manager = AsrManager(config: .default)
+        try await manager.initialize(models: models)
+        cachedManager = manager
+        cachedModelPath = modelPath
+        return manager
+    }
+
+    private func fluidSource(for channel: TranscriptChannel) -> AudioSource {
+        switch channel {
+        case .system:
+            return .system
+        case .mic:
+            return .microphone
+        }
+    }
+
+    /// Maps SDK result into a single segment. FluidAudio v3 returns one contiguous result per file.
+    private func mapResult(_ result: ASRResult) -> FluidAudioRunnerOutput {
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let confidence = Double(result.confidence)
+        let words = mapTokenTimings(result.tokenTimings)
+        let startMs = words.map(\.startMs).min() ?? 0
+        let endMs = max(words.map(\.endMs).max() ?? (startMs + 1), startMs + 1)
+
+        guard !text.isEmpty else {
+            return FluidAudioRunnerOutput(language: nil, segments: [])
+        }
+
+        return FluidAudioRunnerOutput(
+            language: nil,
+            segments: [
+                FluidAudioSegment(
+                    id: "seg-1",
+                    startMs: startMs,
+                    endMs: endMs,
+                    text: text,
+                    confidence: confidence,
+                    words: words.isEmpty ? nil : words
+                )
+            ]
         )
     }
 
-    private func parseFluidAudioJSONOutput(_ data: Data) throws -> FluidAudioRunnerOutput {
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ASREngineRuntimeError.outputParseFailed
-        }
+    private func mapTokenTimings(_ timings: [TokenTiming]?) -> [ASRWord] {
+        guard let timings else { return [] }
 
-        let language = root["language"] as? String
-        let transcription = root["transcription"] as? [[String: Any]]
-            ?? root["segments"] as? [[String: Any]]
-            ?? []
+        return timings.compactMap { timing in
+            let cleanedToken = timing.token.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanedToken.isEmpty else { return nil }
 
-        let segments: [FluidAudioSegment] = transcription.enumerated().compactMap { index, item in
-            let text = (item["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !text.isEmpty else { return nil }
+            let startMs = max(0, Int(timing.startTime * 1_000))
+            let endMs = max(Int(timing.endTime * 1_000), startMs + 1)
 
-            let offsets = item["offsets"] as? [String: Any]
-            let start = (offsets?["from"] as? NSNumber)?.intValue
-                ?? (item["start_ms"] as? NSNumber)?.intValue
-                ?? (item["startMs"] as? NSNumber)?.intValue
-                ?? 0
-            let end = (offsets?["to"] as? NSNumber)?.intValue
-                ?? (item["end_ms"] as? NSNumber)?.intValue
-                ?? (item["endMs"] as? NSNumber)?.intValue
-                ?? max(start + 1, start)
-
-            return FluidAudioSegment(
-                id: "seg-\(index + 1)",
-                startMs: max(0, start),
-                endMs: max(start + 1, end),
-                text: text,
-                confidence: item["confidence"] as? Double,
-                words: nil
+            return ASRWord(
+                word: cleanedToken,
+                startMs: startMs,
+                endMs: endMs,
+                confidence: Double(timing.confidence)
             )
         }
-
-        guard !segments.isEmpty else {
-            throw ASREngineRuntimeError.outputParseFailed
-        }
-
-        return FluidAudioRunnerOutput(language: language, segments: segments)
     }
+#endif
 }
 
-protocol FluidAudioProcessExecutor {
-    func run(executableURL: URL, arguments: [String]) async throws -> FluidAudioProcessResult
-}
+// MARK: - ASR engine
 
-struct FluidAudioProcessResult {
-    var exitCode: Int32
-    var stdout: String
-    var stderr: String
-}
-
-struct FoundationFluidAudioProcessExecutor: FluidAudioProcessExecutor {
-    func run(executableURL: URL, arguments: [String]) async throws -> FluidAudioProcessResult {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                process.executableURL = executableURL
-                process.arguments = arguments
-
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-
-                    let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                    let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                    let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-                    let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-
-                    continuation.resume(returning: FluidAudioProcessResult(
-                        exitCode: process.terminationStatus,
-                        stdout: stdout,
-                        stderr: stderr
-                    ))
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
-    }
-}
-
+/// Primary ASR backend. Decodes artifacts to in-memory PCM before invoking FluidAudio.
 struct FluidAudioASREngine: ASREngine {
     let displayName: String = "FluidAudio"
-    private let runnerFactory: () -> FluidAudioRunner
 
-    init(runner: FluidAudioRunner? = nil) {
-        if let runner {
-            self.runnerFactory = { runner }
-        } else {
-            self.runnerFactory = { ProcessFluidAudioRunner() }
-        }
+    private let transcriber: FluidAudioTranscribing
+    private let inputPreparer: FluidAudioInputPreparing
+    private let fileManager: FileManager
+
+    init(
+        transcriber: FluidAudioTranscribing = FluidAudioTranscriber(),
+        inputPreparer: FluidAudioInputPreparing = FluidAudioInputPreparer(),
+        fileManager: FileManager = .default
+    ) {
+        self.transcriber = transcriber
+        self.inputPreparer = inputPreparer
+        self.fileManager = fileManager
     }
 
     func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
         let modelPath = configuration.modelURL.standardizedFileURL.path
-        return "\(modelPath)|fluidaudio"
+        return "\(modelPath)|backend:fluidaudio|v3"
     }
 
     func transcribe(
@@ -277,21 +288,23 @@ struct FluidAudioASREngine: ASREngine {
             throw ASREngineRuntimeError.cancelled
         }
 
-        guard FileManager.default.fileExists(atPath: audioURL.path) else {
+        guard fileManager.fileExists(atPath: audioURL.path) else {
             throw CocoaError(.fileNoSuchFile)
         }
-        guard FileManager.default.fileExists(atPath: configuration.modelURL.path) else {
+
+        guard fileManager.fileExists(atPath: configuration.modelURL.path) else {
             throw ASREngineRuntimeError.modelMissing(configuration.modelURL)
         }
 
-        let supportedExtensions: Set<String> = ["caf", "wav", "mp3", "m4a", "flac", "ogg"]
-        let ext = audioURL.pathExtension.lowercased()
-        guard supportedExtensions.contains(ext) else {
-            throw ASREngineRuntimeError.unsupportedFormat(audioURL)
-        }
+        try FluidAudioModelValidator.validateModelDirectory(configuration.modelURL, fileManager: fileManager)
 
-        let runner = runnerFactory()
-        let output = try await runner.transcribe(audioURL: audioURL, modelURL: configuration.modelURL)
+        let inputBuffer = try inputPreparer.prepareInput(from: audioURL)
+
+        let output = try await transcriber.transcribe(
+            audioBuffer: inputBuffer,
+            modelDirectoryURL: configuration.modelURL,
+            channel: channel
+        )
 
         if Task.isCancelled {
             throw ASREngineRuntimeError.cancelled

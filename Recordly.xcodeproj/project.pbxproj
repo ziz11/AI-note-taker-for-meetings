@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FA1000012F0A000000000001 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = FA1000022F0A000000000001 /* FluidAudio */; };
+		FA1000112F0A000000000001 /* FluidAudioASREngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */; };
 		F0DC2B834E4BE6EFD06B9228 /* SummaryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18F73A72E7F344B6A8F1F3DD /* SummaryEngine.swift */; };
 		15CD5138FCA0BCCED1F11FA5 /* SummaryPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395881AA0C8D023430EC50AE /* SummaryPromptBuilder.swift */; };
 		36C8D91020D0987C43326380 /* SummaryOutputParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD717C9D72DB2D702C5C541E /* SummaryOutputParser.swift */; };
@@ -21,8 +23,8 @@
 		49F43926E87A51AB075E490E /* TranscriptRenderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83340338D9A97D1FCCE50966 /* TranscriptRenderService.swift */; };
 		6C21B2A77926FB977C286632 /* TranscriptionPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */; };
 		8754BE5E6A83DDC122A462CC /* ASRDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE471CED942092CB3514DA68 /* ASRDocument.swift */; };
-		894C4B7F338F3AA85AAE8A44 /* WhisperCppASREngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D591A145B4A823FA9F0337 /* WhisperCppASREngine.swift */; };
 		8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */; };
+		FA2000012F0B000000000001 /* FluidAudioModelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA2000022F0B000000000001 /* FluidAudioModelProvider.swift */; };
 		8A1000012D82A10000A13B02 /* ModelTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000112D82A10000A13B02 /* ModelTypes.swift */; };
 		8A1000022D82A10000A13B02 /* ModelRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000122D82A10000A13B02 /* ModelRegistry.swift */; };
 		8A1000032D82A10000A13B02 /* ModelStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000132D82A10000A13B02 /* ModelStorage.swift */; };
@@ -97,8 +99,8 @@
 		458D7BF2780B07D4DABC985A /* TranscriptMergeServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TranscriptMergeServiceTests.swift; path = TranscriptMergeServiceTests.swift; sourceTree = "<group>"; };
 		74AC31327248529A315C55DE /* RecordingSessionCompatibilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RecordingSessionCompatibilityTests.swift; path = RecordingSessionCompatibilityTests.swift; sourceTree = "<group>"; };
 		83340338D9A97D1FCCE50966 /* TranscriptRenderService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscriptRenderService.swift; sourceTree = "<group>"; };
-		86D591A145B4A823FA9F0337 /* WhisperCppASREngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ../Inference/Backends/WhisperCpp/WhisperCppASREngine.swift; sourceTree = "<group>"; };
 		A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioASREngine.swift; sourceTree = "<group>"; };
+		FA2000022F0B000000000001 /* FluidAudioModelProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioModelProvider.swift; sourceTree = "<group>"; };
 		8A1000112D82A10000A13B02 /* ModelTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTypes.swift; sourceTree = "<group>"; };
 		8A1000122D82A10000A13B02 /* ModelRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelRegistry.swift; sourceTree = "<group>"; };
 		8A1000132D82A10000A13B02 /* ModelStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelStorage.swift; sourceTree = "<group>"; };
@@ -120,6 +122,7 @@
 		AA1001012EBC1D6F00000001 /* DefaultInferenceRuntimeProfileSelectorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DefaultInferenceRuntimeProfileSelectorTests.swift; sourceTree = "<group>"; };
 		AA1001022EBC1D6F00000001 /* DefaultInferenceEngineFactoryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DefaultInferenceEngineFactoryTests.swift; sourceTree = "<group>"; };
 		AA1001032EBC1D6F00000001 /* AudioInputAdapterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AudioInputAdapterTests.swift; sourceTree = "<group>"; };
+		FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FluidAudioASREngineTests.swift; sourceTree = "<group>"; };
 		9C41A2112D82A10000A13B02 /* Recordly.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recordly.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9C41A2202D82A10000A13B02 /* RecordlyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordlyApp.swift; sourceTree = "<group>"; };
 		9C41A2212D82A10000A13B02 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -154,6 +157,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FA1000012F0A000000000001 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -182,6 +186,7 @@
 				AA1001012EBC1D6F00000001 /* DefaultInferenceRuntimeProfileSelectorTests.swift */,
 				AA1001022EBC1D6F00000001 /* DefaultInferenceEngineFactoryTests.swift */,
 				AA1001032EBC1D6F00000001 /* AudioInputAdapterTests.swift */,
+				FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */,
 			);
 			name = RecordlyTests;
 			path = RecordlyTests;
@@ -234,6 +239,7 @@
 				AB1100162EBC1D6F00000001 /* DefaultInferenceEngineFactory.swift */,
 				AB1100172EBC1D6F00000001 /* DefaultInferenceComposition.swift */,
 				A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */,
+				FA2000022F0B000000000001 /* FluidAudioModelProvider.swift */,
 			);
 			path = Infrastructure;
 			sourceTree = "<group>";
@@ -393,7 +399,6 @@
 			children = (
 				9C41A2252D82A10000A13B02 /* TranscriptionPipeline.swift */,
 				D75E003E067665158EBDFDC8 /* Models */,
-				86D591A145B4A823FA9F0337 /* WhisperCppEngine.swift */,
 				304A5C09AD561E6F1886EB9F /* SystemDiarizationService.swift */,
 				BE1BAC86460B5DF2B81C6128 /* SystemSpeakerMappingService.swift */,
 				4170736EE52225BAE71D569E /* TranscriptMergeService.swift */,
@@ -460,6 +465,9 @@
 			dependencies = (
 			);
 			name = Recordly;
+			packageProductDependencies = (
+				FA1000022F0A000000000001 /* FluidAudio */,
+			);
 			productName = Recordly;
 			productReference = 9C41A2112D82A10000A13B02 /* Recordly.app */;
 			productType = "com.apple.product-type.application";
@@ -491,6 +499,9 @@
 			productRefGroup = 9C41A2162D82A10000A13B02 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				FA1000032F0A000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+			);
 			targets = (
 				9C41A2102D82A10000A13B02 /* Recordly */,
 				190CC4EFCFCB7A27E390A36D /* RecordlyTests */,
@@ -532,6 +543,7 @@
 				AA1002012EBC1D6F00000001 /* DefaultInferenceRuntimeProfileSelectorTests.swift in Sources */,
 				AA1002022EBC1D6F00000001 /* DefaultInferenceEngineFactoryTests.swift in Sources */,
 				AA1002032EBC1D6F00000001 /* AudioInputAdapterTests.swift in Sources */,
+				FA1000112F0A000000000001 /* FluidAudioASREngineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -557,8 +569,8 @@
 				9C41A24B2D82A10000A13B02 /* EmptyRecordingView.swift in Sources */,
 				CAB301012EBC1D6F00000001 /* SessionMergeService.swift in Sources */,
 				CAB301032EBC1D6F00000001 /* DirectPCMMixService.swift in Sources */,
-				894C4B7F338F3AA85AAE8A44 /* WhisperCppASREngine.swift in Sources */,
 				8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */,
+				FA2000012F0B000000000001 /* FluidAudioModelProvider.swift in Sources */,
 				D26338CDE7591CE9EB66AA72 /* CliDiarizationEngine.swift in Sources */,
 				F0DC2B834E4BE6EFD06B9228 /* SummaryEngine.swift in Sources */,
 				15CD5138FCA0BCCED1F11FA5 /* SummaryPromptBuilder.swift in Sources */,
@@ -753,6 +765,17 @@
 		};
 /* End XCBuildConfiguration section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		FA1000032F0A000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCConfigurationList section */
 		9C41A20C2D82A10000A13B02 /* Build configuration list for PBXProject "Recordly" */ = {
 			isa = XCConfigurationList;
@@ -782,6 +805,14 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FA1000022F0A000000000001 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FA1000032F0A000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 9C41A2092D82A10000A13B02 /* Project object */;
 }

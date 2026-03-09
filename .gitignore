@@ -41,3 +41,7 @@ summary.md
 mic.asr.json
 system.asr.json
 system.diarization.json
+
+# Other
+Recordly.md
+hook.sh

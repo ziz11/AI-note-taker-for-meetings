@@ -109,4 +109,17 @@ enum AppPaths {
     static func installedModelsMetadataURL() throws -> URL {
         try modelsRootDirectory().appendingPathComponent(installedModelsMetadataName, isDirectory: false)
     }
+
+    static func fluidAudioSDKModelsDirectory() -> URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let directory = appSupport
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: directory.path) else {
+            return nil
+        }
+        return directory
+    }
 }

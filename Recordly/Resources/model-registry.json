@@ -1,39 +1,6 @@
 {
   "models": [
     {
-      "id": "asr-compact-v1",
-      "displayName": "Compact ASR",
-      "kind": "asr",
-      "profile": "compact",
-      "version": "1.0.0",
-      "sizeBytes": 59707625,
-      "checksum": "sha256:422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
-      "downloadURL": "file:///Users/Shared/CallRecorderProModels/asr/asr-compact-v1.bin",
-      "locationLabel": "Application Support/CallRecorderPro/Models/asr"
-    },
-    {
-      "id": "asr-balanced-v1",
-      "displayName": "Balanced ASR",
-      "kind": "asr",
-      "profile": "balanced",
-      "version": "1.0.0",
-      "sizeBytes": 190085487,
-      "checksum": "sha256:ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
-      "downloadURL": "file:///Users/Shared/CallRecorderProModels/asr/asr-balanced-v1.bin",
-      "locationLabel": "Application Support/CallRecorderPro/Models/asr"
-    },
-    {
-      "id": "asr-podlodka-turbo-v1.2-q4_0",
-      "displayName": "Podlodka Turbo ASR (Q4_0)",
-      "kind": "asr",
-      "profile": "enhanced",
-      "version": "1.2.0",
-      "sizeBytes": 889340843,
-      "checksum": "sha256:78253e32cd9614e1f317fadb2a0a5341e10b64ce497576399d7f8801bffd911a",
-      "downloadURL": "file:///Users/Shared/CallRecorderProModels/asr/podlodka-turbo-v1.2-q4_0.bin",
-      "locationLabel": "Application Support/CallRecorderPro/Models/asr"
-    },
-    {
       "id": "summarization-compact-v1",
       "displayName": "Compact Summarizer",
       "kind": "summarization",

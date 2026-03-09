@@ -18,44 +18,16 @@ struct ModelSettingsView: View {
                     .buttonStyle(.bordered)
                 }
 
-                Text("Select local models directly from your model folders. No hardcoded profile switching.")
+                Text("FluidAudio SDK manages ASR model provisioning. Configure diarization and summarization models below.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                modelPickerCard(
-                    title: "Transcription Model",
-                    subtitle: "Required for speech-to-text pipeline.",
-                    options: viewModel.asrModels,
-                    selection: Binding(
-                        get: { viewModel.selectedASRModelID },
-                        set: { viewModel.selectASRModel($0) }
-                    ),
-                    kind: .asr,
-                    allowsNone: false
-                )
+                fluidAudioProvisioningCard
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Transcription Language")
-                        .font(.headline)
-                    Text("Controls whisper language hint for ASR decoding.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Picker("Transcription Language", selection: Binding(
-                        get: { viewModel.selectedASRLanguage },
-                        set: { viewModel.selectASRLanguage($0) }
-                    )) {
-                        ForEach(ASRLanguage.allCases, id: \.self) { language in
-                            Text(language.displayName).tag(language)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.white.opacity(0.04))
-                )
+                Text("Language override is not required — FluidAudio v3 is multilingual.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
 
                 modelPickerCard(
                     title: "Speaker Separation Model",
@@ -85,6 +57,51 @@ struct ModelSettingsView: View {
         }
         .frame(minWidth: 820, minHeight: 460)
         .onAppear { viewModel.refresh() }
+    }
+
+
+    private var fluidAudioProvisioningCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("FluidAudio Model")
+                .font(.headline)
+            Text("FluidAudio uses SDK-managed provisioning (v3). Download once, then transcribe immediately.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            switch viewModel.fluidProvisioningState {
+            case .ready:
+                Text("FluidAudio v3 model is installed and ready.")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            case .needsDownload:
+                Text("No FluidAudio model installed.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            case .downloading:
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Downloading FluidAudio v3 model...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            case .failed(let message):
+                Text("Download failed: \(message)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            Button("Download FluidAudio v3 Model") {
+                viewModel.downloadFluidAudioModel()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!viewModel.canDownloadFluidModel)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+        )
     }
 
     private func modelPickerCard(

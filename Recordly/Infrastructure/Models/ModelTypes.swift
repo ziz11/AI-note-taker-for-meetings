@@ -6,27 +6,6 @@ enum ModelKind: String, Codable, CaseIterable {
     case summarization
 }
 
-enum ASRLanguage: String, Codable, CaseIterable {
-    case ru
-    case en
-    case auto
-
-    var displayName: String {
-        switch self {
-        case .ru:
-            return "RU"
-        case .en:
-            return "EN"
-        case .auto:
-            return "AUTO"
-        }
-    }
-
-    var whisperCode: String {
-        rawValue
-    }
-}
-
 enum ModelProfile: String, Codable, CaseIterable {
     case compact
     case balanced
@@ -87,13 +66,7 @@ enum ModelInstallState: Equatable {
 enum TranscriptionAvailability: Equatable {
     case ready
     case degradedNoDiarization
-    case requiresASRModel(profileOptions: [ModelProfile])
     case unavailable(reason: String)
-}
-
-struct RequiredModelsResolution: Equatable {
-    let asrModelURL: URL
-    let diarizationModelURL: URL?
 }
 
 struct ModelRuntimeStatus: Identifiable, Equatable {

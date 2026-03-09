@@ -2,41 +2,35 @@ import Foundation
 
 @MainActor
 final class ModelSettingsViewModel: ObservableObject {
-    @Published private(set) var asrModels: [LocalModelOption] = []
     @Published private(set) var diarizationModels: [LocalModelOption] = []
     @Published private(set) var summarizationModels: [LocalModelOption] = []
 
-    @Published var selectedASRModelID: String?
-    @Published var selectedASRLanguage: ASRLanguage = .ru
     @Published var selectedDiarizationModelID: String?
     @Published var selectedSummarizationModelID: String?
 
-    private let modelManager: ModelManager
+    @Published private(set) var fluidProvisioningState: FluidAudioModelProvisioningState = .needsDownload
 
-    init(modelManager: ModelManager) {
+    private let modelManager: ModelManager
+    private let fluidAudioModelProvider: any FluidAudioModelProviding
+
+    init(
+        modelManager: ModelManager,
+        fluidAudioModelProvider: any FluidAudioModelProviding
+    ) {
         self.modelManager = modelManager
-        refresh()
+        self.fluidAudioModelProvider = fluidAudioModelProvider
+        fluidProvisioningState = fluidAudioModelProvider.state
     }
 
     func refresh() {
-        asrModels = modelManager.listLocalOptions(kind: .asr)
         diarizationModels = modelManager.listLocalOptions(kind: .diarization)
         summarizationModels = modelManager.listLocalOptions(kind: .summarization)
 
-        selectedASRModelID = modelManager.selectedLocalOption(kind: .asr)?.id
-        selectedASRLanguage = modelManager.selectedASRLanguage
         selectedDiarizationModelID = modelManager.selectedLocalOption(kind: .diarization)?.id
         selectedSummarizationModelID = modelManager.selectedLocalOption(kind: .summarization)?.id
-    }
 
-    func selectASRModel(_ modelID: String?) {
-        modelManager.setSelectedModelID(modelID, for: .asr)
-        refresh()
-    }
-
-    func selectASRLanguage(_ language: ASRLanguage) {
-        modelManager.selectedASRLanguage = language
-        refresh()
+        fluidAudioModelProvider.refreshState()
+        fluidProvisioningState = fluidAudioModelProvider.state
     }
 
     func selectDiarizationModel(_ modelID: String?) {
@@ -69,5 +63,31 @@ final class ModelSettingsViewModel: ObservableObject {
     func modelLabel(for option: LocalModelOption) -> String {
         let size = ByteCountFormatter.string(fromByteCount: option.sizeBytes, countStyle: .file)
         return "\(option.displayName) • \(size)"
+    }
+
+    var canDownloadFluidModel: Bool {
+        !isDownloadingFluidModel && !isFluidModelReady
+    }
+
+    var isDownloadingFluidModel: Bool {
+        if case .downloading = fluidProvisioningState {
+            return true
+        }
+        return false
+    }
+
+    var isFluidModelReady: Bool {
+        if case .ready = fluidProvisioningState {
+            return true
+        }
+        return false
+    }
+
+    func downloadFluidAudioModel() {
+        Task {
+            await fluidAudioModelProvider.downloadDefaultModel()
+            fluidProvisioningState = fluidAudioModelProvider.state
+            refresh()
+        }
     }
 }

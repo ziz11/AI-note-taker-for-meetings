@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import ApplicationServices
 import ScreenCaptureKit
 
 struct CaptureArtifacts {
@@ -20,6 +21,7 @@ enum AudioCaptureError: LocalizedError {
     case systemAudioUnsupported
     case systemAudioPermissionDenied
     case systemAudioFailedToStart
+    case systemAudioStartupTimeout
     case invalidSystemAudioFile
     case mixdownFailed
     case noScreenToCapture
@@ -44,6 +46,8 @@ enum AudioCaptureError: LocalizedError {
             return "System audio capture permission was denied."
         case .systemAudioFailedToStart:
             return "The system audio recorder could not start."
+        case .systemAudioStartupTimeout:
+            return "System audio capture did not start in time."
         case .invalidSystemAudioFile:
             return "The system audio file was created, but the audio data is invalid or unreadable."
         case .mixdownFailed:
@@ -269,6 +273,10 @@ actor PCMTrackWriter {
     private let fallback: Bool
     private var diagnostics: [String]
 
+    private var stagingBuffer: AVAudioPCMBuffer?
+    private var stagedFrames: AVAudioFrameCount = 0
+    private let flushThresholdFrames = AVAudioFrameCount(48_000 / 2) // ~500 ms
+
     init(kind: TrackKind, fileName: String, fileURL: URL, fallback: Bool = false, diagnostics: [String] = []) throws {
         guard let canonical = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -282,9 +290,22 @@ actor PCMTrackWriter {
         self.fileName = fileName
         self.fileURL = fileURL
         self.outputFormat = canonical
+
+        let fileSettings: [String: Any]
+        if fileURL.pathExtension.lowercased() == "flac" {
+            fileSettings = [
+                AVFormatIDKey: kAudioFormatFLAC,
+                AVSampleRateKey: Self.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(Self.canonicalChannels),
+                AVLinearPCMBitDepthKey: 24
+            ]
+        } else {
+            fileSettings = canonical.settings
+        }
+
         self.audioFile = try AVAudioFile(
             forWriting: fileURL,
-            settings: canonical.settings,
+            settings: fileSettings,
             commonFormat: .pcmFormatFloat32,
             interleaved: false
         )
@@ -310,13 +331,13 @@ actor PCMTrackWriter {
         let renderedBuffer = try convertIfNeeded(inputBuffer)
         guard renderedBuffer.frameLength > 0 else { return }
 
-        try audioFile.write(from: renderedBuffer)
-        framesWritten += Int64(renderedBuffer.frameLength)
+        try stage(renderedBuffer)
         bufferCount += 1
     }
 
     func finalize() -> TrackRuntimeStats {
-        TrackRuntimeStats(
+        flushStagingBuffer()
+        return TrackRuntimeStats(
             kind: kind,
             fileName: fileName,
             firstPTS: firstPTS,
@@ -327,6 +348,59 @@ actor PCMTrackWriter {
             fallback: fallback,
             diagnostics: diagnostics
         )
+    }
+
+    private func stage(_ buffer: AVAudioPCMBuffer) throws {
+        let incoming = buffer.frameLength
+        guard incoming > 0 else { return }
+
+        if stagingBuffer == nil {
+            stagingBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: flushThresholdFrames + 8192)
+            stagedFrames = 0
+        }
+        guard let staging = stagingBuffer,
+              let srcChannel = buffer.floatChannelData?[0],
+              let dstChannel = staging.floatChannelData?[0] else {
+            // Fallback: write directly if staging allocation failed.
+            try audioFile.write(from: buffer)
+            framesWritten += Int64(incoming)
+            return
+        }
+
+        let space = staging.frameCapacity - stagedFrames
+        if incoming <= space {
+            dstChannel.advanced(by: Int(stagedFrames)).update(from: srcChannel, count: Int(incoming))
+            stagedFrames += incoming
+            staging.frameLength = stagedFrames
+        } else {
+            // Fill remaining space, flush, then stage the rest.
+            if space > 0 {
+                dstChannel.advanced(by: Int(stagedFrames)).update(from: srcChannel, count: Int(space))
+                stagedFrames += space
+                staging.frameLength = stagedFrames
+            }
+            try flushStagingBufferThrowing()
+            let remainder = incoming - space
+            dstChannel.update(from: srcChannel.advanced(by: Int(space)), count: Int(remainder))
+            stagedFrames = remainder
+            staging.frameLength = stagedFrames
+        }
+
+        if stagedFrames >= flushThresholdFrames {
+            try flushStagingBufferThrowing()
+        }
+    }
+
+    private func flushStagingBufferThrowing() throws {
+        guard let staging = stagingBuffer, stagedFrames > 0 else { return }
+        staging.frameLength = stagedFrames
+        try audioFile.write(from: staging)
+        framesWritten += Int64(stagedFrames)
+        stagedFrames = 0
+    }
+
+    private func flushStagingBuffer() {
+        try? flushStagingBufferThrowing()
     }
 
     private func convertIfNeeded(_ inputBuffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
@@ -435,14 +509,24 @@ final class FallbackMicrophoneRecorder: NSObject, AVAudioRecorderDelegate {
     private var finishContinuation: CheckedContinuation<Void, Error>?
 
     func startRecording(to fileURL: URL) throws {
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: PCMTrackWriter.canonicalSampleRate,
-            AVNumberOfChannelsKey: Int(PCMTrackWriter.canonicalChannels),
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsNonInterleaved: true
-        ]
+        let settings: [String: Any]
+        if fileURL.pathExtension.lowercased() == "flac" {
+            settings = [
+                AVFormatIDKey: kAudioFormatFLAC,
+                AVSampleRateKey: PCMTrackWriter.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(PCMTrackWriter.canonicalChannels),
+                AVLinearPCMBitDepthKey: 24
+            ]
+        } else {
+            settings = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: PCMTrackWriter.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(PCMTrackWriter.canonicalChannels),
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsNonInterleaved: true
+            ]
+        }
 
         let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
         recorder.delegate = self
@@ -519,6 +603,14 @@ final class ScreenCaptureAudioService: NSObject {
     private let sampleQueue = DispatchQueue(label: "Recordly.ScreenCaptureSamples", qos: .userInitiated)
     private(set) var microphoneViaStreamEnabled = false
 
+    func hasSystemRecordingPermission() -> Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    func requestSystemRecordingPermission() -> Bool {
+        CGRequestScreenCaptureAccess()
+    }
+
     func startCapture(
         onSystemSample: @escaping (CMSampleBuffer) -> Void,
         onMicrophoneSample: @escaping (CMSampleBuffer) -> Void
@@ -585,6 +677,7 @@ final class AudioCaptureService: AudioCaptureEngine {
     private var microphoneLevelValue: Double = 0
     private var systemLevelValue: Double = 0
     private var systemStatusLabelValue = "Idle"
+    private let screenCaptureStartupTimeoutNanos: UInt64 = 2_000_000_000
 
     func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
         guard !isRunning else {
@@ -596,52 +689,78 @@ final class AudioCaptureService: AudioCaptureEngine {
             throw AudioCaptureError.microphonePermissionDenied
         }
 
+        // Ensure system capture permission is requested before trying to start ScreenCaptureKit.
+
         let sessionID = UUID(uuidString: sessionDirectory.lastPathComponent) ?? UUID()
 
-        let microphoneFileName = "mic.raw.caf"
-        let systemFileName = "system.raw.caf"
+        let microphoneFileName = "mic.raw.flac"
+        let systemFileName = "system.raw.flac"
 
         let microphoneURL = sessionDirectory.appendingPathComponent(microphoneFileName)
         let systemURL = sessionDirectory.appendingPathComponent(systemFileName)
 
-        let micWriter = try PCMTrackWriter(kind: .microphone, fileName: microphoneFileName, fileURL: microphoneURL)
-        let sysWriter = try PCMTrackWriter(kind: .system, fileName: systemFileName, fileURL: systemURL)
-
         do {
             try await metadataStore.createSession(id: sessionID, in: sessionDirectory)
             var streamStartError: Error?
-            do {
-                try await screenCaptureService.startCapture(
-                    onSystemSample: { [weak self] sampleBuffer in
-                        guard let self else { return }
-                        Task {
-                            do {
-                                try await sysWriter.append(sampleBuffer: sampleBuffer)
-                                self.systemLevelValue = sampleBuffer.normalizedLevel
-                            } catch {
-                                // Keep recording alive if one buffer fails to convert.
-                            }
-                        }
-                    },
-                    onMicrophoneSample: { [weak self] sampleBuffer in
-                        guard let self else { return }
-                        Task {
-                            do {
-                                try await micWriter.append(sampleBuffer: sampleBuffer)
-                                self.microphoneLevelValue = sampleBuffer.normalizedLevel
-                            } catch {
-                                // Keep recording alive if one buffer fails to convert.
-                            }
-                        }
-                    }
-                )
-                systemStatusLabelValue = "Captured"
-            } catch {
-                streamStartError = error
-                systemStatusLabelValue = "Unavailable"
+            var systemCaptureAttempted = false
+            var didStartStreamCapture = false
+            var micWriter: PCMTrackWriter?
+            var sysWriter: PCMTrackWriter?
+
+            var hasSystemCapturePermission = screenCaptureService.hasSystemRecordingPermission()
+            if !hasSystemCapturePermission {
+                hasSystemCapturePermission = screenCaptureService.requestSystemRecordingPermission()
             }
 
-            if streamStartError != nil || !screenCaptureService.microphoneViaStreamEnabled {
+            if hasSystemCapturePermission {
+                let streamMicWriter = try PCMTrackWriter(kind: .microphone, fileName: microphoneFileName, fileURL: microphoneURL)
+                let streamSysWriter = try PCMTrackWriter(kind: .system, fileName: systemFileName, fileURL: systemURL)
+                micWriter = streamMicWriter
+                sysWriter = streamSysWriter
+                systemCaptureAttempted = true
+                do {
+                    try await withStartupTimeout { [self] in
+                        try await self.screenCaptureService.startCapture(
+                            onSystemSample: { [weak self] sampleBuffer in
+                                guard let self else { return }
+                                Task {
+                                    do {
+                                        try await streamSysWriter.append(sampleBuffer: sampleBuffer)
+                                        self.systemLevelValue = sampleBuffer.normalizedLevel
+                                    } catch {
+                                        // Keep recording alive if one buffer fails to convert.
+                                    }
+                                }
+                            },
+                            onMicrophoneSample: { [weak self] sampleBuffer in
+                                guard let self else { return }
+                                Task {
+                                    do {
+                                        try await streamMicWriter.append(sampleBuffer: sampleBuffer)
+                                        self.microphoneLevelValue = sampleBuffer.normalizedLevel
+                                    } catch {
+                                        // Keep recording alive if one buffer fails to convert.
+                                    }
+                                }
+                            }
+                        )
+                    }
+                    didStartStreamCapture = true
+                    systemStatusLabelValue = "Captured"
+                } catch {
+                    streamStartError = error
+                    systemStatusLabelValue = label(for: error)
+                }
+            } else {
+                streamStartError = AudioCaptureError.systemAudioPermissionDenied
+                systemStatusLabelValue = "Permission denied"
+            }
+
+            if streamStartError != nil || !systemCaptureAttempted || !screenCaptureService.microphoneViaStreamEnabled {
+                didStartStreamCapture = false
+                try? await screenCaptureService.stopCapture()
+                micWriter = nil
+                sysWriter = nil
                 try fallbackMicrophoneRecorder.startRecording(to: microphoneURL)
                 if let streamStartError {
                     try await metadataStore.appendNote(
@@ -656,17 +775,17 @@ final class AudioCaptureService: AudioCaptureEngine {
                 }
             }
 
-            self.microphoneWriter = micWriter
-            self.systemWriter = sysWriter
+            self.microphoneWriter = didStartStreamCapture ? micWriter : nil
+            self.systemWriter = didStartStreamCapture ? sysWriter : nil
             self.activeSessionDirectory = sessionDirectory
             self.activeSessionID = sessionID
             self.microphoneFileName = microphoneFileName
-            self.systemAudioFileName = systemFileName
+            self.systemAudioFileName = didStartStreamCapture ? systemFileName : nil
             self.isRunning = true
 
             return CaptureArtifacts(
                 microphoneFile: microphoneFileName,
-                systemAudioFile: systemFileName,
+                systemAudioFile: didStartStreamCapture ? systemFileName : nil,
                 mergedCallFile: nil,
                 connectorNotesFile: "capture-session.json",
                 note: streamStartError == nil
@@ -678,8 +797,39 @@ final class AudioCaptureService: AudioCaptureEngine {
             self.systemWriter = nil
             self.activeSessionDirectory = nil
             self.activeSessionID = nil
+            self.microphoneFileName = nil
+            self.systemAudioFileName = nil
             throw error
         }
+    }
+
+    private func withStartupTimeout<T: Sendable>(_ operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            let timeoutNanos = screenCaptureStartupTimeoutNanos
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanos)
+                throw AudioCaptureError.systemAudioStartupTimeout
+            }
+
+            guard let result = try await group.next() else {
+                throw CancellationError()
+            }
+
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private func label(for error: Error) -> String {
+        if let captureError = error as? AudioCaptureError,
+           captureError == .systemAudioPermissionDenied {
+            return "Permission denied"
+        }
+
+        return "Unavailable"
     }
 
     func stopCapture() async throws -> CaptureArtifacts {
@@ -790,6 +940,7 @@ final class AudioCaptureService: AudioCaptureEngine {
             }
         }
     }
+
 }
 
 private extension CMSampleBuffer {

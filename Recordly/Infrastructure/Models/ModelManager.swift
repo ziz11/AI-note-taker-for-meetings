@@ -5,6 +5,7 @@ struct ModelDiscoveryPaths {
     let sharedDirectory: (ModelKind) -> URL?
     let userDirectory: (ModelKind) -> URL?
     let projectDirectories: () -> [URL]
+    var fluidAudioSDKDirectory: () -> URL? = { nil }
 
     static func live() -> ModelDiscoveryPaths {
         ModelDiscoveryPaths(
@@ -19,6 +20,9 @@ struct ModelDiscoveryPaths {
             },
             projectDirectories: {
                 AppPaths.projectLocalModelsDirectories()
+            },
+            fluidAudioSDKDirectory: {
+                AppPaths.fluidAudioSDKModelsDirectory()
             }
         )
     }
@@ -65,16 +69,6 @@ final class ModelManager: ObservableObject {
         set { preferences.pendingProfileSelection = newValue }
     }
 
-    var selectedASRModelID: String? {
-        get { preferences.selectedASRModelID }
-        set { preferences.selectedASRModelID = newValue }
-    }
-
-    var selectedASRLanguage: ASRLanguage {
-        get { preferences.selectedASRLanguage }
-        set { preferences.selectedASRLanguage = newValue }
-    }
-
     var selectedDiarizationModelID: String? {
         get { preferences.selectedDiarizationModelID }
         set { preferences.selectedDiarizationModelID = newValue }
@@ -93,7 +87,7 @@ final class ModelManager: ObservableObject {
     // MARK: Legacy install flow (kept for onboarding compatibility)
 
     func install(profile: ModelProfile) async {
-        let descriptors = registry.loadModels().filter { $0.profile == profile }
+        let descriptors = registry.loadModels().filter { $0.profile == profile && $0.kind != .asr }
         if descriptors.isEmpty {
             return
         }
@@ -105,6 +99,10 @@ final class ModelManager: ObservableObject {
 
     func install(modelID: String) async {
         if let descriptor = registry.loadModels().first(where: { $0.id == modelID }) {
+            if descriptor.kind == .asr {
+                installStates[modelID] = .installed
+                return
+            }
             await installRegistryModel(descriptor)
             return
         }
@@ -122,6 +120,10 @@ final class ModelManager: ObservableObject {
 
     func remove(modelID: String) {
         if let descriptor = registry.loadModels().first(where: { $0.id == modelID }) {
+            if descriptor.kind == .asr {
+                installStates[modelID] = .notInstalled
+                return
+            }
             try? storage.removeModel(modelID: modelID, kind: descriptor.kind)
             installStates[modelID] = .notInstalled
             return
@@ -133,6 +135,7 @@ final class ModelManager: ObservableObject {
     // MARK: Dynamic model catalog
 
     func listLocalOptions(kind: ModelKind) -> [LocalModelOption] {
+        guard kind != .asr else { return [] }
         let options = loadAppSupportOptions(kind: kind)
             + loadSharedOptions(kind: kind)
             + loadUserLocalOptions(kind: kind)
@@ -144,6 +147,10 @@ final class ModelManager: ObservableObject {
     }
 
     func selectedLocalOption(kind: ModelKind) -> LocalModelOption? {
+        guard kind != .asr else {
+            return nil
+        }
+
         let options = listLocalOptions(kind: kind)
         guard !options.isEmpty else {
             setSelectedModelID(nil, for: kind)
@@ -155,19 +162,13 @@ final class ModelManager: ObservableObject {
             return selected
         }
 
-        if kind == .asr {
-            let fallback = options[0]
-            setSelectedModelID(fallback.id, for: kind)
-            return fallback
-        }
-
         return nil
     }
 
     func setSelectedModelID(_ modelID: String?, for kind: ModelKind) {
         switch kind {
         case .asr:
-            selectedASRModelID = modelID
+            return
         case .diarization:
             selectedDiarizationModelID = modelID
         case .summarization:
@@ -178,7 +179,7 @@ final class ModelManager: ObservableObject {
     func selectedModelID(for kind: ModelKind) -> String? {
         switch kind {
         case .asr:
-            return selectedASRModelID
+            return nil
         case .diarization:
             return selectedDiarizationModelID
         case .summarization:
@@ -202,31 +203,11 @@ final class ModelManager: ObservableObject {
     // MARK: Runtime state and resolution
 
     func availability(for profile: ModelProfile) -> TranscriptionAvailability {
-        guard selectedLocalOption(kind: .asr) != nil else {
-            return .requiresASRModel(profileOptions: ModelProfile.allCases)
-        }
-
         if selectedLocalOption(kind: .diarization) == nil {
             return .degradedNoDiarization
         }
 
         return .ready
-    }
-
-    func ensureRequiredModelsInstalled(for profile: ModelProfile) throws -> RequiredModelsResolution {
-        guard let asr = selectedLocalOption(kind: .asr) else {
-            throw NSError(
-                domain: "ModelManager",
-                code: 3001,
-                userInfo: [NSLocalizedDescriptionKey: "Select an ASR model in Models settings before transcribing."]
-            )
-        }
-
-        let diarization = selectedLocalOption(kind: .diarization)
-        return RequiredModelsResolution(
-            asrModelURL: asr.url,
-            diarizationModelURL: diarization?.url
-        )
     }
 
     func resolveInstalledModelURL(modelID: String) -> URL? {
@@ -273,7 +254,7 @@ final class ModelManager: ObservableObject {
     }
 
     func listAvailableModels() -> [ModelDescriptor] {
-        ModelKind.allCases.flatMap { kind in
+        [ModelKind.diarization, ModelKind.summarization].flatMap { kind in
             listLocalOptions(kind: kind).map { option in
                 ModelDescriptor(
                     id: option.id,
@@ -339,16 +320,17 @@ final class ModelManager: ObservableObject {
             guard scannedPaths.insert(resolved).inserted else { continue }
             let urls = (try? fileManager.contentsOfDirectory(
                 at: directory,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                 options: [.skipsHiddenFiles]
             )) ?? []
 
             for url in urls.sorted(by: modelURLSort) {
-                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-                let ext = url.pathExtension.lowercased()
-                guard ext == "gguf" || ext == "bin" else { continue }
                 let inferredKind = classifyModelKind(url: url)
                 guard inferredKind == kind else { continue }
+                if !isModelCandidate(url, kind: kind) {
+                    continue
+                }
+
                 if let option = buildLocalOption(url: url, kind: kind, source: .projectLocal) {
                     results.append(option)
                 }
@@ -358,18 +340,20 @@ final class ModelManager: ObservableObject {
     }
 
     private func classifyModelKind(url: URL) -> ModelKind {
+        let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+        if resourceValues?.isDirectory == true {
+            return .summarization
+        }
+
         let ext = url.pathExtension.lowercased()
         if ext == "gguf" {
             return .summarization
         }
         let name = url.deletingPathExtension().lastPathComponent.lowercased()
-        if name.contains("whisper") || name.contains("asr") {
-            return .asr
-        }
         if name.contains("diarization") {
             return .diarization
         }
-        return .summarization
+        return name.contains("diarization") ? .diarization : .summarization
     }
 
     private func loadUserLocalOptions(kind: ModelKind) -> [LocalModelOption] {
@@ -401,7 +385,7 @@ final class ModelManager: ObservableObject {
     ) -> [LocalModelOption] {
         let urls: [URL]
         if recursive {
-            let keys: [URLResourceKey] = [.isRegularFileKey]
+            let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey]
             let enumerator = fileManager.enumerator(
                 at: directory,
                 includingPropertiesForKeys: keys,
@@ -411,24 +395,43 @@ final class ModelManager: ObservableObject {
         } else {
             urls = (try? fileManager.contentsOfDirectory(
                 at: directory,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                 options: [.skipsHiddenFiles]
             )) ?? []
         }
 
         return urls
             .sorted(by: modelURLSort)
-            .filter { supportedModelExtensions(for: kind).contains($0.pathExtension.lowercased()) }
-            .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+            .filter { isModelCandidate($0, kind: kind) }
+            .filter { classifyModelKind(url: $0) == kind }
             .compactMap { buildLocalOption(url: $0, kind: kind, source: source) }
+    }
+
+    private func isModelCandidate(_ url: URL, kind: ModelKind) -> Bool {
+        switch kind {
+        case .asr:
+            return false
+        case .diarization:
+            return isSupportedModelFile(url, extensions: ["bin"])
+        case .summarization:
+            return isSupportedModelFile(url, extensions: ["gguf", "bin"])
+        }
+    }
+
+    private func isSupportedModelFile(_ url: URL, extensions: Set<String>? = nil) -> Bool {
+        let allowedExtensions = extensions ?? supportedModelExtensions(for: .summarization)
+        let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+        return values?.isRegularFile == true && allowedExtensions.contains(url.pathExtension.lowercased())
     }
 
     private func supportedModelExtensions(for kind: ModelKind) -> Set<String> {
         switch kind {
         case .summarization:
             return ["bin", "gguf"]
-        case .asr, .diarization:
+        case .diarization:
             return ["bin"]
+        case .asr:
+            return []
         }
     }
 

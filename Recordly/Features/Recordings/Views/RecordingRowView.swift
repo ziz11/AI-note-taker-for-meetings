@@ -25,7 +25,7 @@ struct RecordingRowView: View {
                         }
                     }
 
-                    Text(recording.createdAt.formatted(date: .abbreviated, time: .omitted))
+                    Text(recording.createdAt.formatted(date: .abbreviated, time: .shortened))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.white.opacity(0.6))
                         .lineLimit(1)

@@ -50,8 +50,9 @@ Recordly/
       Audio/
         AudioInput.swift
       Backends/
-        WhisperCpp/
-          WhisperCppASREngine.swift
+        FluidAudio/
+          FluidAudioASREngine.swift
+          FluidAudioModelProvider.swift
         CliDiarization/
           CliDiarizationEngine.swift
         LlamaCpp/
@@ -88,9 +89,9 @@ Inference is capability + backend-centric and split by responsibility:
 
 - Stage contracts: `AudioCaptureEngine`, `ASREngine`, `DiarizationEngine`, `SummarizationEngine`, `VoiceActivityDetectionEngine`.
 - Runtime selection: `InferenceStage`, `InferenceBackend`, `StageRuntimeSelection`, `InferenceRuntimeProfile`.
-- Profile resolving: `DefaultInferenceRuntimeProfileSelector` (reads `ModelManager` only for discovery/install/resolution/settings).
+- Profile resolving: `DefaultInferenceRuntimeProfileSelector` resolves ASR model via `FluidAudioModelProvider` (SDK-managed provisioning) and reads `ModelManager` for diarization/summarization.
 - Engine routing: `DefaultInferenceEngineFactory` creates concrete stage engines by `stage + backend`.
-- Composition root: `DefaultInferenceComposition` is the single place where per-stage backend defaults are selected.
+- Composition root: `DefaultInferenceComposition` is the single place where per-stage backend defaults are selected. In this branch the default ASR backend is `fluidAudio`.
 
 Dependency flow:
 
@@ -111,6 +112,14 @@ RecordlyApp
 - `TranscriptionPipeline` orchestrates stage execution and persistence of transcript artifacts.
 - Pipeline/workflow do not instantiate concrete backends directly.
 
+Current ASR path:
+
+- capture/import produces canonical session audio artifacts
+- runtime selector resolves the FluidAudio ASR model via `FluidAudioModelProvider`
+- factory routes `.asr -> .fluidAudio`
+- `FluidAudioASREngine` reads persisted audio artifacts directly and produces ASR documents
+- transcript merge/render stages persist transcript JSON/TXT/SRT without changing session storage contracts
+
 Fallback ownership:
 
 - Backend implementations throw stage-specific errors.
@@ -122,20 +131,17 @@ Fallback ownership:
 
 - `ModelManager` is not an orchestration center.
 - `ModelManager` owns model discovery/install/resolution, availability checks, and runtime settings persistence.
+- `FluidAudioModelProvider` owns ASR model provisioning via FluidAudio SDK (download, cache, resolve).
+- ASR is not resolved from user-picked Whisper `.bin` files in this branch.
 - `InferenceRuntimeProfile` carries resolved artifacts and stage runtime params into pipeline execution.
 
 ## Audio Boundary
 
-- Capture internal contract remains canonical PCM in CAF (`mic.raw.caf`, `system.raw.caf`).
+- Capture and imported-audio processing keep session storage centered on canonical PCM in CAF (`mic.raw.caf`, `system.raw.caf`, `merged-call.caf`).
+- FluidAudio SDK accepts CAF directly — no format conversion is needed at the ASR boundary.
 - `AudioInput`/`AudioInputAdapter` provide boundary-level adaptation for stage engines without changing capture/storage contracts.
 - `merged-call.m4a` remains preferred playback artifact for live recordings.
 
-## Extension Point (FluidAudio)
+Historical note:
 
-To add FluidAudio:
-
-1. Add backend module(s) under `Infrastructure/Inference/Backends/FluidAudio`.
-2. Add routing in `DefaultInferenceEngineFactory`.
-3. Switch stage backend mapping in `DefaultInferenceComposition`.
-
-No pipeline/orchestration rewrite should be required.
+- Earlier branches used Whisper / `whisper.cpp` and format-adaptation notes tied to that runtime. Those do not describe the active ASR implementation on this branch.
