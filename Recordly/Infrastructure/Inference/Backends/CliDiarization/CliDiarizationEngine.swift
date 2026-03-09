@@ -225,7 +225,7 @@ struct CliDiarizationEngine: DiarizationEngine {
             throw DiarizationRuntimeError.invalidInput
         }
 
-        guard systemAudioURL.lastPathComponent == "system.raw.caf" else {
+        guard ["system.raw.caf", "system.raw.flac"].contains(systemAudioURL.lastPathComponent) else {
             throw DiarizationRuntimeError.invalidInput
         }
 

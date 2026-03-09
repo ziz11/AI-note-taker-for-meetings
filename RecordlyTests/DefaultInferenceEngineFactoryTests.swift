@@ -11,7 +11,6 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
                 diarizationModelURL: URL(fileURLWithPath: "/tmp/diarization.bin"),
                 summarizationModelURL: URL(fileURLWithPath: "/tmp/summary.gguf")
             ),
-            asrLanguage: .auto,
             summarizationRuntimeSettings: .default
         )
 
@@ -35,7 +34,6 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
                 diarizationModelURL: nil,
                 summarizationModelURL: nil
             ),
-            asrLanguage: .auto,
             summarizationRuntimeSettings: .default
         )
 
@@ -58,7 +56,6 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
                 diarizationModelURL: nil,
                 summarizationModelURL: nil
             ),
-            asrLanguage: .auto,
             summarizationRuntimeSettings: .default
         )
 

@@ -38,19 +38,6 @@ struct FluidAudioModelValidator {
     }
 }
 
-// MARK: - Language mapping
-
-/// Maps ASRLanguage to FluidAudio language codes. Returns nil for v3 multilingual (auto-detect).
-protocol FluidAudioLanguageMapper {
-    func map(language: ASRLanguage) -> String?
-}
-
-struct DefaultFluidAudioLanguageMapper: FluidAudioLanguageMapper {
-    func map(language: ASRLanguage) -> String? {
-        nil
-    }
-}
-
 struct FluidAudioRunnerOutput {
     var language: String?
     var segments: [FluidAudioSegment]
@@ -166,8 +153,7 @@ protocol FluidAudioTranscribing {
     func transcribe(
         audioBuffer: AVAudioPCMBuffer,
         modelDirectoryURL: URL,
-        channel: TranscriptChannel,
-        languageCode: String?
+        channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput
 }
 
@@ -182,11 +168,9 @@ final class FluidAudioTranscriber: FluidAudioTranscribing {
     func transcribe(
         audioBuffer: AVAudioPCMBuffer,
         modelDirectoryURL: URL,
-        channel: TranscriptChannel,
-        languageCode: String?
+        channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput {
 #if arch(arm64) && canImport(FluidAudio)
-        _ = languageCode
         let manager = try await resolveManager(for: modelDirectoryURL)
         let source = fluidSource(for: channel)
         let rawResult = try await manager.transcribe(audioBuffer, source: source)
@@ -276,25 +260,22 @@ struct FluidAudioASREngine: ASREngine {
     let displayName: String = "FluidAudio"
 
     private let transcriber: FluidAudioTranscribing
-    private let languageMapper: FluidAudioLanguageMapper
     private let inputPreparer: FluidAudioInputPreparing
     private let fileManager: FileManager
 
     init(
         transcriber: FluidAudioTranscribing = FluidAudioTranscriber(),
-        languageMapper: FluidAudioLanguageMapper = DefaultFluidAudioLanguageMapper(),
         inputPreparer: FluidAudioInputPreparing = FluidAudioInputPreparer(),
         fileManager: FileManager = .default
     ) {
         self.transcriber = transcriber
-        self.languageMapper = languageMapper
         self.inputPreparer = inputPreparer
         self.fileManager = fileManager
     }
 
     func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
         let modelPath = configuration.modelURL.standardizedFileURL.path
-        return "\(modelPath)|backend:fluidaudio|v3|lang:auto"
+        return "\(modelPath)|backend:fluidaudio|v3"
     }
 
     func transcribe(
@@ -322,8 +303,7 @@ struct FluidAudioASREngine: ASREngine {
         let output = try await transcriber.transcribe(
             audioBuffer: inputBuffer,
             modelDirectoryURL: configuration.modelURL,
-            channel: channel,
-            languageCode: languageMapper.map(language: configuration.language)
+            channel: channel
         )
 
         if Task.isCancelled {

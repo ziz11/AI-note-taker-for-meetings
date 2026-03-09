@@ -17,7 +17,7 @@ final class ModelOnboardingCoordinator: ObservableObject {
     }
 
     func presentIfNeeded(for availability: TranscriptionAvailability) {
-        guard case .requiresASRModel = availability else {
+        guard case .unavailable = availability else {
             return
         }
 
@@ -36,10 +36,13 @@ final class ModelOnboardingCoordinator: ObservableObject {
 
     func downloadAndContinue(profile: ModelProfile) async {
         await modelManager.install(profile: profile)
-        if modelManager.availability(for: profile) != .requiresASRModel(profileOptions: ModelProfile.allCases) {
+        switch modelManager.availability(for: profile) {
+        case .ready, .degradedNoDiarization:
             modelManager.selectedProfile = profile
             modelManager.pendingProfileSelection = nil
             isPresented = false
+        case .unavailable:
+            break
         }
     }
 }

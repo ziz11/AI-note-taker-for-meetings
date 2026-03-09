@@ -86,7 +86,6 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
                 diarizationModelURL: diarizationOption?.url,
                 summarizationModelURL: nil
             ),
-            asrLanguage: .auto,
             summarizationRuntimeSettings: modelManager.summarizationRuntimeSettings
         )
     }
@@ -103,7 +102,6 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
                 diarizationModelURL: modelManager.selectedLocalOption(kind: .diarization)?.url,
                 summarizationModelURL: summarizationOption.url
             ),
-            asrLanguage: .auto,
             summarizationRuntimeSettings: modelManager.summarizationRuntimeSettings
         )
     }

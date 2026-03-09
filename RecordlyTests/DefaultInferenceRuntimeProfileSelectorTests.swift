@@ -62,7 +62,6 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         let profile = try selector.resolveTranscriptionProfile(for: .balanced)
 
         XCTAssertEqual(profile.stageSelection.backend(for: .asr), .fluidAudio)
-        XCTAssertEqual(profile.asrLanguage, .auto)
     }
 
     func testResolveTranscriptionProfileRejectsInvalidModelDirectory() throws {

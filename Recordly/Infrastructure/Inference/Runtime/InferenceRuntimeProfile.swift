@@ -63,6 +63,5 @@ struct InferenceModelArtifacts: Equatable, Sendable {
 struct InferenceRuntimeProfile: Equatable, Sendable {
     var stageSelection: StageRuntimeSelection
     var modelArtifacts: InferenceModelArtifacts
-    var asrLanguage: ASRLanguage
     var summarizationRuntimeSettings: SummarizationRuntimeSettings
 }

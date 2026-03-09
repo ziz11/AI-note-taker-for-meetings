@@ -10,6 +10,7 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 - Inference architecture is backend-agnostic and stage-driven (`contracts -> runtime profile -> selector/factory -> backend modules`).
 - ASR inference is FluidAudio-only in this branch. `FluidAudioASREngine` uses the FluidAudio SDK (v3, CoreML-based) and accepts CAF directly.
 - ASR model provisioning is SDK-managed via `FluidAudioModelProvider`. Models are downloaded and cached by the SDK, not picked from local `.bin` files.
+- Legacy ASR preference keys (`selectedASRBackend`, `selectedASRLanguage`) are preserved for migration compatibility only and do not affect active runtime language/backend behavior.
 - Diarization inference is CLI-based (`diarization-main`) via `CliDiarizationEngine` with degraded fallback when model/binary/output is unavailable.
 - Summarization inference is wired through llama.cpp-compatible runner (`main`/`llama-cli`) in `LlamaCppSummarizationEngine`. Falls back to template summary when LLM is unavailable.
 - Per-stage backend switching point is localized in `DefaultInferenceComposition` + `DefaultInferenceEngineFactory`.

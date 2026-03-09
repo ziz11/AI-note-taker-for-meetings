@@ -894,7 +894,6 @@ final class TranscriptionPipelineTests: XCTestCase {
     private func makeRuntimeProfile(
         asrModelURL: URL,
         diarizationModelURL: URL?,
-        asrLanguage: ASRLanguage = .auto
     ) -> InferenceRuntimeProfile {
         InferenceRuntimeProfile(
             stageSelection: .defaultLocal,
@@ -903,7 +902,6 @@ final class TranscriptionPipelineTests: XCTestCase {
                 diarizationModelURL: diarizationModelURL,
                 summarizationModelURL: nil
             ),
-            asrLanguage: asrLanguage,
             summarizationRuntimeSettings: .default
         )
     }

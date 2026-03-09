@@ -16,6 +16,7 @@ Optimized for:
 Recordly stores canonical session artifacts, orchestrates by stage contracts, resolves runtime via a profile, creates engines through a factory, and keeps backend-specific behavior inside backend modules.
 
 This branch is FluidAudio-only for ASR. Do not search for or reintroduce `WhisperCppASREngine`, `whisper-cli`, or `CAF -> WAV` assumptions when working on the active transcription path.
+Legacy ASR preference keys (`selectedASRBackend`, `selectedASRLanguage`) are preserved only for migration compatibility and do not participate in active runtime behavior.
 
 ## Architecture flow
 
@@ -88,6 +89,7 @@ Runtime primitives in `Recordly/Infrastructure/Inference/Runtime/InferenceRuntim
 - `StageRuntimeSelection`
 - `InferenceModelArtifacts`
 - `InferenceRuntimeProfile`
+- `InferenceRuntimeProfile` carries no ASR language field; ASR runtime behavior is backend-determined and currently effectively language-agnostic (`auto`).
 
 Audio boundary types in `Recordly/Infrastructure/Inference/Audio/AudioInput.swift`:
 
@@ -135,6 +137,7 @@ Transcription pipeline:
 - `TranscriptionPipeline.process(...)` receives `InferenceRuntimeProfile` and `InferenceEngineFactory`
 - it resolves prepared inputs through `AudioInputAdapter`
 - it requires ASR model information in the runtime profile
+- the active ASR contract now uses model URL only; language selection is not part of the ASR runtime input
 - the active ASR engine is `FluidAudioASREngine`
 - it may run diarization, but diarization failure degrades speaker labeling rather than failing transcription
 

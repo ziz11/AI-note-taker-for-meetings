@@ -12,7 +12,6 @@ protocol AudioCaptureEngine: AnyObject {
 
 struct ASREngineConfiguration: Sendable {
     var modelURL: URL
-    var language: ASRLanguage
 }
 
 enum ASREngineRuntimeError: LocalizedError, Equatable {
@@ -51,7 +50,7 @@ protocol ASREngine {
 
 extension ASREngine {
     func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
-        "\(configuration.modelURL.standardizedFileURL.path)|lang:\(configuration.language.rawValue)"
+        "\(configuration.modelURL.standardizedFileURL.path)|backend:fluidaudio|v3"
     }
 }
 

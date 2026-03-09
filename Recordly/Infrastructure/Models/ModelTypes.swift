@@ -6,17 +6,6 @@ enum ModelKind: String, Codable, CaseIterable {
     case summarization
 }
 
-enum ASRLanguage: String, Codable, CaseIterable {
-    case auto
-
-    var displayName: String {
-        switch self {
-        case .auto:
-            return "AUTO"
-        }
-    }
-}
-
 enum ModelProfile: String, Codable, CaseIterable {
     case compact
     case balanced
@@ -77,7 +66,6 @@ enum ModelInstallState: Equatable {
 enum TranscriptionAvailability: Equatable {
     case ready
     case degradedNoDiarization
-    case requiresASRModel(profileOptions: [ModelProfile])
     case unavailable(reason: String)
 }
 

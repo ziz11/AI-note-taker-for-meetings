@@ -17,6 +17,7 @@ Concrete backend modules:
 - Summarization: `LlamaCppSummarizationEngine` (`llama-cli`)
 
 The active ASR stack in this branch is FluidAudio-only. Whisper / `whisper.cpp` local `.bin` selection is no longer part of the runtime ASR flow.
+`ASRLanguage` is no longer part of active ASR runtime contracts; the runtime profile carries only model URL/backend data for ASR execution.
 
 ## Runtime selection model
 
@@ -51,6 +52,11 @@ ASR model management is SDK-managed, not local-file based:
 - Diarization/summarization: selected model IDs are persisted by model kind. Runtime profile selector reads selected local options and resolves model URLs via `ModelManager`.
 - Missing diarization model degrades transcription path without failing transcript generation.
 - Missing summarization model triggers fallback summary generation.
+
+Compatibility note:
+
+- `ModelPreferencesStore` still normalizes legacy persisted values for `selectedASRBackend` and `selectedASRLanguage` so older installs still load cleanly.
+- That compatibility layer is intentionally migration-only today and does not change active ASR runtime behavior.
 
 Historical note:
 

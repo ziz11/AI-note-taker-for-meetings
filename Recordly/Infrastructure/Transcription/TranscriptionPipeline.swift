@@ -117,8 +117,7 @@ struct TranscriptionPipeline {
 
         let asrEngine = try engineFactory.makeASREngine(for: runtimeProfile)
         let asrConfiguration = ASREngineConfiguration(
-            modelURL: asrModelURL,
-            language: runtimeProfile.asrLanguage
+            modelURL: asrModelURL
         )
 
         let micASRFile = "mic.asr.json"
@@ -438,7 +437,7 @@ struct TranscriptionPipeline {
             return DiarizationLoadOutcome(document: nil, degradedReason: "system audio track missing", modelUsed: nil)
         }
 
-        guard systemAudioURL.lastPathComponent == "system.raw.caf" else {
+        guard ["system.raw.caf", "system.raw.flac"].contains(systemAudioURL.lastPathComponent) else {
             return DiarizationLoadOutcome(document: nil, degradedReason: "unsupported system audio source", modelUsed: nil)
         }
 

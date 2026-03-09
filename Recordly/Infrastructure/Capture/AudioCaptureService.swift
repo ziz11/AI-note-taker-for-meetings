@@ -12,6 +12,7 @@ struct CaptureArtifacts {
 
 enum AudioCaptureError: LocalizedError {
     case microphonePermissionDenied
+    case screenRecordingPermissionDenied
     case captureAlreadyRunning
     case noActiveCapture
     case recorderFailedToStart
@@ -28,6 +29,8 @@ enum AudioCaptureError: LocalizedError {
         switch self {
         case .microphonePermissionDenied:
             return "Microphone permission was denied."
+        case .screenRecordingPermissionDenied:
+            return "Screen Recording permission is required to capture system audio. Please grant access in System Settings > Privacy & Security > Screen Recording."
         case .captureAlreadyRunning:
             return "A recording is already in progress."
         case .noActiveCapture:
@@ -269,6 +272,10 @@ actor PCMTrackWriter {
     private let fallback: Bool
     private var diagnostics: [String]
 
+    private var stagingBuffer: AVAudioPCMBuffer?
+    private var stagedFrames: AVAudioFrameCount = 0
+    private let flushThresholdFrames = AVAudioFrameCount(48_000 / 2) // ~500 ms
+
     init(kind: TrackKind, fileName: String, fileURL: URL, fallback: Bool = false, diagnostics: [String] = []) throws {
         guard let canonical = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -282,9 +289,22 @@ actor PCMTrackWriter {
         self.fileName = fileName
         self.fileURL = fileURL
         self.outputFormat = canonical
+
+        let fileSettings: [String: Any]
+        if fileURL.pathExtension.lowercased() == "flac" {
+            fileSettings = [
+                AVFormatIDKey: kAudioFormatFLAC,
+                AVSampleRateKey: Self.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(Self.canonicalChannels),
+                AVLinearPCMBitDepthKey: 24
+            ]
+        } else {
+            fileSettings = canonical.settings
+        }
+
         self.audioFile = try AVAudioFile(
             forWriting: fileURL,
-            settings: canonical.settings,
+            settings: fileSettings,
             commonFormat: .pcmFormatFloat32,
             interleaved: false
         )
@@ -310,13 +330,13 @@ actor PCMTrackWriter {
         let renderedBuffer = try convertIfNeeded(inputBuffer)
         guard renderedBuffer.frameLength > 0 else { return }
 
-        try audioFile.write(from: renderedBuffer)
-        framesWritten += Int64(renderedBuffer.frameLength)
+        try stage(renderedBuffer)
         bufferCount += 1
     }
 
     func finalize() -> TrackRuntimeStats {
-        TrackRuntimeStats(
+        flushStagingBuffer()
+        return TrackRuntimeStats(
             kind: kind,
             fileName: fileName,
             firstPTS: firstPTS,
@@ -327,6 +347,59 @@ actor PCMTrackWriter {
             fallback: fallback,
             diagnostics: diagnostics
         )
+    }
+
+    private func stage(_ buffer: AVAudioPCMBuffer) throws {
+        let incoming = buffer.frameLength
+        guard incoming > 0 else { return }
+
+        if stagingBuffer == nil {
+            stagingBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: flushThresholdFrames + 8192)
+            stagedFrames = 0
+        }
+        guard let staging = stagingBuffer,
+              let srcChannel = buffer.floatChannelData?[0],
+              let dstChannel = staging.floatChannelData?[0] else {
+            // Fallback: write directly if staging allocation failed.
+            try audioFile.write(from: buffer)
+            framesWritten += Int64(incoming)
+            return
+        }
+
+        let space = staging.frameCapacity - stagedFrames
+        if incoming <= space {
+            dstChannel.advanced(by: Int(stagedFrames)).update(from: srcChannel, count: Int(incoming))
+            stagedFrames += incoming
+            staging.frameLength = stagedFrames
+        } else {
+            // Fill remaining space, flush, then stage the rest.
+            if space > 0 {
+                dstChannel.advanced(by: Int(stagedFrames)).update(from: srcChannel, count: Int(space))
+                stagedFrames += space
+                staging.frameLength = stagedFrames
+            }
+            try flushStagingBufferThrowing()
+            let remainder = incoming - space
+            dstChannel.update(from: srcChannel.advanced(by: Int(space)), count: Int(remainder))
+            stagedFrames = remainder
+            staging.frameLength = stagedFrames
+        }
+
+        if stagedFrames >= flushThresholdFrames {
+            try flushStagingBufferThrowing()
+        }
+    }
+
+    private func flushStagingBufferThrowing() throws {
+        guard let staging = stagingBuffer, stagedFrames > 0 else { return }
+        staging.frameLength = stagedFrames
+        try audioFile.write(from: staging)
+        framesWritten += Int64(stagedFrames)
+        stagedFrames = 0
+    }
+
+    private func flushStagingBuffer() {
+        try? flushStagingBufferThrowing()
     }
 
     private func convertIfNeeded(_ inputBuffer: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
@@ -435,14 +508,24 @@ final class FallbackMicrophoneRecorder: NSObject, AVAudioRecorderDelegate {
     private var finishContinuation: CheckedContinuation<Void, Error>?
 
     func startRecording(to fileURL: URL) throws {
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: PCMTrackWriter.canonicalSampleRate,
-            AVNumberOfChannelsKey: Int(PCMTrackWriter.canonicalChannels),
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsNonInterleaved: true
-        ]
+        let settings: [String: Any]
+        if fileURL.pathExtension.lowercased() == "flac" {
+            settings = [
+                AVFormatIDKey: kAudioFormatFLAC,
+                AVSampleRateKey: PCMTrackWriter.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(PCMTrackWriter.canonicalChannels),
+                AVLinearPCMBitDepthKey: 24
+            ]
+        } else {
+            settings = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: PCMTrackWriter.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(PCMTrackWriter.canonicalChannels),
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsNonInterleaved: true
+            ]
+        }
 
         let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
         recorder.delegate = self
@@ -596,10 +679,19 @@ final class AudioCaptureService: AudioCaptureEngine {
             throw AudioCaptureError.microphonePermissionDenied
         }
 
+        // Verify Screen Recording permission before allocating session resources.
+        // SCShareableContent.excludingDesktopWindows triggers the system prompt on
+        // first call and throws if the user has denied access.
+        do {
+            _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        } catch {
+            throw AudioCaptureError.screenRecordingPermissionDenied
+        }
+
         let sessionID = UUID(uuidString: sessionDirectory.lastPathComponent) ?? UUID()
 
-        let microphoneFileName = "mic.raw.caf"
-        let systemFileName = "system.raw.caf"
+        let microphoneFileName = "mic.raw.flac"
+        let systemFileName = "system.raw.flac"
 
         let microphoneURL = sessionDirectory.appendingPathComponent(microphoneFileName)
         let systemURL = sessionDirectory.appendingPathComponent(systemFileName)

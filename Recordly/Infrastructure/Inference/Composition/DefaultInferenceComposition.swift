@@ -24,7 +24,6 @@ enum DefaultInferenceComposition {
         let bootstrapProfile = InferenceRuntimeProfile(
             stageSelection: stageSelection,
             modelArtifacts: .empty,
-            asrLanguage: .auto,
             summarizationRuntimeSettings: modelManager.summarizationRuntimeSettings
         )
         let audioCaptureEngine = (try? engineFactory.makeAudioCaptureEngine(for: bootstrapProfile)) ?? AudioCaptureService()

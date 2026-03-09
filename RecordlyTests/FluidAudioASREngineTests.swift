@@ -68,7 +68,7 @@ final class FluidAudioASREngineTests: XCTestCase {
                 audioURL: audioURL,
                 channel: .mic,
                 sessionID: UUID(),
-                configuration: ASREngineConfiguration(modelURL: missingModel, language: .auto)
+                configuration: ASREngineConfiguration(modelURL: missingModel)
             )
             XCTFail("Expected error")
         } catch let error as ASREngineRuntimeError {
@@ -93,7 +93,7 @@ final class FluidAudioASREngineTests: XCTestCase {
                 audioURL: audioURL,
                 channel: .mic,
                 sessionID: UUID(),
-                configuration: ASREngineConfiguration(modelURL: invalidModel, language: .auto)
+                configuration: ASREngineConfiguration(modelURL: invalidModel)
             )
             XCTFail("Expected error")
         } catch let error as ASREngineRuntimeError {
@@ -118,7 +118,7 @@ final class FluidAudioASREngineTests: XCTestCase {
                 audioURL: audioURL,
                 channel: .mic,
                 sessionID: UUID(),
-                configuration: ASREngineConfiguration(modelURL: modelDirectory, language: .auto)
+                configuration: ASREngineConfiguration(modelURL: modelDirectory)
             )
             XCTFail("Expected error")
         } catch let error as ASREngineRuntimeError {
@@ -148,7 +148,7 @@ final class FluidAudioASREngineTests: XCTestCase {
             audioURL: audioURL,
             channel: .mic,
             sessionID: UUID(),
-            configuration: ASREngineConfiguration(modelURL: modelDirectory, language: .auto)
+            configuration: ASREngineConfiguration(modelURL: modelDirectory)
         )
 
         XCTAssertEqual(document.segments.first?.text, "ok")
@@ -172,7 +172,7 @@ final class FluidAudioASREngineTests: XCTestCase {
                 audioURL: audioURL,
                 channel: .mic,
                 sessionID: UUID(),
-                configuration: ASREngineConfiguration(modelURL: modelDirectory, language: .auto)
+                configuration: ASREngineConfiguration(modelURL: modelDirectory)
             )
             XCTFail("Expected error")
         } catch {
@@ -183,12 +183,12 @@ final class FluidAudioASREngineTests: XCTestCase {
     func testEngineCacheFingerprintIncludesFluidAudioTag() throws {
         let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-fp")
         let engine = FluidAudioASREngine()
-        let config = ASREngineConfiguration(modelURL: modelDirectory, language: .auto)
+        let config = ASREngineConfiguration(modelURL: modelDirectory)
         let fingerprint = engine.cacheFingerprint(configuration: config)
 
         XCTAssertTrue(fingerprint.contains("backend:fluidaudio"))
         XCTAssertTrue(fingerprint.contains("v3"))
-        XCTAssertTrue(fingerprint.contains("lang:auto"))
+        XCTAssertTrue(fingerprint.contains("backend:fluidaudio"))
     }
 
     func testEngineProducesEmptyDocumentForEmptyTranscriberOutput() async throws {
@@ -205,7 +205,7 @@ final class FluidAudioASREngineTests: XCTestCase {
             audioURL: audioURL,
             channel: .system,
             sessionID: UUID(),
-            configuration: ASREngineConfiguration(modelURL: modelDirectory, language: .auto)
+            configuration: ASREngineConfiguration(modelURL: modelDirectory)
         )
 
         XCTAssertTrue(document.segments.isEmpty)
@@ -228,13 +228,13 @@ final class FluidAudioASREngineTests: XCTestCase {
             audioURL: audioURL,
             channel: .mic,
             sessionID: UUID(),
-            configuration: ASREngineConfiguration(modelURL: modelDirectory, language: .auto)
+            configuration: ASREngineConfiguration(modelURL: modelDirectory)
         )
         let systemDoc = try await engine.transcribe(
             audioURL: audioURL,
             channel: .system,
             sessionID: UUID(),
-            configuration: ASREngineConfiguration(modelURL: modelDirectory, language: .auto)
+            configuration: ASREngineConfiguration(modelURL: modelDirectory)
         )
 
         XCTAssertEqual(micDoc.channel, .mic)
@@ -269,7 +269,7 @@ final class FluidAudioASREngineTests: XCTestCase {
             audioURL: audioURL,
             channel: .mic,
             sessionID: UUID(),
-            configuration: ASREngineConfiguration(modelURL: modelDirectory, language: .auto)
+            configuration: ASREngineConfiguration(modelURL: modelDirectory)
         )
 
         XCTAssertEqual(document.segments.count, 1)
@@ -432,8 +432,7 @@ private struct StubFluidAudioTranscriber: FluidAudioTranscribing {
     func transcribe(
         audioBuffer: AVAudioPCMBuffer,
         modelDirectoryURL: URL,
-        channel: TranscriptChannel,
-        languageCode: String?
+        channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput {
         output
     }
@@ -453,8 +452,7 @@ private final class RecordingFluidAudioTranscriber: FluidAudioTranscribing, @unc
     func transcribe(
         audioBuffer: AVAudioPCMBuffer,
         modelDirectoryURL: URL,
-        channel: TranscriptChannel,
-        languageCode: String?
+        channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput {
         callCount += 1
         lastBufferFrameLength = audioBuffer.frameLength

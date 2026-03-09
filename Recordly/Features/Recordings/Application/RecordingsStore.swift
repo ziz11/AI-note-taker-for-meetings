@@ -1015,11 +1015,11 @@ final class RecordingsStore: ObservableObject {
     }
 
     private func handleTranscriptionError(_ error: Error, isBackground: Bool = false) {
-        if case let RecordingWorkflowError.transcriptionUnavailable(availability) = error {
-            if case .requiresASRModel = availability {
-                isModelsSheetPresented = true
-                return
-            }
+        guard let workflowError = error as? RecordingWorkflowError else {
+            present(error, shouldSetRuntimeErrorState: !isBackground)
+            return
+        }
+        if case .transcriptionUnavailable = workflowError {
             return
         }
         present(error, shouldSetRuntimeErrorState: !isBackground)

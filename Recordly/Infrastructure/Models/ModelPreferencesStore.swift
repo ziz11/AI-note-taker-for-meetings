@@ -82,7 +82,7 @@ final class ModelPreferencesStore {
         }
 
         if defaults.object(forKey: Keys.selectedASRLanguage) != nil {
-            defaults.set(ASRLanguage.auto.rawValue, forKey: Keys.selectedASRLanguage)
+            defaults.set("auto", forKey: Keys.selectedASRLanguage)
         }
     }
 }
