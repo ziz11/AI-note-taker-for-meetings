@@ -19,7 +19,7 @@ final class ModelSettingsViewModel: ObservableObject {
     ) {
         self.modelManager = modelManager
         self.fluidAudioModelProvider = fluidAudioModelProvider
-        refresh()
+        fluidProvisioningState = fluidAudioModelProvider.state
     }
 
     func refresh() {
