@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import SwiftUI
 
 struct RecordingSidebarView: View {
@@ -140,7 +141,9 @@ struct RecordingSidebarView: View {
                 Spacer(minLength: 8)
 
                 Button("Open") {
-                    openScreenRecordingSettings()
+                    Task {
+                        await requestSystemRecordingPermission()
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color.white.opacity(0.16))
@@ -313,6 +316,20 @@ struct RecordingSidebarView: View {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    private func requestSystemRecordingPermission() async {
+        if CGPreflightScreenCaptureAccess() {
+            return
+        }
+
+        let granted = await Task.detached(priority: .userInitiated) {
+            CGRequestScreenCaptureAccess()
+        }.value
+
+        if !granted {
+            openScreenRecordingSettings()
+        }
     }
 }
 

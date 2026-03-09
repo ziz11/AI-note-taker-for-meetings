@@ -607,6 +607,10 @@ final class ScreenCaptureAudioService: NSObject {
         CGPreflightScreenCaptureAccess()
     }
 
+    func requestSystemRecordingPermission() -> Bool {
+        CGRequestScreenCaptureAccess()
+    }
+
     func startCapture(
         onSystemSample: @escaping (CMSampleBuffer) -> Void,
         onMicrophoneSample: @escaping (CMSampleBuffer) -> Void
@@ -685,7 +689,7 @@ final class AudioCaptureService: AudioCaptureEngine {
             throw AudioCaptureError.microphonePermissionDenied
         }
 
-        // Preflight system capture permission and degrade to mic-only capture if unavailable.
+        // Ensure system capture permission is requested before trying to start ScreenCaptureKit.
 
         let sessionID = UUID(uuidString: sessionDirectory.lastPathComponent) ?? UUID()
 
@@ -695,15 +699,24 @@ final class AudioCaptureService: AudioCaptureEngine {
         let microphoneURL = sessionDirectory.appendingPathComponent(microphoneFileName)
         let systemURL = sessionDirectory.appendingPathComponent(systemFileName)
 
-        let micWriter = try PCMTrackWriter(kind: .microphone, fileName: microphoneFileName, fileURL: microphoneURL)
-        let sysWriter = try PCMTrackWriter(kind: .system, fileName: systemFileName, fileURL: systemURL)
-
         do {
             try await metadataStore.createSession(id: sessionID, in: sessionDirectory)
             var streamStartError: Error?
             var systemCaptureAttempted = false
+            var didStartStreamCapture = false
+            var micWriter: PCMTrackWriter?
+            var sysWriter: PCMTrackWriter?
 
-            if screenCaptureService.hasSystemRecordingPermission() {
+            var hasSystemCapturePermission = screenCaptureService.hasSystemRecordingPermission()
+            if !hasSystemCapturePermission {
+                hasSystemCapturePermission = screenCaptureService.requestSystemRecordingPermission()
+            }
+
+            if hasSystemCapturePermission {
+                let streamMicWriter = try PCMTrackWriter(kind: .microphone, fileName: microphoneFileName, fileURL: microphoneURL)
+                let streamSysWriter = try PCMTrackWriter(kind: .system, fileName: systemFileName, fileURL: systemURL)
+                micWriter = streamMicWriter
+                sysWriter = streamSysWriter
                 systemCaptureAttempted = true
                 do {
                     try await withStartupTimeout { [self] in
@@ -712,7 +725,7 @@ final class AudioCaptureService: AudioCaptureEngine {
                                 guard let self else { return }
                                 Task {
                                     do {
-                                        try await sysWriter.append(sampleBuffer: sampleBuffer)
+                                        try await streamSysWriter.append(sampleBuffer: sampleBuffer)
                                         self.systemLevelValue = sampleBuffer.normalizedLevel
                                     } catch {
                                         // Keep recording alive if one buffer fails to convert.
@@ -723,7 +736,7 @@ final class AudioCaptureService: AudioCaptureEngine {
                                 guard let self else { return }
                                 Task {
                                     do {
-                                        try await micWriter.append(sampleBuffer: sampleBuffer)
+                                        try await streamMicWriter.append(sampleBuffer: sampleBuffer)
                                         self.microphoneLevelValue = sampleBuffer.normalizedLevel
                                     } catch {
                                         // Keep recording alive if one buffer fails to convert.
@@ -732,6 +745,7 @@ final class AudioCaptureService: AudioCaptureEngine {
                             }
                         )
                     }
+                    didStartStreamCapture = true
                     systemStatusLabelValue = "Captured"
                 } catch {
                     streamStartError = error
@@ -743,7 +757,10 @@ final class AudioCaptureService: AudioCaptureEngine {
             }
 
             if streamStartError != nil || !systemCaptureAttempted || !screenCaptureService.microphoneViaStreamEnabled {
+                didStartStreamCapture = false
                 try? await screenCaptureService.stopCapture()
+                micWriter = nil
+                sysWriter = nil
                 try fallbackMicrophoneRecorder.startRecording(to: microphoneURL)
                 if let streamStartError {
                     try await metadataStore.appendNote(
@@ -758,17 +775,17 @@ final class AudioCaptureService: AudioCaptureEngine {
                 }
             }
 
-            self.microphoneWriter = micWriter
-            self.systemWriter = sysWriter
+            self.microphoneWriter = didStartStreamCapture ? micWriter : nil
+            self.systemWriter = didStartStreamCapture ? sysWriter : nil
             self.activeSessionDirectory = sessionDirectory
             self.activeSessionID = sessionID
             self.microphoneFileName = microphoneFileName
-            self.systemAudioFileName = systemFileName
+            self.systemAudioFileName = didStartStreamCapture ? systemFileName : nil
             self.isRunning = true
 
             return CaptureArtifacts(
                 microphoneFile: microphoneFileName,
-                systemAudioFile: systemFileName,
+                systemAudioFile: didStartStreamCapture ? systemFileName : nil,
                 mergedCallFile: nil,
                 connectorNotesFile: "capture-session.json",
                 note: streamStartError == nil
@@ -780,6 +797,8 @@ final class AudioCaptureService: AudioCaptureEngine {
             self.systemWriter = nil
             self.activeSessionDirectory = nil
             self.activeSessionID = nil
+            self.microphoneFileName = nil
+            self.systemAudioFileName = nil
             throw error
         }
     }
