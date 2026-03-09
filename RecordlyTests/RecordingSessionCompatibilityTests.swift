@@ -57,6 +57,104 @@ final class RecordingSessionCompatibilityTests: XCTestCase {
         XCTAssertFalse(session.hasSummarizationSource)
     }
 
+    func testLegacyTranscriptJSONWithYouInfersMeRoleAndID() throws {
+        let json = """
+        {
+          "version": 1,
+          "sessionID": "7E035153-985A-4301-BC0A-F2FDD68AFA6E",
+          "createdAt": "2026-03-06T10:00:00Z",
+          "channelsPresent": ["mic", "system"],
+          "diarizationApplied": true,
+          "mergePolicy": "deterministicStartEndChannelID",
+          "segments": [
+            {
+              "id": "m1",
+              "channel": "mic",
+              "speaker": "You",
+              "startMs": 0,
+              "endMs": 1000,
+              "text": "hello"
+            }
+          ]
+        }
+        """
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let document = try decoder.decode(TranscriptDocument.self, from: Data(json.utf8))
+
+        XCTAssertEqual(document.segments.first?.speakerRole, .me)
+        XCTAssertEqual(document.segments.first?.speakerId, "me")
+    }
+
+    func testLegacyTranscriptJSONWithSpeakerLabelInfersRemoteRole() throws {
+        let json = """
+        {
+          "version": 1,
+          "sessionID": "7E035153-985A-4301-BC0A-F2FDD68AFA6E",
+          "createdAt": "2026-03-06T10:00:00Z",
+          "channelsPresent": ["system"],
+          "diarizationApplied": true,
+          "mergePolicy": "deterministicStartEndChannelID",
+          "segments": [
+            {
+              "id": "s1",
+              "channel": "system",
+              "speaker": "Speaker 2",
+              "startMs": 0,
+              "endMs": 1000,
+              "text": "hi"
+            }
+          ]
+        }
+        """
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let document = try decoder.decode(TranscriptDocument.self, from: Data(json.utf8))
+
+        XCTAssertEqual(document.segments.first?.speakerRole, .remote)
+        XCTAssertEqual(document.segments.first?.speakerId, "remote_2")
+    }
+
+    func testTranscriptSegmentRoundTripPreservesSpeakerRoleAndID() throws {
+        let segment = TranscriptSegment(
+            id: "s1",
+            channel: .system,
+            speaker: "Speaker 1",
+            speakerRole: .remote,
+            speakerId: "remote_1",
+            startMs: 0,
+            endMs: 1200,
+            text: "hello",
+            confidence: 0.9,
+            language: "en",
+            speakerConfidence: 0.8,
+            words: nil
+        )
+
+        let document = TranscriptDocument(
+            version: 1,
+            sessionID: UUID(),
+            createdAt: Date(),
+            channelsPresent: [.system],
+            diarizationApplied: true,
+            mergePolicy: .deterministicStartEndChannelID,
+            segments: [segment]
+        )
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let data = try encoder.encode(document)
+        let decoded = try decoder.decode(TranscriptDocument.self, from: data)
+
+        XCTAssertEqual(decoded.segments.first?.speakerRole, .remote)
+        XCTAssertEqual(decoded.segments.first?.speakerId, "remote_1")
+    }
+
     private func makeSession(state: TranscriptPipelineState) -> RecordingSession {
         RecordingSession(
             id: UUID(),

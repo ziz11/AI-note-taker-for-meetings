@@ -238,6 +238,8 @@ struct TranscriptionPipeline {
                 id: $0.id,
                 channel: .mic,
                 speaker: "You",
+                speakerRole: .me,
+                speakerId: "me",
                 startMs: $0.startMs,
                 endMs: $0.endMs,
                 text: $0.text,

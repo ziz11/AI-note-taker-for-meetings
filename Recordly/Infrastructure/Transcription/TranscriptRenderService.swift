@@ -8,14 +8,14 @@ struct TranscriptRenderOutput {
 struct TranscriptRenderService {
     func render(document: TranscriptDocument) -> TranscriptRenderOutput {
         let transcript = document.segments
-            .map { "[\(formatTime($0.startMs)) - \(formatTime($0.endMs))] [\($0.speaker)] \($0.text)" }
+            .map { "[\(formatTime($0.startMs)) - \(formatTime($0.endMs))] [\($0.displaySpeakerLabel)] \($0.text)" }
             .joined(separator: "\n")
 
         let srtChunks = document.segments.enumerated().map { index, segment in
             """
             \(index + 1)
             \(formatSRTTime(segment.startMs)) --> \(formatSRTTime(segment.endMs))
-            [\(segment.speaker)] \(segment.text)
+            [\(segment.displaySpeakerLabel)] \(segment.text)
             """
         }
 

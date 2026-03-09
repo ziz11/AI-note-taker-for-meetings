@@ -126,7 +126,7 @@ final class RecordingsRepository: RecordingsPersistence {
         }
 
         let transcript = document.segments
-            .map { "[\($0.speaker)] \($0.text)" }
+            .map { "[\($0.displaySpeakerLabel)] \($0.text)" }
             .joined(separator: "\n")
 
         transcriptCache[recording.id] = transcript
