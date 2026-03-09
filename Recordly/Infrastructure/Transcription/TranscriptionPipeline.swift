@@ -457,7 +457,7 @@ struct TranscriptionPipeline {
         currentFingerprint: String
     ) -> ASROutcome? {
         switch error {
-        case .inferenceFailed(let message) where channel == .system && isSystemAudioUnavailableError(message):
+        case .inferenceFailed(let message) where channel == .system && isRecoverableSystemInferenceFailure(message):
             return attemptSystemRecovery(
                 sessionID: sessionID,
                 channel: channel,
@@ -588,6 +588,15 @@ struct TranscriptionPipeline {
         return normalized.contains("failed to read the frames of the audio data")
             || normalized.contains("failed to read audio file")
             || normalized.contains("invalid argument")
+    }
+
+    private func isRecoverableSystemInferenceFailure(_ message: String) -> Bool {
+        if isSystemAudioUnavailableError(message) {
+            return true
+        }
+        return message
+            .lowercased()
+            .contains("input audio format is not supported")
     }
 
     private func isZeroByteAudioFile(_ url: URL) throws -> Bool {
