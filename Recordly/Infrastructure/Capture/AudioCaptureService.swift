@@ -679,14 +679,8 @@ final class AudioCaptureService: AudioCaptureEngine {
             throw AudioCaptureError.microphonePermissionDenied
         }
 
-        // Verify Screen Recording permission before allocating session resources.
-        // SCShareableContent.excludingDesktopWindows triggers the system prompt on
-        // first call and throws if the user has denied access.
-        do {
-            _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        } catch {
-            throw AudioCaptureError.screenRecordingPermissionDenied
-        }
+        // Do not hard-gate recording on Screen Recording permission here.
+        // If system capture setup fails later, we degrade to mic-only capture.
 
         let sessionID = UUID(uuidString: sessionDirectory.lastPathComponent) ?? UUID()
 
