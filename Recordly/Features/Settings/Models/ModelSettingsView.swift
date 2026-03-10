@@ -7,19 +7,11 @@ struct ModelSettingsView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.10, green: 0.12, blue: 0.16),
-                    Color(red: 0.13, green: 0.16, blue: 0.20),
-                    Color(red: 0.10, green: 0.12, blue: 0.15)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            AppTheme.contentBackground
+                .ignoresSafeArea()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 20) {
                     header
                     sectionHeader(
                         eyebrow: "Dictation Models",
@@ -29,10 +21,10 @@ struct ModelSettingsView: View {
                     fluidAudioFeaturedCard
 
                     if !viewModel.localASRModels.isEmpty {
-                        VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 10) {
                             Text("Custom Local ASR")
                                 .font(.title3.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.95))
+                                .foregroundStyle(.primary)
 
                             ForEach(viewModel.localASRModels) { model in
                                 catalogRow(model: model, actionTitle: nil) {}
@@ -59,7 +51,7 @@ struct ModelSettingsView: View {
                             subtitle: "Add compatible `.gguf` or `.bin` files to a summarization models folder to use local summaries."
                         )
                     } else {
-                        VStack(spacing: 14) {
+                        VStack(spacing: 10) {
                             ForEach(viewModel.summarizationCatalogModels) { model in
                                 catalogRow(
                                     model: model,
@@ -75,7 +67,7 @@ struct ModelSettingsView: View {
 
                     folderActions
                 }
-                .padding(24)
+                .padding(20)
             }
         }
         .frame(minWidth: 960, minHeight: 680)
@@ -87,11 +79,11 @@ struct ModelSettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Models")
                     .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
 
                 Text("Catalog view for on-device dictation, speaker separation, and summarization.")
                     .font(.headline)
-                    .foregroundStyle(.white.opacity(0.82))
+                    .foregroundStyle(AppTheme.secondaryText)
             }
 
             Spacer()
@@ -101,24 +93,24 @@ struct ModelSettingsView: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.headline.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(.primary)
                     .frame(width: 40, height: 40)
-                    .background(Color.white.opacity(0.08), in: Circle())
+                    .background(AppTheme.panelFill, in: Circle())
             }
             .buttonStyle(.plain)
         }
     }
 
     private var fluidAudioFeaturedCard: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
                 modelGlyph(systemName: "waveform.badge.magnifyingglass", tint: Color.blue)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .center, spacing: 8) {
                         Text("FluidAudio v3")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                            .foregroundStyle(.primary)
 
                         capsule("Featured", tint: Color.blue)
                         capsule("Multilingual", tint: Color.teal)
@@ -126,10 +118,11 @@ struct ModelSettingsView: View {
                     }
 
                     Text("Primary on-device dictation engine powered by the FluidAudio SDK. Download once, then transcribe locally without manual model file management.")
-                        .font(.title3.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.82))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                    HStack(spacing: 12) {
+                    WrapHStack(spacing: 8, lineSpacing: 8) {
                         statChip("ASR")
                         statChip("Local")
                         statChip(fluidStatusLabel(viewModel.fluidProvisioningState))
@@ -137,36 +130,31 @@ struct ModelSettingsView: View {
                 }
 
                 Spacer()
-            }
-
-            HStack(alignment: .center) {
-                statusMessage(for: viewModel.fluidProvisioningState, noun: "FluidAudio v3 model")
-
-                Spacer()
 
                 Button(viewModel.isFluidModelReady ? "Ready" : "Download") {
                     viewModel.downloadFluidAudioModel()
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .controlSize(.regular)
                 .disabled(!viewModel.canDownloadFluidModel)
             }
+
+            statusMessage(for: viewModel.fluidProvisioningState, noun: "FluidAudio v3 model")
         }
-        .padding(24)
-        .background(cardBackground(selected: viewModel.isFluidModelReady))
-        .overlay(cardBorder(selected: viewModel.isFluidModelReady))
+        .padding(18)
+        .appPanel(selected: viewModel.isFluidModelReady, prominent: true, cornerRadius: 28)
     }
 
     private var fluidAudioDiarizationCard: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
                 modelGlyph(systemName: "person.2.wave.2.fill", tint: Color.orange)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .center, spacing: 8) {
                         Text("FluidAudio Speaker Separation")
-                            .font(.title2.weight(.bold))
-                            .foregroundStyle(.white)
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.primary)
 
                         capsule("Provision Card", tint: Color.orange)
                         if viewModel.isFluidDiarizationModelReady {
@@ -175,10 +163,11 @@ struct ModelSettingsView: View {
                     }
 
                     Text("SDK-managed diarization package for local speaker separation. This card reflects provisioning status only and does not alter existing legacy model state.")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.78))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                    HStack(spacing: 12) {
+                    WrapHStack(spacing: 8, lineSpacing: 8) {
                         statChip("Diarization")
                         statChip("Local")
                         statChip(fluidStatusLabel(viewModel.fluidDiarizationProvisioningState))
@@ -186,31 +175,26 @@ struct ModelSettingsView: View {
                 }
 
                 Spacer()
-            }
-
-            HStack(alignment: .center) {
-                statusMessage(for: viewModel.fluidDiarizationProvisioningState, noun: "FluidAudio diarization package")
-
-                Spacer()
 
                 Button(viewModel.isFluidDiarizationModelReady ? "Ready" : "Download") {
                     viewModel.downloadFluidDiarizationModel()
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .controlSize(.regular)
                 .disabled(!viewModel.canDownloadFluidDiarizationModel)
             }
+
+            statusMessage(for: viewModel.fluidDiarizationProvisioningState, noun: "FluidAudio diarization package")
         }
-        .padding(24)
-        .background(cardBackground(selected: viewModel.isFluidDiarizationModelReady))
-        .overlay(cardBorder(selected: viewModel.isFluidDiarizationModelReady))
+        .padding(18)
+        .appPanel(selected: viewModel.isFluidDiarizationModelReady, prominent: true, cornerRadius: 28)
     }
 
     private var folderActions: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Model Folders")
                 .font(.headline)
-                .foregroundStyle(.white.opacity(0.92))
+                .foregroundStyle(.primary)
 
             HStack(spacing: 10) {
                 folderButton(title: "Open Summaries Folder", url: viewModel.folderURL(for: .summarization, source: .userLocal))
@@ -221,18 +205,18 @@ struct ModelSettingsView: View {
     }
 
     private func sectionHeader(eyebrow: String, title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(eyebrow.uppercased())
                 .font(.caption.weight(.bold))
-                .foregroundStyle(Color.blue.opacity(0.85))
+                .foregroundStyle(AppTheme.accent)
 
             Text(title)
-                .font(.system(size: 26, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundStyle(.primary)
 
             Text(subtitle)
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.72))
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.secondaryText)
         }
     }
 
@@ -242,75 +226,73 @@ struct ModelSettingsView: View {
         actionProminent: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 16) {
-                modelGlyph(systemName: glyph(for: model.kind), tint: tint(for: model.kind))
+        HStack(alignment: .top, spacing: 14) {
+            modelGlyph(systemName: glyph(for: model.kind), tint: tint(for: model.kind), compact: true)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .center, spacing: 10) {
-                        Text(model.title)
-                            .font(.title2.weight(.bold))
-                            .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(model.title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
 
-                        if model.isSelected {
-                            capsule("Now Using", tint: Color.blue)
-                        }
-                        capsule(model.sourceLabel, tint: Color.white.opacity(0.18))
+                    if model.isSelected {
+                        capsule("Now Using", tint: Color.blue, compact: true)
                     }
+                    capsule(model.sourceLabel, tint: Color.white.opacity(0.18), compact: true)
 
-                    Text(model.subtitle)
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.76))
+                    Spacer(minLength: 8)
 
-                    HStack(spacing: 10) {
-                        ForEach(model.metadata, id: \.self) { item in
-                            statChip(item)
+                    if let actionTitle {
+                        if actionProminent {
+                            Button(actionTitle, action: action)
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                                .disabled(!model.supportsSelection || model.isSelected)
+                        } else {
+                            Button(actionTitle, action: action)
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(!model.supportsSelection || model.isSelected)
                         }
-                    }
-
-                    if let footnote = model.footnote {
-                        Text(footnote)
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.50))
-                            .lineLimit(2)
                     }
                 }
 
-                Spacer()
+                Text(model.subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.secondaryText)
 
-                if let actionTitle {
-                    if actionProminent {
-                        Button(actionTitle, action: action)
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
-                            .disabled(!model.supportsSelection || model.isSelected)
-                    } else {
-                        Button(actionTitle, action: action)
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-                            .disabled(!model.supportsSelection || model.isSelected)
+                WrapHStack(spacing: 8, lineSpacing: 8) {
+                    ForEach(model.metadata, id: \.self) { item in
+                        statChip(item, compact: true)
                     }
+                }
+
+                if let footnote = model.footnote {
+                    Text(footnote)
+                        .font(.caption2)
+                        .foregroundStyle(AppTheme.tertiaryText)
+                        .lineLimit(1)
+                        .textSelection(.enabled)
                 }
             }
         }
-        .padding(22)
-        .background(cardBackground(selected: model.isSelected))
-        .overlay(cardBorder(selected: model.isSelected))
+        .padding(16)
+        .appPanel(selected: model.isSelected, cornerRadius: 22)
     }
 
     private func emptyStateCard(title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.headline)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
             Text(subtitle)
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.72))
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.secondaryText)
         }
-        .padding(20)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground(selected: false))
-        .overlay(cardBorder(selected: false))
+        .appPanel(cornerRadius: 22)
     }
 
     private func folderButton(title: String, url: URL?) -> some View {
@@ -352,7 +334,7 @@ struct ModelSettingsView: View {
                     .controlSize(.small)
                 Text("Downloading \(noun.lowercased())...")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.82))
+                    .foregroundStyle(.primary)
             }
         case .failed(let message):
             Text("Download failed: \(message)")
@@ -383,48 +365,130 @@ struct ModelSettingsView: View {
         }
     }
 
-    private func modelGlyph(systemName: String, tint: Color) -> some View {
+    private func modelGlyph(systemName: String, tint: Color, compact: Bool = false) -> some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
                 .fill(tint.opacity(0.12))
-                .frame(width: 82, height: 82)
+                .frame(width: compact ? 52 : 76, height: compact ? 52 : 76)
 
             Image(systemName: systemName)
-                .font(.system(size: 30, weight: .semibold))
+                .font(.system(size: compact ? 20 : 28, weight: .semibold))
                 .foregroundStyle(tint.opacity(0.95))
         }
     }
 
-    private func capsule(_ text: String, tint: Color) -> some View {
+    private func capsule(_ text: String, tint: Color, compact: Bool = false) -> some View {
         Text(text)
             .font(.caption.weight(.bold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, compact ? 10 : 12)
+            .padding(.vertical, compact ? 4 : 6)
             .background(tint, in: Capsule())
     }
 
-    private func statChip(_ text: String) -> some View {
+    private func statChip(_ text: String, compact: Bool = false) -> some View {
         Text(text)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.86))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.white.opacity(0.06), in: Capsule())
+            .font((compact ? Font.caption : Font.subheadline).weight(.semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, compact ? 10 : 12)
+            .padding(.vertical, compact ? 6 : 8)
+            .background(AppTheme.panelFill, in: Capsule())
+    }
+}
+
+private struct WrapHStack<Content: View>: View {
+    let spacing: CGFloat
+    let lineSpacing: CGFloat
+    let content: Content
+
+    init(
+        spacing: CGFloat = 8,
+        lineSpacing: CGFloat = 8,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.spacing = spacing
+        self.lineSpacing = lineSpacing
+        self.content = content()
     }
 
-    private func cardBackground(selected: Bool) -> some ShapeStyle {
-        LinearGradient(
-            colors: selected
-                ? [Color.blue.opacity(0.18), Color.white.opacity(0.04)]
-                : [Color.white.opacity(0.05), Color.white.opacity(0.02)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+    var body: some View {
+        _WrapHStackLayout(spacing: spacing, lineSpacing: lineSpacing) {
+            content
+        }
+    }
+}
+
+private struct _WrapHStackLayout: Layout {
+    let spacing: CGFloat
+    let lineSpacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let rows = arrangeRows(in: proposal.width ?? .infinity, subviews: subviews)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.reduce(0) { $0 + $1.height } + max(CGFloat(rows.count - 1), 0) * lineSpacing
+        return CGSize(width: width, height: height)
     }
 
-    private func cardBorder(selected: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 28, style: .continuous)
-            .stroke(selected ? Color.blue.opacity(0.90) : Color.white.opacity(0.12), lineWidth: selected ? 2 : 1)
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let rows = arrangeRows(in: bounds.width, subviews: subviews)
+        var y = bounds.minY
+
+        for row in rows {
+            var x = bounds.minX
+            for element in row.elements {
+                subviews[element.index].place(
+                    at: CGPoint(x: x, y: y),
+                    proposal: ProposedViewSize(width: element.size.width, height: element.size.height)
+                )
+                x += element.size.width + spacing
+            }
+            y += row.height + lineSpacing
+        }
+    }
+
+    private func arrangeRows(in availableWidth: CGFloat, subviews: Subviews) -> [Row] {
+        let maxWidth = availableWidth.isFinite ? availableWidth : .greatestFiniteMagnitude
+        var rows: [Row] = []
+        var current = Row()
+
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let nextWidth = current.elements.isEmpty ? size.width : current.width + spacing + size.width
+
+            if !current.elements.isEmpty, nextWidth > maxWidth {
+                rows.append(current)
+                current = Row()
+            }
+
+            current.elements.append(Row.Element(index: index, size: size))
+            current.width = current.elements.count == 1 ? size.width : current.width + spacing + size.width
+            current.height = max(current.height, size.height)
+        }
+
+        if !current.elements.isEmpty {
+            rows.append(current)
+        }
+
+        return rows
+    }
+
+    private struct Row {
+        struct Element {
+            let index: Int
+            let size: CGSize
+        }
+
+        var elements: [Element] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
     }
 }
