@@ -109,7 +109,7 @@ Decide first whether the capability is cross-backend or backend-private.
   - `merged-call.caf`
   - `merged-call.m4a`
 - Internal live-capture format remains normalized PCM in CAF.
-- FluidAudio SDK accepts CAF directly — no format conversion is needed at the ASR boundary.
+- Backend-local FluidAudio prep may load persisted `CAF` or `FLAC` session artifacts and convert them to SDK-ready PCM at the consumer boundary.
 - If a future backend needs WAV, FLAC, PCM buffers, or another representation, adapt at the consumer boundary.
 
 ### Persistence invariants
@@ -372,7 +372,7 @@ Use these files as the primary routing map for inference changes:
 Current backend modules:
 
 - ASR: `FluidAudioASREngine` (FluidAudio SDK v3)
-- Diarization: `CliDiarizationEngine`
+- Diarization: `FluidAudioDiarizationEngine` (default local path), `CliDiarizationEngine` retained as legacy runtime path
 - Summarization: `LlamaCppSummarizationEngine`
 
 ## Final Operating Rule

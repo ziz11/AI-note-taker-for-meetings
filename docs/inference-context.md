@@ -35,7 +35,7 @@ Default local stage map:
 
 - `audioCapture -> nativeCapture`
 - `asr -> fluidAudio`
-- `diarization -> cliDiarization`
+- `diarization -> fluidAudio`
 - `summarization -> llamaCpp`
 - `vad -> disabled`
 
@@ -126,7 +126,7 @@ Backend rule:
 ## Audio invariants
 
 - internal capture stays `CAF + PCM`
-- FluidAudio SDK accepts CAF directly — no format conversion is needed at the ASR boundary
+- backend-local FluidAudio adapters may load persisted `CAF` or `FLAC` session artifacts and prepare SDK-ready PCM
 - if a future backend needs WAV, FLAC, buffers, or another representation, adapt at the consumer boundary
 - do not rewrite the capture pipeline for one backend format preference
 
@@ -139,7 +139,8 @@ Transcription pipeline:
 - it requires ASR model information in the runtime profile
 - the active ASR contract now uses model URL only; language selection is not part of the ASR runtime input
 - the active ASR engine is `FluidAudioASREngine`
-- it may run diarization, but diarization failure degrades speaker labeling rather than failing transcription
+- the default diarization engine is `FluidAudioDiarizationEngine`
+- diarization failure degrades speaker labeling rather than failing transcription
 
 Artifacts written by the pipeline:
 
