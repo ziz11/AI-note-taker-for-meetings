@@ -19,7 +19,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         let summarizationEngine = try factory.makeSummarizationEngine(for: profile)
 
         XCTAssertEqual(String(describing: type(of: asrEngine)), "FluidAudioASREngine")
-        XCTAssertEqual(String(describing: type(of: diarizationEngine)), "CliDiarizationEngine")
+        XCTAssertEqual(String(describing: type(of: diarizationEngine)), "FluidAudioDiarizationEngine")
         XCTAssertEqual(String(describing: type(of: summarizationEngine)), "LlamaCppSummarizationEngine")
     }
 

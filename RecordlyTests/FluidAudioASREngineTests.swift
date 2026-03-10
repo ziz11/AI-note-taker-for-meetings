@@ -156,7 +156,7 @@ final class FluidAudioASREngineTests: XCTestCase {
         XCTAssertEqual(transcriber.callCount, 1)
         XCTAssertEqual(transcriber.lastBufferFrameLength, expectedBuffer.frameLength)
         XCTAssertEqual(transcriber.lastBufferSampleRate, expectedBuffer.format.sampleRate)
-        XCTAssertEqual(transcriber.lastBufferChannelCount, expectedBuffer.format.channelCount)
+        XCTAssertEqual(transcriber.lastBufferChannelCount, 1)
     }
 
     func testEngineThrowsWhenAudioFileMissing() async throws {
@@ -326,6 +326,70 @@ final class FluidAudioASREngineTests: XCTestCase {
         }
     }
 
+    func testSessionAudioLoaderDecodesFlacAndPreservesPreparedSampleRate() throws {
+        let sourceURL = try createFLACAudioFile(
+            named: "system.raw.flac",
+            sampleRate: 22_050,
+            channels: 1
+        )
+        let loader = FluidAudioSessionAudioLoader()
+
+        let prepared = try loader.loadAudio(from: sourceURL)
+
+        XCTAssertEqual(prepared.sourceURL, sourceURL)
+        XCTAssertEqual(prepared.sampleRate, 22_050)
+        XCTAssertFalse(prepared.samples.isEmpty)
+        XCTAssertGreaterThan(prepared.durationMs, 0)
+    }
+
+    func testEngineFallsBackToFullInputWhenVADReturnsNoUsableRegions() async throws {
+        let audioURL = try createAudioFile(named: "input.caf", sampleRate: 16_000, channels: 1, frameCount: 16_000)
+        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-vad-fallback")
+        let transcriber = RecordingFluidAudioTranscriber(
+            output: FluidAudioRunnerOutput(
+                language: "en",
+                segments: [
+                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1000, text: "fallback", confidence: 0.9, words: nil)
+                ]
+            )
+        )
+        let engine = FluidAudioASREngine(
+            transcriber: transcriber,
+            sessionAudioLoader: FluidAudioSessionAudioLoader(),
+            vadService: StubFluidAudioVADService(result: [])
+        )
+
+        let document = try await engine.transcribe(
+            audioURL: audioURL,
+            channel: .mic,
+            sessionID: UUID(),
+            configuration: ASREngineConfiguration(modelURL: modelDirectory)
+        )
+
+        XCTAssertEqual(document.segments.map(\.text), ["fallback"])
+        XCTAssertEqual(transcriber.callCount, 1)
+        XCTAssertGreaterThan(transcriber.lastBufferFrameLength, 0)
+    }
+
+    func testDiarizationServiceRejectsLegacyCliModelFile() async throws {
+        let audioURL = try createAudioFile(named: "system.raw.caf", sampleRate: 16_000, channels: 1, frameCount: 16_000)
+        let loader = FluidAudioSessionAudioLoader()
+        let prepared = try loader.loadAudio(from: audioURL)
+        let legacyModel = tempDirectory.appendingPathComponent("diarization.bin")
+        try Data("legacy".utf8).write(to: legacyModel)
+        let service = FluidAudioDiarizationService(runner: StubFluidAudioDiarizationRunner(result: .success([])))
+
+        do {
+            _ = try await service.diarize(preparedAudio: prepared, sessionID: UUID(), modelDirectoryURL: legacyModel)
+            XCTFail("Expected error")
+        } catch let error as DiarizationRuntimeError {
+            guard case .modelMissing(let failedURL) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(failedURL, legacyModel)
+        }
+    }
+
     private func createFluidModelDirectory(named name: String) throws -> URL {
         let directory = tempDirectory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -365,6 +429,22 @@ final class FluidAudioASREngineTests: XCTestCase {
         )
         try audioFile.write(from: buffer)
         return url
+    }
+
+    private func createFLACAudioFile(
+        named fileName: String,
+        sampleRate: Double,
+        channels: AVAudioChannelCount,
+        frameCount: AVAudioFrameCount = 4_096
+    ) throws -> URL {
+        let flacURL = tempDirectory.appendingPathComponent(fileName)
+        XCTAssertEqual(Int(sampleRate), 22_050)
+        XCTAssertEqual(channels, 1)
+        _ = frameCount
+        let base64 = "ZkxhQwAAACIQABAAAAQYAAQYBWIg8AAACJ1wB/cbkBQZ5C04UD9AQMbvhAAAKCAAAAByZWZlcmVuY2UgbGliRkxBQyAxLjQuMyAyMDIzMDYyMwAAAAD/+HYIAAicJBgAAATNCYcOGwCiRoyQZRuNxJiTJUikOy/3vV6+va6f6TVkpEzIhqRGiEU1rO3Xdb3wqF/qqhU901bZqNzQ0NEMptU3Z9HuLeVCrC2PfvU+SJGbY2RkJWM4nSaxWfxf1pcdBUVd7LtITicjQTmJzJoa1p0XOhYtf/qse33s7cjjKRMyIbiZERKbxl0XPi4sV73wpC+IclkasmxtjQiJiVk7WSLlvW968Ljoq776tI0JkZEZoRqZRHEKR2X58KQfc+50eFI92UlRIhuJTImNTc121lnvr4Vj149pzHm6fNcSNiZkbGpIibk9Rbat5cpc62vllqdJmjQiNDYlNs02m6LbHveP/1XHZ87WpTOJMRMxlCVCUkhF0y2f/ug6P3ix5Z4nJ22JkQ3ESGpuSRJ9egrP1hatLioWW5SOTVkbjRkRmzURSSpFYqL6tLO64+eV29jfEqNiUZQlRicmjWs6eFY86rSoKh0Kj7opOkJERCZCQ2gnaN8jpXY8r+ljw6PVRZUU3zZqJTJBKakSJSKn1XFR3Q9X/vlVFkuTsmyGpEQmxqZTci7exZ3jw+frHt+XVLmrZkxGomRMbokkyo6Fx2PV/eL13+8SpMSm41JjU2xOaxLlRbf18FQtVc98n03EVicSkJxo2bNUS1nRYsVb3qrVv6kOykVq2amSGglZkhK12s+X51ilQ9/7ov1u1RuRETCczRiVGqTW5c86rjws5ctXKzsojsiZszYiZmjRuRdv8tWrBUd8dHVjpZUkTErNjcaIyJs3a7zFR7S4tfCoXPZ94lRKyNCIjYRRKbk7WSfoW/0+V71q5bvq1TYkZCUSEhEjTJazoVi4tr/vi+3qnukbs1IiI2E5Cc1bVOz7zvi485cfLVqFb6N2xOJCQ2Qmgik3J6ixUPKWP6//jzo7dKTm4nG5szJBFNE5F2WV0dfh2Fz1fnqLMik0JRKxEhs2RuZWn0dj5aq/rBUXrq5Ha7Q3NTZsaMhFG6apPI6FxZzoX+vaqOniTQkaEQnCciIiTNZWeR8/w7FW97DkLvspKRRKzIiEhExJs3Sy2LaXPSxe8WLZ0+0ak2YlM1MmbbN8jpf4+LV616se5anSwQomxITCKNSZMk01txULi38uOhfP87W4jmhOIlEShHGpKjKRzHIdi5Xir+vrxZF1SpWbiU0JiJmTNWkmVOue/vC2lt65ZM4niGcakTEaGpqStKyxC7/+nQv63uwpHRSKmTYkZkRCZobkrdIuxZeVHKh4rodHkt0yVm43EpsyI0QitNZ0OQq5+vpbVWeep8lTEmNGNzJjXElIqX6lYvhYWFQXLausuTm7NkQ3GpEzJWRSLsVn8Xvi/re+66yVE5NiZGRsRMiMojtPvY9h0FQVhZ1izhV3"
+        let data = try XCTUnwrap(Data(base64Encoded: base64))
+        try data.write(to: flacURL)
+        return flacURL
     }
 
     private func makePCMBuffer(
@@ -473,5 +553,21 @@ private final class StubFluidAudioInputPreparer: FluidAudioInputPreparing {
     func prepareInput(from audioURL: URL) throws -> AVAudioPCMBuffer {
         preparedURLs.append(audioURL)
         return buffer
+    }
+}
+
+private struct StubFluidAudioVADService: FluidAudioVoiceActivityDetecting {
+    let result: [FluidAudioSpeechRegion]?
+
+    func detectSpeechRegions(in audio: PreparedSessionAudio) async -> [FluidAudioSpeechRegion]? {
+        result
+    }
+}
+
+private struct StubFluidAudioDiarizationRunner: FluidAudioOfflineDiarizationRunning {
+    let result: Result<[FluidAudioDiarizationSegment], Error>
+
+    func diarize(preparedAudio: PreparedSessionAudio, modelDirectoryURL: URL) async throws -> [FluidAudioDiarizationSegment] {
+        try result.get()
     }
 }

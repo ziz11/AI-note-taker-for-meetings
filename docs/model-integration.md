@@ -13,7 +13,7 @@ Model management and inference runtime are split by responsibility:
 Concrete backend modules:
 
 - ASR: `FluidAudioASREngine` (FluidAudio SDK v3, CoreML-based)
-- Diarization: `CliDiarizationEngine` (`diarization-main`)
+- Diarization: `FluidAudioDiarizationEngine` (default local path), `CliDiarizationEngine` retained for legacy runtime routing
 - Summarization: `LlamaCppSummarizationEngine` (`llama-cli`)
 
 The active ASR stack in this branch is FluidAudio-only. Whisper / `whisper.cpp` local `.bin` selection is no longer part of the runtime ASR flow.
@@ -32,7 +32,7 @@ Default stage mapping is composed in `DefaultInferenceComposition`:
 
 - `audioCapture -> nativeCapture`
 - `asr -> fluidAudio`
-- `diarization -> cliDiarization`
+- `diarization -> fluidAudio`
 - `summarization -> llamaCpp`
 - `vad -> disabled`
 
@@ -71,12 +71,14 @@ Diarization and summarization models remain local-file based:
   - `/Users/Shared/RecordlyModels/<kind>/`
   - `~/Library/Application Support/Recordly/Models/<kind>/`
 - Supported extensions:
-  - Diarization: `.bin`
+  - Diarization: model directories selected by `ModelManager` and passed to the FluidAudio diarization runtime
   - Summarization: `.bin`, `.gguf`
 - `model-registry.json` remains for metadata/legacy install flows.
+
+Legacy diarization `.bin` selections are not auto-converted and degrade cleanly under the FluidAudio diarization path.
 
 ## ASR audio boundary policy
 
 - Internal capture/storage contract remains canonical CAF/PCM.
-- FluidAudio SDK accepts CAF files directly — no format conversion is needed at the ASR boundary.
+- The active FluidAudio backend path loads persisted `CAF` or `FLAC` artifacts and prepares SDK-ready mono Float32 PCM inside backend-local adapters.
 - Do not change internal capture format to satisfy a single backend input requirement.

@@ -22,6 +22,8 @@ struct DefaultInferenceEngineFactory: InferenceEngineFactory {
 
     func makeDiarizationEngine(for profile: InferenceRuntimeProfile) throws -> any DiarizationEngine {
         switch profile.stageSelection.backend(for: .diarization) {
+        case .fluidAudio:
+            return FluidAudioDiarizationEngine()
         case .cliDiarization:
             return CliDiarizationEngine()
         case let backend:

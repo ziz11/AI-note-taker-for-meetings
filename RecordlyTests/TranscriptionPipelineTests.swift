@@ -96,7 +96,55 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(calls.count, 4)
     }
 
-    func testPipelineNoDiarizationModelFallsBackToRemote() async throws {
+    func testPipelineMicSegmentsPersistExplicitMeRole() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        let micFile = temp.appendingPathComponent("mic.raw.caf")
+        let systemFile = temp.appendingPathComponent("system.raw.caf")
+        FileManager.default.createFile(atPath: micFile.path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: systemFile.path, contents: Data("audio".utf8))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        )
+
+        let modelData = Data("model:asr-balanced-v1:1.0.0".utf8)
+        let modelURL = temp.appendingPathComponent("model.bin")
+        try modelData.write(to: modelURL)
+
+        _ = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: modelURL, diarizationModelURL: nil),
+            engineFactory: factory
+        )
+
+        let transcriptURL = temp.appendingPathComponent("transcript.json")
+        let data = try Data(contentsOf: transcriptURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let doc = try decoder.decode(TranscriptDocument.self, from: data)
+        let micSegment = try XCTUnwrap(doc.segments.first(where: { $0.channel == .mic }))
+        XCTAssertEqual(micSegment.speaker, "You")
+        XCTAssertEqual(micSegment.speakerRole, .me)
+        XCTAssertEqual(micSegment.speakerId, "me")
+    }
+
+    func testPipelineNoDiarizationModelFallsBackToUnknownRoleWithRemoteDisplayLabel() async throws {
         let pipeline = TranscriptionPipeline()
         let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
 
@@ -141,7 +189,10 @@ final class TranscriptionPipelineTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let doc = try decoder.decode(TranscriptDocument.self, from: data)
-        XCTAssertTrue(doc.segments.contains(where: { $0.channel == .system && $0.speaker == "Remote" }))
+        let systemSegment = try XCTUnwrap(doc.segments.first(where: { $0.channel == .system }))
+        XCTAssertEqual(systemSegment.speaker, "Remote")
+        XCTAssertEqual(systemSegment.speakerRole, .unknown)
+        XCTAssertNil(systemSegment.speakerId)
     }
 
     func testPipelineDiarizationFailureFallsBackToRemote() async throws {

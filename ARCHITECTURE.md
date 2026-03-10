@@ -52,6 +52,10 @@ Recordly/
       Backends/
         FluidAudio/
           FluidAudioASREngine.swift
+          FluidAudioSessionAudioLoader.swift
+          FluidAudioVADService.swift
+          FluidAudioTranscriptionService.swift
+          FluidAudioDiarizationEngine.swift
           FluidAudioModelProvider.swift
         CliDiarization/
           CliDiarizationEngine.swift
@@ -91,7 +95,7 @@ Inference is capability + backend-centric and split by responsibility:
 - Runtime selection: `InferenceStage`, `InferenceBackend`, `StageRuntimeSelection`, `InferenceRuntimeProfile`.
 - Profile resolving: `DefaultInferenceRuntimeProfileSelector` resolves ASR model via `FluidAudioModelProvider` (SDK-managed provisioning) and reads `ModelManager` for diarization/summarization.
 - Engine routing: `DefaultInferenceEngineFactory` creates concrete stage engines by `stage + backend`.
-- Composition root: `DefaultInferenceComposition` is the single place where per-stage backend defaults are selected. In this branch the default ASR backend is `fluidAudio`.
+- Composition root: `DefaultInferenceComposition` is the single place where per-stage backend defaults are selected. In this branch the default ASR and diarization backends are `fluidAudio`.
 
 Dependency flow:
 
@@ -117,7 +121,9 @@ Current ASR path:
 - capture/import produces canonical session audio artifacts
 - runtime selector resolves the FluidAudio ASR model via `FluidAudioModelProvider`
 - factory routes `.asr -> .fluidAudio`
-- `FluidAudioASREngine` reads persisted audio artifacts directly and produces ASR documents
+- `FluidAudioASREngine` orchestrates backend-local audio loading + transcription services and produces ASR documents
+- default diarization routing is `.diarization -> .fluidAudio`
+- `FluidAudioDiarizationEngine` loads session audio through the same backend-local prep path and returns existing diarization documents
 - transcript merge/render stages persist transcript JSON/TXT/SRT without changing session storage contracts
 
 Fallback ownership:
@@ -138,7 +144,7 @@ Fallback ownership:
 ## Audio Boundary
 
 - Capture and imported-audio processing keep session storage centered on canonical PCM in CAF (`mic.raw.caf`, `system.raw.caf`, `merged-call.caf`).
-- FluidAudio SDK accepts CAF directly — no format conversion is needed at the ASR boundary.
+- Backend-local FluidAudio adapters may load persisted `CAF` or `FLAC` session artifacts and prepare SDK-ready mono Float32 PCM at the consumer boundary.
 - `AudioInput`/`AudioInputAdapter` provide boundary-level adaptation for stage engines without changing capture/storage contracts.
 - `merged-call.m4a` remains preferred playback artifact for live recordings.
 
