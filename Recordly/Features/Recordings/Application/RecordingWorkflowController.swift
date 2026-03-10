@@ -297,6 +297,16 @@ final class RecordingWorkflowController {
 
         let transcript = repository.transcriptText(for: recording)
         logLines.append("transcript_chars=\(transcript?.count ?? 0)")
+        let structuredTranscriptText: String?
+        if let structuredTranscriptTextFile = recording.assets.structuredTranscriptTextFile {
+            let structuredTranscriptURL = sessionDirectory.appendingPathComponent(structuredTranscriptTextFile)
+            structuredTranscriptText = try? String(contentsOf: structuredTranscriptURL, encoding: .utf8)
+            logLines.append("structured_transcript_file=\(structuredTranscriptTextFile)")
+        } else {
+            structuredTranscriptText = nil
+            logLines.append("structured_transcript_file=<none>")
+        }
+        logLines.append("structured_transcript_chars=\(structuredTranscriptText?.count ?? 0)")
         let srtText: String?
         if let srtFile = recording.assets.srtFile {
             let srtURL = sessionDirectory.appendingPathComponent(srtFile)
@@ -343,8 +353,8 @@ final class RecordingWorkflowController {
                 )
                 let doc = try await summarizeWithTimeout(timeoutSeconds: summarizationTimeoutSeconds) {
                     try await summarizationEngine.summarize(
-                        transcript: transcript ?? "",
-                        srtText: srtText,
+                        transcript: structuredTranscriptText ?? transcript ?? "",
+                        srtText: structuredTranscriptText == nil ? srtText : nil,
                         recordingTitle: recording.title,
                         configuration: config
                     )
@@ -497,6 +507,8 @@ final class RecordingWorkflowController {
         updated.assets.transcriptFile = result.transcriptFile
         updated.assets.srtFile = result.srtFile
         updated.assets.transcriptJSONFile = result.transcriptJSONFile
+        updated.assets.structuredTranscriptJSONFile = result.structuredTranscriptJSONFile
+        updated.assets.structuredTranscriptTextFile = result.structuredTranscriptTextFile
         updated.assets.micASRJSONFile = result.micASRJSONFile
         updated.assets.systemASRJSONFile = result.systemASRJSONFile
         updated.assets.systemDiarizationJSONFile = result.systemDiarizationJSONFile

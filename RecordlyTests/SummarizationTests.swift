@@ -54,6 +54,27 @@ final class DelayedSummaryEngine: SummarizationEngine {
     }
 }
 
+final class CapturingSummaryEngine: SummarizationEngine {
+    var capturedTranscript: String?
+    var capturedSRTText: String?
+    var result: Result<SummaryDocument, Error>
+
+    init(result: Result<SummaryDocument, Error>) {
+        self.result = result
+    }
+
+    func summarize(
+        transcript: String,
+        srtText: String?,
+        recordingTitle: String,
+        configuration: SummarizationConfiguration
+    ) async throws -> SummaryDocument {
+        capturedTranscript = transcript
+        capturedSRTText = srtText
+        return try result.get()
+    }
+}
+
 final class MockLlamaProcessExecutor: LlamaProcessExecutor {
     var result: Result<LlamaProcessResult, Error>
 
@@ -209,6 +230,14 @@ final class InMemoryRecordingsRepository: RecordingsPersistence {
     }
 
     func transcriptText(for recording: RecordingSession) -> String? {
+        if let directory = sessionDirectories[recording.id],
+           let structuredTranscriptTextFile = recording.assets.structuredTranscriptTextFile {
+            let url = directory.appendingPathComponent(structuredTranscriptTextFile)
+            if let transcript = try? String(contentsOf: url, encoding: .utf8) {
+                return transcript
+            }
+        }
+
         if let cached = transcriptBodies[recording.id] {
             return cached
         }
@@ -918,6 +947,78 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let logText = try String(contentsOf: logURL, encoding: .utf8)
         XCTAssertTrue(logText.contains("llm_status=success"))
         XCTAssertTrue(logText.contains("summary_source=llm"))
+    }
+
+    func testSummarizePrefersStructuredTranscriptTextOverSRT() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+
+        let structuredText = """
+        00:00:00 | You | Nu tam macOS, a ne iOS.
+        00:00:03 | Speaker 1 | Da, tam macOS.
+        """
+        let srtText = """
+        1
+        00:00:00,000 --> 00:00:05,000
+        [You] giant raw block
+        """
+        try structuredText.write(
+            to: sessionDirectory.appendingPathComponent("structured-transcript.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try srtText.write(
+            to: sessionDirectory.appendingPathComponent("transcript.srt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Structured preferred",
+            createdAt: Date(),
+            duration: 90,
+            lifecycleState: .ready,
+            transcriptState: .ready,
+            source: .importedAudio,
+            notes: "Transcript ready.",
+            assets: RecordingAssets(
+                importedAudioFile: "call.m4a",
+                transcriptFile: "transcript.txt",
+                srtFile: "transcript.srt",
+                structuredTranscriptTextFile: "structured-transcript.txt"
+            )
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory],
+            transcriptBodies: [recordingID: "plain transcript fallback"]
+        )
+
+        let modelURL = try makeSummarizationModel(named: "structured-model.gguf")
+        let modelManager = makeModelManager(modelURL: modelURL)
+        let capturingEngine = CapturingSummaryEngine(result: .success(
+            SummaryDocument(
+                topics: ["Structured transcript used"],
+                decisions: [],
+                actionItems: [],
+                risks: [],
+                rawMarkdown: "## Topics\n- Structured transcript used"
+            )
+        ))
+
+        let workflow = makeWorkflow(
+            repository: repository,
+            modelManager: modelManager,
+            summarizationEngine: capturingEngine,
+            summarizationTimeoutSeconds: 3
+        )
+
+        _ = try await workflow.summarize(recording: recording)
+
+        XCTAssertEqual(capturingEngine.capturedTranscript, structuredText)
+        XCTAssertNil(capturingEngine.capturedSRTText)
     }
 
     private func makeSummarizationModel(named name: String) throws -> URL {

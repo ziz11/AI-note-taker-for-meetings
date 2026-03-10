@@ -973,9 +973,20 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(result.transcriptJSONFile, "transcript.json")
         XCTAssertEqual(result.transcriptFile, "transcript.txt")
         XCTAssertEqual(result.srtFile, "transcript.srt")
+        XCTAssertEqual(result.structuredTranscriptJSONFile, "structured-transcript.json")
+        XCTAssertEqual(result.structuredTranscriptTextFile, "structured-transcript.txt")
         XCTAssertEqual(result.systemDiarizationJSONFile, "system.diarization.json")
 
-        let expectedFiles = ["mic.asr.json", "system.asr.json", "transcript.json", "transcript.txt", "transcript.srt", "system.diarization.json"]
+        let expectedFiles = [
+            "mic.asr.json",
+            "system.asr.json",
+            "transcript.json",
+            "transcript.txt",
+            "transcript.srt",
+            "structured-transcript.json",
+            "structured-transcript.txt",
+            "system.diarization.json"
+        ]
         for file in expectedFiles {
             XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent(file).path), "Missing artifact: \(file)")
         }
@@ -997,6 +1008,69 @@ final class TranscriptionPipelineTests: XCTestCase {
         let transcriptDoc = try decoder.decode(TranscriptDocument.self, from: transcriptData)
         XCTAssertFalse(transcriptDoc.segments.isEmpty)
         XCTAssertTrue(transcriptDoc.diarizationApplied)
+
+        let structuredData = try Data(contentsOf: temp.appendingPathComponent("structured-transcript.json"))
+        let structuredDoc = try decoder.decode(StructuredTranscriptDocument.self, from: structuredData)
+        XCTAssertFalse(structuredDoc.segments.isEmpty)
+        XCTAssertEqual(structuredDoc.segments.map(\.startMs), structuredDoc.segments.map(\.startMs).sorted())
+
+        let structuredText = try String(contentsOf: temp.appendingPathComponent("structured-transcript.txt"), encoding: .utf8)
+        XCTAssertTrue(structuredText.contains("00:00:00 | You | hello"))
+        XCTAssertTrue(structuredText.contains("00:00:00 | Speaker 1 | hello"))
+    }
+
+    func testPipelineWritesStructuredTranscriptWithReflowedWordTimedSegments() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: WordTimedASREngine(),
+            diarizationEngine: SuccessfulSplitDiarizationEngine()
+        )
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
+        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
+        try Data("diarization".utf8).write(to: temp.appendingPathComponent("diarization.bin"))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "reflow",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        )
+
+        _ = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            runtimeProfile: makeRuntimeProfile(
+                asrModelURL: temp.appendingPathComponent("asr.bin"),
+                diarizationModelURL: temp.appendingPathComponent("diarization.bin")
+            ),
+            engineFactory: factory
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let structuredData = try Data(contentsOf: temp.appendingPathComponent("structured-transcript.json"))
+        let structuredDoc = try decoder.decode(StructuredTranscriptDocument.self, from: structuredData)
+
+        XCTAssertEqual(structuredDoc.segments.map(\.speaker), ["You", "Speaker 1", "Speaker 2"])
+        XCTAssertEqual(structuredDoc.segments.map(\.text), [
+            "Nu tam macOS, a ne iOS.",
+            "Da, tam macOS.",
+            "To est eksperimentalny port."
+        ])
+        XCTAssertEqual(structuredDoc.segments.map(\.startTimestamp), ["00:00:00", "00:00:03", "00:00:05"])
     }
 
     func testPipelineWithFluidAudioBackendUsesFluidFingerprint() async throws {
@@ -1330,6 +1404,86 @@ final class TranscriptionPipelineTests: XCTestCase {
                 segments: [
                     DiarizationSegment(id: "d1", speaker: "Speaker A", startMs: 0, endMs: 1000, confidence: 0.9)
                 ]
+            )
+        }
+    }
+
+    private struct SuccessfulSplitDiarizationEngine: DiarizationEngine {
+        func diarize(
+            systemAudioURL: URL,
+            sessionID: UUID,
+            configuration: DiarizationEngineConfiguration
+        ) async throws -> DiarizationDocument {
+            DiarizationDocument(
+                version: 1,
+                sessionID: sessionID,
+                createdAt: Date(),
+                segments: [
+                    DiarizationSegment(id: "d1", speaker: "Speaker A", startMs: 3_000, endMs: 4_999, confidence: 0.9),
+                    DiarizationSegment(id: "d2", speaker: "Speaker B", startMs: 5_000, endMs: 8_999, confidence: 0.85)
+                ]
+            )
+        }
+    }
+
+    private struct WordTimedASREngine: ASREngine {
+        var displayName: String { "word-timed-mock" }
+
+        func transcribe(
+            audioURL: URL,
+            channel: TranscriptChannel,
+            sessionID: UUID,
+            configuration: ASREngineConfiguration
+        ) async throws -> ASRDocument {
+            let segments: [ASRSegment]
+            switch channel {
+            case .mic:
+                segments = [
+                    ASRSegment(
+                        id: "mic-1",
+                        startMs: 0,
+                        endMs: 2_999,
+                        text: "Nu tam macOS, a ne iOS.",
+                        confidence: nil,
+                        language: "ru",
+                        words: [
+                            ASRWord(word: "Nu", startMs: 0, endMs: 300, confidence: nil),
+                            ASRWord(word: "tam", startMs: 320, endMs: 700, confidence: nil),
+                            ASRWord(word: "macOS,", startMs: 710, endMs: 1_500, confidence: nil),
+                            ASRWord(word: "a", startMs: 1_700, endMs: 1_900, confidence: nil),
+                            ASRWord(word: "ne", startMs: 1_920, endMs: 2_200, confidence: nil),
+                            ASRWord(word: "iOS.", startMs: 2_220, endMs: 2_999, confidence: nil)
+                        ]
+                    )
+                ]
+            case .system:
+                segments = [
+                    ASRSegment(
+                        id: "system-1",
+                        startMs: 3_000,
+                        endMs: 8_999,
+                        text: "Da, tam macOS. To est eksperimentalny port.",
+                        confidence: nil,
+                        language: "ru",
+                        words: [
+                            ASRWord(word: "Da,", startMs: 3_000, endMs: 3_400, confidence: nil),
+                            ASRWord(word: "tam", startMs: 3_420, endMs: 3_800, confidence: nil),
+                            ASRWord(word: "macOS.", startMs: 3_820, endMs: 4_999, confidence: nil),
+                            ASRWord(word: "To", startMs: 5_000, endMs: 5_300, confidence: nil),
+                            ASRWord(word: "est", startMs: 5_320, endMs: 5_700, confidence: nil),
+                            ASRWord(word: "eksperimentalny", startMs: 5_720, endMs: 7_400, confidence: nil),
+                            ASRWord(word: "port.", startMs: 7_420, endMs: 8_999, confidence: nil)
+                        ]
+                    )
+                ]
+            }
+
+            return ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: segments
             )
         }
     }

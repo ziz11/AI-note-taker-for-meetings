@@ -47,6 +47,8 @@ struct TranscriptionResult {
     var transcriptFile: String?
     var srtFile: String?
     var transcriptJSONFile: String?
+    var structuredTranscriptJSONFile: String?
+    var structuredTranscriptTextFile: String?
     var micASRJSONFile: String?
     var systemASRJSONFile: String?
     var systemDiarizationJSONFile: String?
@@ -63,6 +65,7 @@ struct TranscriptionPipeline {
     let speakerMappingService: SystemSpeakerMappingService
     let mergeService: TranscriptMergeService
     let renderService: TranscriptRenderService
+    let structuredTranscriptExportService: StructuredTranscriptExportService
 
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -71,12 +74,14 @@ struct TranscriptionPipeline {
         audioInputAdapter: any AudioInputAdapter = PassthroughAudioInputAdapter(),
         speakerMappingService: SystemSpeakerMappingService = SystemSpeakerMappingService(),
         mergeService: TranscriptMergeService = TranscriptMergeService(),
-        renderService: TranscriptRenderService = TranscriptRenderService()
+        renderService: TranscriptRenderService = TranscriptRenderService(),
+        structuredTranscriptExportService: StructuredTranscriptExportService = StructuredTranscriptExportService()
     ) {
         self.audioInputAdapter = audioInputAdapter
         self.speakerMappingService = speakerMappingService
         self.mergeService = mergeService
         self.renderService = renderService
+        self.structuredTranscriptExportService = structuredTranscriptExportService
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -134,6 +139,8 @@ struct TranscriptionPipeline {
         let transcriptJSONFile = "transcript.json"
         let transcriptTXTFile = "transcript.txt"
         let transcriptSRTFile = "transcript.srt"
+        let structuredTranscriptJSONFile = "structured-transcript.json"
+        let structuredTranscriptTXTFile = "structured-transcript.txt"
 
         var degradedReasons: [PipelineDegradationReason] = []
 
@@ -271,6 +278,17 @@ struct TranscriptionPipeline {
 
         try writeJSON(transcriptDocument, to: sessionDirectory.appendingPathComponent(transcriptJSONFile))
 
+        let structured = structuredTranscriptExportService.render(
+            document: transcriptDocument,
+            diarization: diarizationDoc
+        )
+        try writeJSON(structured.document, to: sessionDirectory.appendingPathComponent(structuredTranscriptJSONFile))
+        try structured.text.write(
+            to: sessionDirectory.appendingPathComponent(structuredTranscriptTXTFile),
+            atomically: true,
+            encoding: .utf8
+        )
+
         await onStateChange?(.renderingOutputs)
         let rendered = renderService.render(document: transcriptDocument)
         try rendered.transcriptText.write(
@@ -302,6 +320,8 @@ struct TranscriptionPipeline {
             transcriptFile: transcriptTXTFile,
             srtFile: transcriptSRTFile,
             transcriptJSONFile: transcriptJSONFile,
+            structuredTranscriptJSONFile: structuredTranscriptJSONFile,
+            structuredTranscriptTextFile: structuredTranscriptTXTFile,
             micASRJSONFile: micDoc != nil ? micASRFile : nil,
             systemASRJSONFile: systemDoc != nil ? systemASRFile : nil,
             systemDiarizationJSONFile: diarizationOutcome.document != nil ? diarizationFile : nil,

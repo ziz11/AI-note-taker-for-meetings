@@ -102,6 +102,14 @@ final class RecordingsRepository: RecordingsPersistence {
             return nil
         }
 
+        if let structuredTranscriptTextFile = recording.assets.structuredTranscriptTextFile {
+            let structuredTranscriptURL = sessionDirectory.appendingPathComponent(structuredTranscriptTextFile)
+            if let transcript = try? String(contentsOf: structuredTranscriptURL, encoding: .utf8) {
+                transcriptCache[recording.id] = transcript
+                return transcript
+            }
+        }
+
         if let transcriptFile = recording.assets.transcriptFile {
             let transcriptURL = sessionDirectory.appendingPathComponent(transcriptFile)
             if let transcript = try? String(contentsOf: transcriptURL, encoding: .utf8) {
