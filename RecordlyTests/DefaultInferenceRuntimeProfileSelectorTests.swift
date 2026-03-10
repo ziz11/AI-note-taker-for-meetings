@@ -42,7 +42,7 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         let profile = try selector.resolveTranscriptionProfile(for: .balanced)
 
         XCTAssertEqual(profile.stageSelection.backend(for: .asr), .fluidAudio)
-        XCTAssertEqual(profile.stageSelection.backend(for: .diarization), .cliDiarization)
+        XCTAssertEqual(profile.stageSelection.backend(for: .diarization), .fluidAudio)
         XCTAssertEqual(
             profile.modelArtifacts.asrModelURL?.resolvingSymlinksInPath().path,
             fluidDirectory.resolvingSymlinksInPath().path
