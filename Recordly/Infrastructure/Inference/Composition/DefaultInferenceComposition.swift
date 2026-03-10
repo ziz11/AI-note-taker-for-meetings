@@ -12,15 +12,17 @@ struct InferenceComposition {
 enum DefaultInferenceComposition {
     static func make(
         modelManager: ModelManager,
-        fluidAudioModelProvider: any FluidAudioModelProviding
+        asrModelProvider: any FluidAudioASRModelProviding,
+        diarizationModelProvider: any FluidAudioDiarizationModelProviding
     ) -> InferenceComposition {
         let stageSelection = StageRuntimeSelection.defaultLocal
         let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(
             modelManager: modelManager,
-            fluidAudioModelProvider: fluidAudioModelProvider,
+            asrModelProvider: asrModelProvider,
+            diarizationModelProvider: diarizationModelProvider,
             stageSelection: stageSelection
         )
-        let engineFactory = DefaultInferenceEngineFactory()
+        let engineFactory = DefaultInferenceEngineFactory(diarizationModelProvider: diarizationModelProvider)
         let bootstrapProfile = InferenceRuntimeProfile(
             stageSelection: stageSelection,
             modelArtifacts: .empty,
@@ -33,6 +35,18 @@ enum DefaultInferenceComposition {
             engineFactory: engineFactory,
             audioCaptureEngine: audioCaptureEngine,
             transcriptionEngineDisplayName: engineFactory.transcriptionEngineDisplayName(for: stageSelection)
+        )
+    }
+
+    static func make(
+        modelManager: ModelManager,
+        fluidAudioModelProvider: any FluidAudioASRModelProviding
+    ) -> InferenceComposition {
+        let diarizationModelProvider = FluidAudioDiarizationModelProvider()
+        return make(
+            modelManager: modelManager,
+            asrModelProvider: fluidAudioModelProvider,
+            diarizationModelProvider: diarizationModelProvider
         )
     }
 }

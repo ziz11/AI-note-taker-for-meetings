@@ -212,7 +212,9 @@ struct TranscriptionPipeline {
         let diarizationEngine: (any DiarizationEngine)?
         let diarizationBackendError: String?
         do {
-            diarizationEngine = try engineFactory.makeDiarizationEngine(for: runtimeProfile)
+            diarizationEngine = try await MainActor.run {
+                try engineFactory.makeDiarizationEngine(for: runtimeProfile)
+            }
             diarizationBackendError = nil
         } catch {
             diarizationEngine = nil
@@ -226,9 +228,9 @@ struct TranscriptionPipeline {
             systemAudioURL: systemInput?.url,
             sessionID: recording.id,
             sessionDirectory: sessionDirectory,
-            configuration: runtimeProfile.modelArtifacts.diarizationModelURL.map {
-                DiarizationEngineConfiguration(modelURL: $0)
-            },
+            configuration: DiarizationEngineConfiguration(
+                modelURL: runtimeProfile.modelArtifacts.diarizationModelURL
+            ),
             backendUnavailableReason: diarizationBackendError
         )
         let diarizationDoc = diarizationOutcome.document
@@ -486,16 +488,17 @@ struct TranscriptionPipeline {
         systemAudioURL: URL?,
         sessionID: UUID,
         sessionDirectory: URL,
-        configuration: DiarizationEngineConfiguration?,
+        configuration: DiarizationEngineConfiguration,
         backendUnavailableReason: String?
     ) async throws -> DiarizationLoadOutcome {
         let destination = sessionDirectory.appendingPathComponent(existingFile)
+        let modelUsed = configuration.modelURL?.lastPathComponent ?? "sdk-managed"
 
         if let existing: DiarizationDocument = try readJSONIfExists(from: destination) {
             return DiarizationLoadOutcome(
                 document: existing,
                 degradedReason: nil,
-                modelUsed: configuration?.modelURL.lastPathComponent
+                modelUsed: modelUsed
             )
         }
 
@@ -503,7 +506,7 @@ struct TranscriptionPipeline {
             return DiarizationLoadOutcome(
                 document: nil,
                 degradedReason: "diarization backend unavailable (\(backendUnavailableReason))",
-                modelUsed: configuration?.modelURL.lastPathComponent
+                modelUsed: modelUsed
             )
         }
 
@@ -513,10 +516,6 @@ struct TranscriptionPipeline {
 
         guard ["system.raw.caf", "system.raw.flac"].contains(systemAudioURL.lastPathComponent) else {
             return DiarizationLoadOutcome(document: nil, degradedReason: "unsupported system audio source", modelUsed: nil)
-        }
-
-        guard let configuration else {
-            return DiarizationLoadOutcome(document: nil, degradedReason: "diarization model not selected", modelUsed: nil)
         }
 
         guard let diarizationEngine else {
@@ -533,19 +532,19 @@ struct TranscriptionPipeline {
             return DiarizationLoadOutcome(
                 document: document,
                 degradedReason: nil,
-                modelUsed: configuration.modelURL.lastPathComponent
+                modelUsed: modelUsed
             )
         } catch let error as DiarizationRuntimeError {
             return DiarizationLoadOutcome(
                 document: nil,
                 degradedReason: error.errorDescription ?? "runtime error",
-                modelUsed: configuration.modelURL.lastPathComponent
+                modelUsed: modelUsed
             )
         } catch {
             return DiarizationLoadOutcome(
                 document: nil,
                 degradedReason: error.localizedDescription,
-                modelUsed: configuration.modelURL.lastPathComponent
+                modelUsed: modelUsed
             )
         }
     }

@@ -55,7 +55,7 @@ extension ASREngine {
 }
 
 struct DiarizationEngineConfiguration: Sendable {
-    var modelURL: URL
+    var modelURL: URL?
 }
 
 protocol DiarizationEngine {

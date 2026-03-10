@@ -111,6 +111,7 @@ struct TestInferenceEngineFactory: InferenceEngineFactory {
         NoopASREngine()
     }
 
+    @MainActor
     func makeDiarizationEngine(for profile: InferenceRuntimeProfile) throws -> any DiarizationEngine {
         NoopDiarizationEngine()
     }
@@ -652,8 +653,13 @@ final class RecordingsStoreSummarizationTests: XCTestCase {
                 projectDirectories: { [] }
             )
         )
-        let fluidProvider = FluidAudioModelProvider()
-        let composition = DefaultInferenceComposition.make(modelManager: modelManager, fluidAudioModelProvider: fluidProvider)
+        let fluidProvider = FluidAudioASRModelProvider()
+        let diarizationProvider = FluidAudioDiarizationModelProvider()
+        let composition = DefaultInferenceComposition.make(
+            modelManager: modelManager,
+            asrModelProvider: fluidProvider,
+            diarizationModelProvider: diarizationProvider
+        )
         let store = RecordingsStore(
             audioCaptureEngine: composition.audioCaptureEngine,
             transcriptionPipeline: TranscriptionPipeline(),
@@ -662,6 +668,7 @@ final class RecordingsStoreSummarizationTests: XCTestCase {
             transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
             modelManager: modelManager,
             fluidAudioModelProvider: fluidProvider,
+            fluidAudioDiarizationModelProvider: diarizationProvider,
             repository: repository,
             previewMode: false
         )
@@ -730,7 +737,7 @@ final class SummaryIsolationTests: XCTestCase {
                 projectDirectories: { [] }
             )
         )
-        let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(modelManager: modelManager, fluidAudioModelProvider: FluidAudioModelProvider())
+        let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(modelManager: modelManager, fluidAudioModelProvider: FluidAudioASRModelProvider())
 
         let workflow = RecordingWorkflowController(
             audioCaptureEngine: AudioCaptureService(),
@@ -945,7 +952,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         summarizationEngine: any SummarizationEngine,
         summarizationTimeoutSeconds: UInt64
     ) -> RecordingWorkflowController {
-        let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(modelManager: modelManager, fluidAudioModelProvider: FluidAudioModelProvider())
+        let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(modelManager: modelManager, fluidAudioModelProvider: FluidAudioASRModelProvider())
         let engineFactory = TestInferenceEngineFactory(summarizationEngine: summarizationEngine)
         return RecordingWorkflowController(
             audioCaptureEngine: AudioCaptureService(),

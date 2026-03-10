@@ -181,7 +181,7 @@ final class TranscriptionPipelineTests: XCTestCase {
 
         XCTAssertEqual(result.state, .ready)
         XCTAssertFalse(result.diarizationApplied)
-        XCTAssertEqual(result.diarizationDegradedReason, "diarization model not selected")
+        XCTAssertEqual(result.diarizationDegradedReason, "Diarization failed with code 1: mock failure")
         XCTAssertNil(result.systemDiarizationJSONFile)
 
         let transcriptURL = temp.appendingPathComponent("transcript.json")
@@ -277,6 +277,47 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertNil(result.diarizationDegradedReason)
         XCTAssertEqual(result.systemDiarizationJSONFile, "system.diarization.json")
         XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("system.diarization.json").path))
+    }
+
+    func testPipelineRunsDiarizationWithNilModelURLWhenEngineIsAvailable() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: SuccessfulDiarizationEngine())
+
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
+        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
+        try Data("asr-model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "t",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        )
+
+        let result = try await pipeline.process(
+            recording: recording,
+            in: temp,
+            runtimeProfile: makeRuntimeProfile(
+                asrModelURL: temp.appendingPathComponent("asr.bin"),
+                diarizationModelURL: nil
+            ),
+            engineFactory: factory
+        )
+
+        XCTAssertTrue(result.diarizationApplied)
+        XCTAssertNil(result.diarizationDegradedReason)
+        XCTAssertEqual(result.diarizationModelUsed, "sdk-managed")
+        XCTAssertEqual(result.systemDiarizationJSONFile, "system.diarization.json")
     }
 
     func testPipelineCreatesEmptySystemASRWhenSystemAudioUnavailable() async throws {
@@ -566,6 +607,50 @@ final class TranscriptionPipelineTests: XCTestCase {
             systemAudioURL: audioURL,
             sessionID: sessionID,
             configuration: DiarizationEngineConfiguration(modelURL: missingModelURL)
+        )) { error in
+            guard case DiarizationRuntimeError.modelMissing = error else {
+                XCTFail("Unexpected error: \(error)")
+                return
+            }
+        }
+    }
+
+    func testCliDiarizationEngineNilModelURLThrows() async throws {
+        let service = CliDiarizationEngine(
+            runnerFactory: {
+                ProcessDiarizationRunner(
+                    processExecutor: MockDiarizationProcessExecutor(result: DiarizationProcessResult(exitCode: 0, stdout: "", stderr: "")),
+                    resolveBinaryURL: { URL(fileURLWithPath: "/tmp/diarization-main") }
+                )
+            }
+        )
+
+        let sessionID = UUID()
+        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.raw.caf")
+        FileManager.default.createFile(atPath: audioURL.path, contents: Data())
+
+        await XCTAssertThrowsErrorAsync(try await service.diarize(
+            systemAudioURL: audioURL,
+            sessionID: sessionID,
+            configuration: DiarizationEngineConfiguration(modelURL: nil)
+        )) { error in
+            guard case DiarizationRuntimeError.modelMissing = error else {
+                XCTFail("Unexpected error: \(error)")
+                return
+            }
+        }
+    }
+
+    func testPlaceholderDiarizationEngineNilModelURLThrows() async throws {
+        let service = PlaceholderDiarizationEngine()
+        let sessionID = UUID()
+        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.raw.caf")
+        FileManager.default.createFile(atPath: audioURL.path, contents: Data())
+
+        await XCTAssertThrowsErrorAsync(try await service.diarize(
+            systemAudioURL: audioURL,
+            sessionID: sessionID,
+            configuration: DiarizationEngineConfiguration(modelURL: nil)
         )) { error in
             guard case DiarizationRuntimeError.modelMissing = error else {
                 XCTFail("Unexpected error: \(error)")
@@ -1262,6 +1347,7 @@ final class TranscriptionPipelineTests: XCTestCase {
             asrEngine
         }
 
+        @MainActor
         func makeDiarizationEngine(for profile: InferenceRuntimeProfile) throws -> any DiarizationEngine {
             diarizationEngine
         }

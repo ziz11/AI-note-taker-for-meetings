@@ -53,13 +53,18 @@ final class RecordingsStore: ObservableObject {
         inferenceEngineFactory: any InferenceEngineFactory,
         transcriptionEngineDisplayName: String,
         modelManager: ModelManager,
-        fluidAudioModelProvider: FluidAudioModelProvider,
+        fluidAudioModelProvider: any FluidAudioASRModelProviding,
+        fluidAudioDiarizationModelProvider: any FluidAudioDiarizationModelProviding,
         repository: RecordingsPersistence = RecordingsRepository(),
         previewMode: Bool = false
     ) {
         self.previewMode = previewMode
         self.modelManager = modelManager
-        self.modelSettingsViewModel = ModelSettingsViewModel(modelManager: modelManager, fluidAudioModelProvider: fluidAudioModelProvider)
+        self.modelSettingsViewModel = ModelSettingsViewModel(
+            modelManager: modelManager,
+            fluidAudioModelProvider: fluidAudioModelProvider,
+            fluidAudioDiarizationModelProvider: fluidAudioDiarizationModelProvider
+        )
         self.modelOnboardingCoordinator = ModelOnboardingCoordinator(modelManager: modelManager)
         var initialViewState = RecordingsViewState(activeEngineName: transcriptionEngineDisplayName)
         initialViewState.selectedModelProfile = modelManager.selectedProfile
@@ -101,10 +106,12 @@ final class RecordingsStore: ObservableObject {
 
     convenience init(previewMode: Bool = false) {
         let modelManager = ModelManager()
-        let fluidAudioModelProvider = FluidAudioModelProvider()
+        let fluidAudioModelProvider = FluidAudioASRModelProvider()
+        let fluidAudioDiarizationModelProvider = FluidAudioDiarizationModelProvider()
         let composition = DefaultInferenceComposition.make(
             modelManager: modelManager,
-            fluidAudioModelProvider: fluidAudioModelProvider
+            asrModelProvider: fluidAudioModelProvider,
+            diarizationModelProvider: fluidAudioDiarizationModelProvider
         )
         self.init(
             audioCaptureEngine: composition.audioCaptureEngine,
@@ -114,6 +121,7 @@ final class RecordingsStore: ObservableObject {
             transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
             modelManager: modelManager,
             fluidAudioModelProvider: fluidAudioModelProvider,
+            fluidAudioDiarizationModelProvider: fluidAudioDiarizationModelProvider,
             previewMode: previewMode
         )
     }
