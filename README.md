@@ -7,6 +7,10 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 - Capture and merge pipeline: functional.
 - Import-audio flow is supported.
 - Model management UI supports FluidAudio SDK-managed ASR provisioning and folder-based local models for diarization/summarization.
+- Current design direction for Models settings is provider-first:
+  - users download or install models
+  - users select the active model per task
+  - provider/runtime grouping stays explicit
 - Inference architecture is backend-agnostic and stage-driven (`contracts -> runtime profile -> selector/factory -> backend modules`).
 - ASR inference is FluidAudio-only in this branch. `FluidAudioASREngine` uses the FluidAudio SDK (v3, CoreML-based) through thin backend-local adapters.
 - ASR model provisioning is SDK-managed via `FluidAudioModelProvider`. Models are downloaded and cached by the SDK, not picked from local `.bin` files.
@@ -78,6 +82,7 @@ Legacy diarization `.bin` selections are not auto-migrated and degrade cleanly.
 - `AGENTS.md` — agent rules, ownership boundaries, change routing, extension checklists
 - `docs/model-integration.md` — model resolution, local model policy, runtime selection details
 - `docs/inference-context.md` — compact canonical inference context for backend changes and agent prompts
+- `docs/prompts/2026-03-11-model-settings-screen-redesign.md` — current Models settings redesign brief
 - `docs/research/diarization-options.md` — diarization backend research (FluidAudio, sherpa-onnx, etc.)
 - `docs/plans/` — completed implementation plans (historical)
 
