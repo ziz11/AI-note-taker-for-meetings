@@ -31,6 +31,7 @@
 		FA3000052F0C000000000001 /* FluidAudioTranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3000062F0C000000000001 /* FluidAudioTranscriptionService.swift */; };
 		FA3000072F0C000000000001 /* FluidAudioDiarizationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3000082F0C000000000001 /* FluidAudioDiarizationEngine.swift */; };
 		FA2000012F0B000000000001 /* FluidAudioASRModelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA2000022F0B000000000001 /* FluidAudioASRModelProvider.swift */; };
+		FA4001012F0D000000000001 /* FluidAudioDiarizationModelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4001022F0D000000000001 /* FluidAudioDiarizationModelProvider.swift */; };
 		8A1000012D82A10000A13B02 /* ModelTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000112D82A10000A13B02 /* ModelTypes.swift */; };
 		8A1000022D82A10000A13B02 /* ModelRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000122D82A10000A13B02 /* ModelRegistry.swift */; };
 		8A1000032D82A10000A13B02 /* ModelStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1000132D82A10000A13B02 /* ModelStorage.swift */; };
@@ -111,6 +112,7 @@
 		FA3000062F0C000000000001 /* FluidAudioTranscriptionService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioTranscriptionService.swift; sourceTree = "<group>"; };
 		FA3000082F0C000000000001 /* FluidAudioDiarizationEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioDiarizationEngine.swift; sourceTree = "<group>"; };
 		FA2000022F0B000000000001 /* FluidAudioASRModelProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioASRModelProvider.swift; sourceTree = "<group>"; };
+		FA4001022F0D000000000001 /* FluidAudioDiarizationModelProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioDiarizationModelProvider.swift; sourceTree = "<group>"; };
 		8A1000112D82A10000A13B02 /* ModelTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTypes.swift; sourceTree = "<group>"; };
 		8A1000122D82A10000A13B02 /* ModelRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelRegistry.swift; sourceTree = "<group>"; };
 		8A1000132D82A10000A13B02 /* ModelStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelStorage.swift; sourceTree = "<group>"; };
@@ -258,6 +260,7 @@
 				FA3000062F0C000000000001 /* FluidAudioTranscriptionService.swift */,
 				FA3000082F0C000000000001 /* FluidAudioDiarizationEngine.swift */,
 				FA2000022F0B000000000001 /* FluidAudioASRModelProvider.swift */,
+				FA4001022F0D000000000001 /* FluidAudioDiarizationModelProvider.swift */,
 			);
 			path = Infrastructure;
 			sourceTree = "<group>";
@@ -595,6 +598,7 @@
 				FA3000052F0C000000000001 /* FluidAudioTranscriptionService.swift in Sources */,
 				FA3000072F0C000000000001 /* FluidAudioDiarizationEngine.swift in Sources */,
 				FA2000012F0B000000000001 /* FluidAudioASRModelProvider.swift in Sources */,
+				FA4001012F0D000000000001 /* FluidAudioDiarizationModelProvider.swift in Sources */,
 				D26338CDE7591CE9EB66AA72 /* CliDiarizationEngine.swift in Sources */,
 				F0DC2B834E4BE6EFD06B9228 /* SummaryEngine.swift in Sources */,
 				15CD5138FCA0BCCED1F11FA5 /* SummaryPromptBuilder.swift in Sources */,

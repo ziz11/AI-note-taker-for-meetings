@@ -234,13 +234,11 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         }
     }
 
-    private final class StubOfflineDiarizationManager: OfflineDiarizationManaging {
+    private final class StubOfflineDiarizationManager: OfflineDiarizationManaging, @unchecked Sendable {
         func prepareModels() async throws {}
 
-#if arch(arm64) && canImport(FluidAudio)
-        func process(audio: [Float]) async throws -> DiarizationResult {
-            DiarizationResult(segments: [])
+        func process(audio: [Float]) async throws -> OfflineDiarizationResult {
+            OfflineDiarizationResult(segments: [])
         }
-#endif
     }
 }

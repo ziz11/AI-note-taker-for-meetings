@@ -1,10 +1,6 @@
 import XCTest
 @testable import Recordly
 
-#if arch(arm64) && canImport(FluidAudio)
-import FluidAudio
-#endif
-
 @MainActor
 final class FluidAudioDiarizationModelProviderTests: XCTestCase {
     func testResolveBeforeDownloadThrowsNoModelProvisioned() {
@@ -12,7 +8,7 @@ final class FluidAudioDiarizationModelProviderTests: XCTestCase {
             StubOfflineDiarizationManager()
         })
 
-        XCTAssertEqual(provider.state, FluidAudioModelProvisioningState.needsDownload)
+        XCTAssertEqual(provider.state, .needsDownload)
         XCTAssertThrowsError(try provider.resolveForRuntime()) { error in
             XCTAssertEqual(error as? FluidAudioModelProvisioningError, .noModelProvisioned)
         }
@@ -28,7 +24,7 @@ final class FluidAudioDiarizationModelProviderTests: XCTestCase {
 
         await provider.downloadDefaultModel()
 
-        XCTAssertEqual(provider.state, FluidAudioModelProvisioningState.ready)
+        XCTAssertEqual(provider.state, .ready)
         XCTAssertEqual(createdManagers.count, 1)
         XCTAssertEqual(createdManagers[0].prepareModelsCallCount, 1)
 
@@ -51,8 +47,9 @@ final class FluidAudioDiarizationModelProviderTests: XCTestCase {
 
         await provider.downloadDefaultModel()
 
-        XCTAssertEqual(provider.state, FluidAudioModelProvisioningState.ready)
+        XCTAssertEqual(provider.state, .ready)
         XCTAssertEqual(preparedManager.prepareModelsCallCount, 0)
+
         let resolved = try provider.resolveForRuntime()
         XCTAssertTrue(resolved === preparedManager)
     }
@@ -66,7 +63,7 @@ final class FluidAudioDiarizationModelProviderTests: XCTestCase {
 
         XCTAssertEqual(
             provider.state,
-            FluidAudioModelProvisioningState.failed(message: TestError.prepareFailed.localizedDescription)
+            .failed(message: TestError.prepareFailed.localizedDescription)
         )
         XCTAssertThrowsError(try provider.resolveForRuntime()) { error in
             XCTAssertEqual(
@@ -77,7 +74,7 @@ final class FluidAudioDiarizationModelProviderTests: XCTestCase {
     }
 }
 
-private final class StubOfflineDiarizationManager: OfflineDiarizationManaging {
+private final class StubOfflineDiarizationManager: OfflineDiarizationManaging, @unchecked Sendable {
     private let prepareError: Error?
     private(set) var prepareModelsCallCount = 0
 
@@ -92,11 +89,9 @@ private final class StubOfflineDiarizationManager: OfflineDiarizationManaging {
         }
     }
 
-#if arch(arm64) && canImport(FluidAudio)
-    func process(audio: [Float]) async throws -> DiarizationResult {
-        DiarizationResult(segments: [])
+    func process(audio: [Float]) async throws -> OfflineDiarizationResult {
+        OfflineDiarizationResult(segments: [])
     }
-#endif
 }
 
 private enum TestError: LocalizedError {

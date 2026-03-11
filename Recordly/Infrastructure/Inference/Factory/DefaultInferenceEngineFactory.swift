@@ -7,7 +7,6 @@ struct DefaultInferenceEngineFactory: InferenceEngineFactory {
     init() {
         self.diarizationModelProvider = FluidAudioDiarizationModelProvider()
     }
-
     init(diarizationModelProvider: any FluidAudioDiarizationModelProviding) {
         self.diarizationModelProvider = diarizationModelProvider
     }

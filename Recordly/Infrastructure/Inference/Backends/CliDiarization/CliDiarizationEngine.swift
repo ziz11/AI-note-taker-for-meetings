@@ -233,6 +233,9 @@ struct CliDiarizationEngine: DiarizationEngine {
             throw DiarizationRuntimeError.invalidInput
         }
 
+        guard let modelURL = configuration.modelURL else {
+            throw DiarizationRuntimeError.modelMissing(URL(fileURLWithPath: "<no model URL>"))
+        }
         guard fileManager.fileExists(atPath: modelURL.path) else {
             throw DiarizationRuntimeError.modelMissing(modelURL)
         }

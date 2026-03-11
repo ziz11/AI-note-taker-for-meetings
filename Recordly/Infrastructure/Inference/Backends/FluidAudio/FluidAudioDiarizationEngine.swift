@@ -3,7 +3,6 @@ import Foundation
 #if arch(arm64) && canImport(FluidAudio)
 import FluidAudio
 #endif
-
 struct FluidAudioDiarizationEngine: DiarizationEngine {
     private let manager: any OfflineDiarizationManaging
     private let fileManager: FileManager

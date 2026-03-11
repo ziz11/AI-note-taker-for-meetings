@@ -48,21 +48,28 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
 
     convenience init(
         modelManager: ModelManager,
-        fluidAudioModelProvider: any FluidAudioASRModelProviding,
+        asrModelProvider: any FluidAudioASRModelProviding,
         stageSelection: StageRuntimeSelection = .defaultLocal
     ) {
         self.init(
             modelManager: modelManager,
-            asrModelProvider: fluidAudioModelProvider,
+            asrModelProvider: asrModelProvider,
             diarizationModelProvider: FluidAudioDiarizationModelProvider(),
             stageSelection: stageSelection
         )
     }
 
+    convenience init(
+        modelManager: ModelManager,
+        fluidAudioModelProvider: any FluidAudioASRModelProviding,
+        stageSelection: StageRuntimeSelection = .defaultLocal
+    ) {
+        self.init(modelManager: modelManager, asrModelProvider: fluidAudioModelProvider, stageSelection: stageSelection)
+    }
+
     func transcriptionAvailability(for profile: ModelProfile) -> TranscriptionAvailability {
         asrModelProvider.refreshState()
         diarizationModelProvider.refreshState()
-
         switch asrModelProvider.state {
         case .ready:
             if diarizationModelProvider.state != .ready {

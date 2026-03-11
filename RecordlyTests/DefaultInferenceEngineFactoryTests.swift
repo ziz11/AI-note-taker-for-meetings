@@ -143,11 +143,10 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: systemAudioURL) }
 
         let manager = RecordingOfflineDiarizationManager(
-            result: DiarizationResult(
+            result: OfflineDiarizationResult(
                 segments: [
-                    TimedSpeakerSegment(
+                    OfflineDiarizationSegment(
                         speakerId: "Speaker 1",
-                        embedding: [0.1, 0.2],
                         startTimeSeconds: 1.25,
                         endTimeSeconds: 2.75,
                         qualityScore: 0.9
@@ -197,28 +196,26 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         }
     }
 
-    private final class StubOfflineDiarizationManager: OfflineDiarizationManaging {
+    private final class StubOfflineDiarizationManager: OfflineDiarizationManaging, @unchecked Sendable {
         func prepareModels() async throws {}
 
-#if arch(arm64) && canImport(FluidAudio)
-        func process(audio: [Float]) async throws -> DiarizationResult {
-            DiarizationResult(segments: [])
+        func process(audio: [Float]) async throws -> OfflineDiarizationResult {
+            OfflineDiarizationResult(segments: [])
         }
-#endif
     }
 
     #if arch(arm64) && canImport(FluidAudio)
-    private final class RecordingOfflineDiarizationManager: OfflineDiarizationManaging {
-        let result: DiarizationResult
+    private final class RecordingOfflineDiarizationManager: OfflineDiarizationManaging, @unchecked Sendable {
+        let result: OfflineDiarizationResult
         private(set) var processedAudio: [[Float]] = []
 
-        init(result: DiarizationResult) {
+        init(result: OfflineDiarizationResult) {
             self.result = result
         }
 
         func prepareModels() async throws {}
 
-        func process(audio: [Float]) async throws -> DiarizationResult {
+        func process(audio: [Float]) async throws -> OfflineDiarizationResult {
             processedAudio.append(audio)
             return result
         }

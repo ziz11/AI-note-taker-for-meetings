@@ -40,13 +40,20 @@ enum DefaultInferenceComposition {
 
     static func make(
         modelManager: ModelManager,
-        fluidAudioModelProvider: any FluidAudioASRModelProviding
+        asrModelProvider: any FluidAudioASRModelProviding
     ) -> InferenceComposition {
         let diarizationModelProvider = FluidAudioDiarizationModelProvider()
         return make(
             modelManager: modelManager,
-            asrModelProvider: fluidAudioModelProvider,
+            asrModelProvider: asrModelProvider,
             diarizationModelProvider: diarizationModelProvider
         )
+    }
+
+    static func make(
+        modelManager: ModelManager,
+        fluidAudioModelProvider: any FluidAudioASRModelProviding
+    ) -> InferenceComposition {
+        make(modelManager: modelManager, asrModelProvider: fluidAudioModelProvider)
     }
 }
