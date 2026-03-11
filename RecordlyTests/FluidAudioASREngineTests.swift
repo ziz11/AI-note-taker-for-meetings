@@ -371,25 +371,6 @@ final class FluidAudioASREngineTests: XCTestCase {
         XCTAssertGreaterThan(transcriber.lastBufferFrameLength, 0)
     }
 
-    func testDiarizationServiceRejectsLegacyCliModelFile() async throws {
-        let audioURL = try createAudioFile(named: "system.raw.caf", sampleRate: 16_000, channels: 1, frameCount: 16_000)
-        let loader = FluidAudioSessionAudioLoader()
-        let prepared = try loader.loadAudio(from: audioURL)
-        let legacyModel = tempDirectory.appendingPathComponent("diarization.bin")
-        try Data("legacy".utf8).write(to: legacyModel)
-        let service = FluidAudioDiarizationService(runner: StubFluidAudioDiarizationRunner(result: .success([])))
-
-        do {
-            _ = try await service.diarize(preparedAudio: prepared, sessionID: UUID(), modelDirectoryURL: legacyModel)
-            XCTFail("Expected error")
-        } catch let error as DiarizationRuntimeError {
-            guard case .modelMissing(let failedURL) = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertEqual(failedURL, legacyModel)
-        }
-    }
-
     private func createFluidModelDirectory(named name: String) throws -> URL {
         let directory = tempDirectory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -561,13 +542,5 @@ private struct StubFluidAudioVADService: FluidAudioVoiceActivityDetecting {
 
     func detectSpeechRegions(in audio: PreparedSessionAudio) async -> [FluidAudioSpeechRegion]? {
         result
-    }
-}
-
-private struct StubFluidAudioDiarizationRunner: FluidAudioOfflineDiarizationRunning {
-    let result: Result<[FluidAudioDiarizationSegment], Error>
-
-    func diarize(preparedAudio: PreparedSessionAudio, modelDirectoryURL: URL) async throws -> [FluidAudioDiarizationSegment] {
-        try result.get()
     }
 }

@@ -130,8 +130,13 @@ final class RecordingsPhaseOneTests: XCTestCase {
 
     private func makeStore(repository: InMemoryRecordingsRepository) -> RecordingsStore {
         let modelManager = ModelManager()
-        let fluidProvider = FluidAudioModelProvider()
-        let composition = DefaultInferenceComposition.make(modelManager: modelManager, fluidAudioModelProvider: fluidProvider)
+        let fluidProvider = FluidAudioASRModelProvider()
+        let diarizationProvider = FluidAudioDiarizationModelProvider()
+        let composition = DefaultInferenceComposition.make(
+            modelManager: modelManager,
+            asrModelProvider: fluidProvider,
+            diarizationModelProvider: diarizationProvider
+        )
         return RecordingsStore(
             audioCaptureEngine: composition.audioCaptureEngine,
             transcriptionPipeline: TranscriptionPipeline(),
@@ -140,6 +145,7 @@ final class RecordingsPhaseOneTests: XCTestCase {
             transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
             modelManager: modelManager,
             fluidAudioModelProvider: fluidProvider,
+            fluidAudioDiarizationModelProvider: diarizationProvider,
             repository: repository,
             previewMode: false
         )

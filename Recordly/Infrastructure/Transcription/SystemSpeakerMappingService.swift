@@ -1,6 +1,6 @@
 import Foundation
 
-struct SystemSpeakerMappingService {
+struct SystemTranscriptAlignmentService {
     let overlapThresholdRatio: Double
 
     private struct SpeakerInfo {
@@ -19,7 +19,7 @@ struct SystemSpeakerMappingService {
         self.overlapThresholdRatio = overlapThresholdRatio
     }
 
-    func mapSystemSpeakers(asrSegments: [ASRSegment], diarization: DiarizationDocument?) -> [TranscriptSegment] {
+    func align(asrSegments: [ASRSegment], diarization: DiarizationDocument?) -> [TranscriptSegment] {
         let remoteAliases = makeRemoteSpeakerAliases(in: diarization)
 
         return asrSegments.map { asr in
@@ -65,12 +65,17 @@ struct SystemSpeakerMappingService {
         }
 
         guard let bestMatch else {
-            return SpeakerInfo(displayLabel: "Unknown Speaker", role: .unknown, speakerId: nil, confidence: nil)
+            return SpeakerInfo(displayLabel: "Remote", role: .unknown, speakerId: nil, confidence: nil)
         }
 
         let ratio = Double(bestOverlap) / Double(segmentDuration)
         guard ratio >= overlapThresholdRatio else {
-            return SpeakerInfo(displayLabel: "Unknown Speaker", role: .unknown, speakerId: nil, confidence: bestMatch.confidence)
+            return SpeakerInfo(
+                displayLabel: "Remote",
+                role: .unknown,
+                speakerId: nil,
+                confidence: bestMatch.confidence
+            )
         }
 
         let alias = remoteAliases[bestMatch.speaker]
@@ -104,5 +109,66 @@ struct SystemSpeakerMappingService {
         }
 
         return aliases
+    }
+}
+
+struct SystemChunkTranscriptBuilder {
+    func build(from chunkDocument: SystemChunkTranscriptionDocument) -> [TranscriptSegment] {
+        let orderedSegments = chunkDocument.segments.sorted { lhs, rhs in
+            if lhs.startMs != rhs.startMs { return lhs.startMs < rhs.startMs }
+            if lhs.endMs != rhs.endMs { return lhs.endMs < rhs.endMs }
+            return lhs.id < rhs.id
+        }
+
+        var aliases: [String: (speaker: String, speakerId: String)] = [:]
+        var result: [TranscriptSegment] = []
+
+        for segment in orderedSegments {
+            let alias: (speaker: String, speakerId: String)
+            if let existing = aliases[segment.speakerKey] {
+                alias = existing
+            } else {
+                let index = aliases.count + 1
+                let created = (
+                    speaker: String(format: "SPEAKER_%02d", index),
+                    speakerId: "remote_\(index)"
+                )
+                aliases[segment.speakerKey] = created
+                alias = created
+            }
+
+            result.append(
+                TranscriptSegment(
+                    id: segment.id,
+                    channel: .system,
+                    speaker: alias.speaker,
+                    speakerRole: .remote,
+                    speakerId: alias.speakerId,
+                    startMs: segment.startMs,
+                    endMs: segment.endMs,
+                    text: segment.text,
+                    confidence: segment.confidence,
+                    language: segment.language,
+                    speakerConfidence: segment.speakerConfidence,
+                    words: segment.words
+                )
+            )
+        }
+
+        return result
+    }
+}
+
+// Legacy compatibility wrapper. Keep this out of the new main path.
+struct SystemSpeakerMappingService {
+    let overlapThresholdRatio: Double
+
+    init(overlapThresholdRatio: Double = 0.25) {
+        self.overlapThresholdRatio = overlapThresholdRatio
+    }
+
+    func mapSystemSpeakers(asrSegments: [ASRSegment], diarization: DiarizationDocument?) -> [TranscriptSegment] {
+        SystemTranscriptAlignmentService(overlapThresholdRatio: overlapThresholdRatio)
+            .align(asrSegments: asrSegments, diarization: diarization)
     }
 }

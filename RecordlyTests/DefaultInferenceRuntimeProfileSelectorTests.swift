@@ -1,6 +1,10 @@
 import XCTest
 @testable import Recordly
 
+#if arch(arm64) && canImport(FluidAudio)
+import FluidAudio
+#endif
+
 @MainActor
 final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
     private var tempDirectory: URL!
@@ -32,13 +36,15 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
 
     func testResolveTranscriptionProfileUsesExpectedBackendsAndArtifacts() throws {
         let fluidDirectory = try createFluidModelDirectory(named: "fluid-asr-default")
-        _ = try writeModel(named: "diarization-enhanced-v1.bin")
         let manager = makeModelManager()
-        let diarizationOption = try XCTUnwrap(manager.listLocalOptions(kind: .diarization).first)
-        manager.setSelectedModelID(diarizationOption.id, for: .diarization)
 
-        let provider = StubFluidAudioModelProvider(modelURL: fluidDirectory)
-        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager, fluidAudioModelProvider: provider)
+        let asrProvider = StubFluidAudioASRModelProvider(modelURL: fluidDirectory)
+        let diarizationProvider = StubFluidAudioDiarizationModelProvider(state: .ready)
+        let selector = DefaultInferenceRuntimeProfileSelector(
+            modelManager: manager,
+            asrModelProvider: asrProvider,
+            diarizationModelProvider: diarizationProvider
+        )
         let profile = try selector.resolveTranscriptionProfile(for: .balanced)
 
         XCTAssertEqual(profile.stageSelection.backend(for: .asr), .fluidAudio)
@@ -47,18 +53,20 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
             profile.modelArtifacts.asrModelURL?.resolvingSymlinksInPath().path,
             fluidDirectory.resolvingSymlinksInPath().path
         )
-        XCTAssertEqual(
-            profile.modelArtifacts.diarizationModelURL?.resolvingSymlinksInPath().path,
-            diarizationOption.url.resolvingSymlinksInPath().path
-        )
+        XCTAssertNil(profile.modelArtifacts.diarizationModelURL)
     }
 
     func testResolveTranscriptionProfileInjectsFluidBackendWhenSelected() throws {
         let fluidDirectory = try createFluidModelDirectory(named: "fluid-asr-v3")
         let manager = makeModelManager()
 
-        let provider = StubFluidAudioModelProvider(modelURL: fluidDirectory)
-        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager, fluidAudioModelProvider: provider)
+        let asrProvider = StubFluidAudioASRModelProvider(modelURL: fluidDirectory)
+        let diarizationProvider = StubFluidAudioDiarizationModelProvider(state: .ready)
+        let selector = DefaultInferenceRuntimeProfileSelector(
+            modelManager: manager,
+            asrModelProvider: asrProvider,
+            diarizationModelProvider: diarizationProvider
+        )
         let profile = try selector.resolveTranscriptionProfile(for: .balanced)
 
         XCTAssertEqual(profile.stageSelection.backend(for: .asr), .fluidAudio)
@@ -69,8 +77,13 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         try FileManager.default.createDirectory(at: invalidDir, withIntermediateDirectories: true)
         let manager = makeModelManager()
 
-        let provider = StubFluidAudioModelProvider(modelURL: invalidDir)
-        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager, fluidAudioModelProvider: provider)
+        let asrProvider = StubFluidAudioASRModelProvider(modelURL: invalidDir)
+        let diarizationProvider = StubFluidAudioDiarizationModelProvider(state: .ready)
+        let selector = DefaultInferenceRuntimeProfileSelector(
+            modelManager: manager,
+            asrModelProvider: asrProvider,
+            diarizationModelProvider: diarizationProvider
+        )
 
         XCTAssertThrowsError(try selector.resolveTranscriptionProfile(for: .balanced)) { error in
             guard case .invalidFluidAudioModel = error as? InferenceRuntimeProfileError else {
@@ -90,8 +103,13 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         let summarizationOption = try XCTUnwrap(manager.listLocalOptions(kind: .summarization).first)
         manager.setSelectedModelID(summarizationOption.id, for: .summarization)
 
-        let provider = StubFluidAudioModelProvider(modelURL: nil)
-        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager, fluidAudioModelProvider: provider)
+        let asrProvider = StubFluidAudioASRModelProvider(modelURL: nil)
+        let diarizationProvider = StubFluidAudioDiarizationModelProvider(state: .ready)
+        let selector = DefaultInferenceRuntimeProfileSelector(
+            modelManager: manager,
+            asrModelProvider: asrProvider,
+            diarizationModelProvider: diarizationProvider
+        )
         let profile = try selector.resolveSummarizationProfile(for: .balanced)
 
         XCTAssertEqual(profile.stageSelection.backend(for: .summarization), .llamaCpp)
@@ -99,13 +117,19 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
             profile.modelArtifacts.summarizationModelURL?.resolvingSymlinksInPath().path,
             summarizationOption.url.resolvingSymlinksInPath().path
         )
+        XCTAssertNil(profile.modelArtifacts.diarizationModelURL)
         XCTAssertEqual(profile.summarizationRuntimeSettings.contextSize, 4096)
     }
 
     func testTranscriptionAvailabilityReportsNeedsDownload() {
         let manager = makeModelManager()
-        let provider = StubFluidAudioModelProvider(modelURL: nil)
-        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager, fluidAudioModelProvider: provider)
+        let asrProvider = StubFluidAudioASRModelProvider(modelURL: nil)
+        let diarizationProvider = StubFluidAudioDiarizationModelProvider(state: .ready)
+        let selector = DefaultInferenceRuntimeProfileSelector(
+            modelManager: manager,
+            asrModelProvider: asrProvider,
+            diarizationModelProvider: diarizationProvider
+        )
 
         let availability = selector.transcriptionAvailability(for: .balanced)
 
@@ -113,6 +137,22 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
             availability,
             .unavailable(reason: InferenceRuntimeProfileError.missingFluidAudioModel.localizedDescription)
         )
+    }
+
+    func testTranscriptionAvailabilityDegradesWhenDiarizationProviderIsNotReady() throws {
+        let fluidDirectory = try createFluidModelDirectory(named: "fluid-asr-ready")
+        let manager = makeModelManager()
+        let asrProvider = StubFluidAudioASRModelProvider(modelURL: fluidDirectory)
+        let diarizationProvider = StubFluidAudioDiarizationModelProvider(state: .needsDownload)
+        let selector = DefaultInferenceRuntimeProfileSelector(
+            modelManager: manager,
+            asrModelProvider: asrProvider,
+            diarizationModelProvider: diarizationProvider
+        )
+
+        let availability = selector.transcriptionAvailability(for: .balanced)
+
+        XCTAssertEqual(availability, .degradedNoDiarization)
     }
 
     // MARK: - Helpers
@@ -149,7 +189,7 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         return directory
     }
 
-    private final class StubFluidAudioModelProvider: FluidAudioModelProviding {
+    private final class StubFluidAudioASRModelProvider: FluidAudioASRModelProviding {
         private(set) var state: FluidAudioModelProvisioningState
         private let modelURL: URL?
 
@@ -166,6 +206,39 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
                 throw FluidAudioModelProvisioningError.noModelProvisioned
             }
             return modelURL
+        }
+    }
+
+    private final class StubFluidAudioDiarizationModelProvider: FluidAudioDiarizationModelProviding {
+        private(set) var state: FluidAudioModelProvisioningState
+        private let manager = StubOfflineDiarizationManager()
+
+        init(state: FluidAudioModelProvisioningState) {
+            self.state = state
+        }
+
+        func refreshState() {}
+        func downloadDefaultModel() async {}
+
+        func resolveForRuntime() throws -> any OfflineDiarizationManaging {
+            switch state {
+            case .ready:
+                return manager
+            case .needsDownload:
+                throw FluidAudioModelProvisioningError.noModelProvisioned
+            case .downloading:
+                throw FluidAudioModelProvisioningError.downloadFailed(message: "Model is currently downloading.")
+            case let .failed(message):
+                throw FluidAudioModelProvisioningError.downloadFailed(message: message)
+            }
+        }
+    }
+
+    private final class StubOfflineDiarizationManager: OfflineDiarizationManaging, @unchecked Sendable {
+        func prepareModels() async throws {}
+
+        func process(audio: [Float]) async throws -> OfflineDiarizationResult {
+            OfflineDiarizationResult(segments: [])
         }
     }
 }

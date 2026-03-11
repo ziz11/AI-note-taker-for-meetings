@@ -41,6 +41,30 @@ struct PreparedSessionAudio {
         return try makePCMBuffer(startSample: startSample, endSample: endSample)
     }
 
+    func sliced(from startMs: Int, to endMs: Int) -> PreparedSessionAudio? {
+        let clampedStartMs = max(0, min(startMs, durationMs))
+        let clampedEndMs = max(clampedStartMs, min(endMs, durationMs))
+        guard clampedEndMs > clampedStartMs else {
+            return nil
+        }
+
+        let startSample = max(0, min(Int((Double(clampedStartMs) / 1_000.0) * Double(sampleRate)), samples.count))
+        let endSample = max(startSample, min(Int((Double(clampedEndMs) / 1_000.0) * Double(sampleRate)), samples.count))
+        guard endSample > startSample else {
+            return nil
+        }
+
+        let chunkSamples = Array(samples[startSample..<endSample])
+        let chunkDurationMs = Int((Double(chunkSamples.count) / Double(sampleRate) * 1_000.0).rounded())
+
+        return PreparedSessionAudio(
+            samples: chunkSamples,
+            sampleRate: sampleRate,
+            durationMs: max(chunkDurationMs, 1),
+            sourceURL: sourceURL
+        )
+    }
+
     func resampled(to targetSampleRate: Int) throws -> PreparedSessionAudio {
         guard targetSampleRate > 0 else {
             throw ASREngineRuntimeError.unsupportedFormat(sourceURL)

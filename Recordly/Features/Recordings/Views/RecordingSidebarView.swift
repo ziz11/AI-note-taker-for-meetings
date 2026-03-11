@@ -18,7 +18,7 @@ struct RecordingSidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
             Rectangle()
-                .fill(sidebarBackground)
+                .fill(AppTheme.sidebarBackground)
                 .ignoresSafeArea()
         }
     }
@@ -29,11 +29,11 @@ struct RecordingSidebarView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("All Recordings")
                         .font(.system(size: 32, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
 
                     Text("\(store.filteredRecordings.count) items")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.56))
+                        .foregroundStyle(AppTheme.secondaryText)
                 }
 
                 Spacer(minLength: 12)
@@ -53,7 +53,7 @@ struct RecordingSidebarView: View {
                         .foregroundStyle(.white)
                         .frame(width: 58, height: 58)
                         .background(recordButtonBackground, in: Circle())
-                        .overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 1))
+                        .overlay(Circle().stroke(AppTheme.hairline, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .disabled(isRecordButtonLocked)
@@ -76,11 +76,11 @@ struct RecordingSidebarView: View {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(store.viewState.runtime.sidebarStatus)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(store.isRecording ? .red : Color.white.opacity(0.8))
+                        .foregroundStyle(store.isRecording ? .red : .primary)
 
                     Text(store.isRecording ? store.viewState.runtime.recordingDurationLabel : "00:00")
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.56))
+                        .foregroundStyle(AppTheme.secondaryText)
                         .monospacedDigit()
                 }
             }
@@ -90,26 +90,26 @@ struct RecordingSidebarView: View {
     private var searchField: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(Color.white.opacity(0.45))
+                .foregroundStyle(AppTheme.secondaryText)
 
             TextField("Titles, Summaries, Transcripts", text: $store.viewState.searchQuery)
                 .textFieldStyle(.plain)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
 
             if !store.viewState.searchQuery.isEmpty {
                 Button {
                     store.viewState.searchQuery = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Color.white.opacity(0.35))
+                        .foregroundStyle(AppTheme.secondaryText)
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
-        .background(Color.white.opacity(0.08), in: Capsule(style: .continuous))
-        .overlay(Capsule(style: .continuous).stroke(Color.white.opacity(0.07), lineWidth: 1))
+        .background(AppTheme.panelFill, in: Capsule(style: .continuous))
+        .overlay(Capsule(style: .continuous).stroke(AppTheme.hairline, lineWidth: 1))
     }
 
     @ViewBuilder
@@ -132,10 +132,10 @@ struct RecordingSidebarView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("System audio permission needed")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     Text("Enable Screen Recording access in System Settings.")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.54))
+                        .foregroundStyle(AppTheme.secondaryText)
                 }
 
                 Spacer(minLength: 8)
@@ -146,10 +146,10 @@ struct RecordingSidebarView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(Color.white.opacity(0.16))
+                .tint(AppTheme.accent)
             }
             .padding(14)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .appPanel(cornerRadius: 18)
         }
     }
 
@@ -195,26 +195,22 @@ struct RecordingSidebarView: View {
             }
         }
         .padding(14)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-        )
+        .appPanel(cornerRadius: 22)
     }
 
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: store.viewState.searchQuery.isEmpty ? "waveform" : "magnifyingglass")
                 .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.44))
+                .foregroundStyle(AppTheme.secondaryText)
 
             Text(store.viewState.searchQuery.isEmpty ? "No recordings yet" : "No matching recordings")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
 
             Text(store.viewState.searchQuery.isEmpty ? "Start a recording or import audio." : "Try a different title or transcript keyword.")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.52))
+                .foregroundStyle(AppTheme.secondaryText)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -226,24 +222,10 @@ struct RecordingSidebarView: View {
     }
 
     private var recordButtonBackground: some ShapeStyle {
-        LinearGradient(
-            colors: store.isRecording
-                ? [Color(red: 0.86, green: 0.24, blue: 0.24), Color(red: 0.68, green: 0.12, blue: 0.18)]
-                : [Color(red: 0.12, green: 0.58, blue: 0.98), Color(red: 0.06, green: 0.44, blue: 0.92)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
-    private var sidebarBackground: some ShapeStyle {
-        LinearGradient(
-            colors: [
-                Color(red: 0.10, green: 0.10, blue: 0.11),
-                Color(red: 0.06, green: 0.06, blue: 0.07)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+        if store.isRecording {
+            return AnyShapeStyle(Color.red)
+        }
+        return AnyShapeStyle(AppTheme.accent.gradient)
     }
 
     private var shouldShowSystemPermissionHelp: Bool {
@@ -254,10 +236,10 @@ struct RecordingSidebarView: View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 12)
                 .frame(height: 34)
-                .background(Color.white.opacity(0.08), in: Capsule(style: .continuous))
+                .background(AppTheme.panelFill, in: Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -267,19 +249,19 @@ struct RecordingSidebarView: View {
             HStack {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Spacer(minLength: 8)
                 Text(detail)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.5))
+                    .foregroundStyle(AppTheme.secondaryText)
                     .lineLimit(1)
             }
 
             ProgressView(value: progress, total: 1)
-                .tint(Color(red: 0.13, green: 0.58, blue: 0.98))
+                .tint(AppTheme.accent)
         }
         .padding(14)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .appPanel(cornerRadius: 18)
     }
 
     private func meterColumn(title: String, status: String, value: Double) -> some View {
@@ -287,16 +269,16 @@ struct RecordingSidebarView: View {
             HStack {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Spacer(minLength: 8)
                 Text(status)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.45))
+                    .foregroundStyle(AppTheme.secondaryText)
                     .lineLimit(1)
             }
 
             ProgressView(value: value, total: 1)
-                .tint(Color(red: 0.13, green: 0.58, blue: 0.98))
+                .tint(AppTheme.accent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -305,7 +287,7 @@ struct RecordingSidebarView: View {
         Toggle(isOn: isOn) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
         }
         .toggleStyle(.switch)
         .frame(maxWidth: .infinity, alignment: .leading)

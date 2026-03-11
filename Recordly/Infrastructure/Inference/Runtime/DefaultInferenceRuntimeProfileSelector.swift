@@ -30,24 +30,49 @@ protocol InferenceRuntimeProfileSelecting {
 @MainActor
 final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelecting {
     private let modelManager: ModelManager
-    private let fluidAudioModelProvider: any FluidAudioModelProviding
+    private let asrModelProvider: any FluidAudioASRModelProviding
+    private let diarizationModelProvider: any FluidAudioDiarizationModelProviding
     private let stageSelection: StageRuntimeSelection
 
     init(
         modelManager: ModelManager,
-        fluidAudioModelProvider: any FluidAudioModelProviding,
+        asrModelProvider: any FluidAudioASRModelProviding,
+        diarizationModelProvider: any FluidAudioDiarizationModelProviding,
         stageSelection: StageRuntimeSelection = .defaultLocal
     ) {
         self.modelManager = modelManager
-        self.fluidAudioModelProvider = fluidAudioModelProvider
+        self.asrModelProvider = asrModelProvider
+        self.diarizationModelProvider = diarizationModelProvider
         self.stageSelection = stageSelection
     }
 
+    convenience init(
+        modelManager: ModelManager,
+        asrModelProvider: any FluidAudioASRModelProviding,
+        stageSelection: StageRuntimeSelection = .defaultLocal
+    ) {
+        self.init(
+            modelManager: modelManager,
+            asrModelProvider: asrModelProvider,
+            diarizationModelProvider: FluidAudioDiarizationModelProvider(),
+            stageSelection: stageSelection
+        )
+    }
+
+    convenience init(
+        modelManager: ModelManager,
+        fluidAudioModelProvider: any FluidAudioASRModelProviding,
+        stageSelection: StageRuntimeSelection = .defaultLocal
+    ) {
+        self.init(modelManager: modelManager, asrModelProvider: fluidAudioModelProvider, stageSelection: stageSelection)
+    }
+
     func transcriptionAvailability(for profile: ModelProfile) -> TranscriptionAvailability {
-        fluidAudioModelProvider.refreshState()
-        switch fluidAudioModelProvider.state {
+        asrModelProvider.refreshState()
+        diarizationModelProvider.refreshState()
+        switch asrModelProvider.state {
         case .ready:
-            if modelManager.selectedLocalOption(kind: .diarization) == nil {
+            if diarizationModelProvider.state != .ready {
                 return .degradedNoDiarization
             }
             return .ready
@@ -61,7 +86,7 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
     func resolveTranscriptionProfile(for profile: ModelProfile) throws -> InferenceRuntimeProfile {
         let asrModelURL: URL
         do {
-            asrModelURL = try fluidAudioModelProvider.resolveForRuntime()
+            asrModelURL = try asrModelProvider.resolveForRuntime()
         } catch let provisioningError as FluidAudioModelProvisioningError {
             switch provisioningError {
             case .noModelProvisioned:
@@ -77,13 +102,11 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
             throw InferenceRuntimeProfileError.invalidFluidAudioModel(modelURL: asrModelURL)
         }
 
-        let diarizationOption = modelManager.selectedLocalOption(kind: .diarization)
-
         return InferenceRuntimeProfile(
             stageSelection: stageSelection,
             modelArtifacts: InferenceModelArtifacts(
                 asrModelURL: asrModelURL,
-                diarizationModelURL: diarizationOption?.url,
+                diarizationModelURL: nil,
                 summarizationModelURL: nil
             ),
             summarizationRuntimeSettings: modelManager.summarizationRuntimeSettings
@@ -99,7 +122,7 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
             stageSelection: stageSelection,
             modelArtifacts: InferenceModelArtifacts(
                 asrModelURL: nil,
-                diarizationModelURL: modelManager.selectedLocalOption(kind: .diarization)?.url,
+                diarizationModelURL: nil,
                 summarizationModelURL: summarizationOption.url
             ),
             summarizationRuntimeSettings: modelManager.summarizationRuntimeSettings

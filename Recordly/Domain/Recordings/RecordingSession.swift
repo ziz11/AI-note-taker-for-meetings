@@ -150,6 +150,8 @@ struct RecordingAssets: Codable, Hashable {
     var transcriptFile: String? = nil
     var srtFile: String? = nil
     var transcriptJSONFile: String? = nil
+    var structuredTranscriptJSONFile: String? = nil
+    var structuredTranscriptTextFile: String? = nil
     var micASRJSONFile: String? = nil
     var systemASRJSONFile: String? = nil
     var systemDiarizationJSONFile: String? = nil
