@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		FA1000012F0A000000000001 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = FA1000022F0A000000000001 /* FluidAudio */; };
 		FA1000112F0A000000000001 /* FluidAudioASREngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */; };
+		FA1000132F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1000142F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift */; };
 		FA4000012F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4000022F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift */; };
 		FA5000012F0E000000000001 /* ModelSettingsViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA5000022F0E000000000001 /* ModelSettingsViewModelTests.swift */; };
 		F0DC2B834E4BE6EFD06B9228 /* SummaryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18F73A72E7F344B6A8F1F3DD /* SummaryEngine.swift */; };
@@ -26,6 +27,7 @@
 		6C21B2A77926FB977C286632 /* TranscriptionPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */; };
 		8754BE5E6A83DDC122A462CC /* ASRDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE471CED942092CB3514DA68 /* ASRDocument.swift */; };
 		8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */; };
+		FA3000092F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA30000A2F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift */; };
 		FA3000012F0C000000000001 /* FluidAudioSessionAudioLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3000022F0C000000000001 /* FluidAudioSessionAudioLoader.swift */; };
 		FA3000032F0C000000000001 /* FluidAudioVADService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3000042F0C000000000001 /* FluidAudioVADService.swift */; };
 		FA3000052F0C000000000001 /* FluidAudioTranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3000062F0C000000000001 /* FluidAudioTranscriptionService.swift */; };
@@ -107,6 +109,7 @@
 		74AC31327248529A315C55DE /* RecordingSessionCompatibilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RecordingSessionCompatibilityTests.swift; path = RecordingSessionCompatibilityTests.swift; sourceTree = "<group>"; };
 		83340338D9A97D1FCCE50966 /* TranscriptRenderService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscriptRenderService.swift; sourceTree = "<group>"; };
 		A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioASREngine.swift; sourceTree = "<group>"; };
+		FA30000A2F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioSystemChunkTranscriptionEngine.swift; sourceTree = "<group>"; };
 		FA3000022F0C000000000001 /* FluidAudioSessionAudioLoader.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioSessionAudioLoader.swift; sourceTree = "<group>"; };
 		FA3000042F0C000000000001 /* FluidAudioVADService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioVADService.swift; sourceTree = "<group>"; };
 		FA3000062F0C000000000001 /* FluidAudioTranscriptionService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Inference/Backends/FluidAudio/FluidAudioTranscriptionService.swift; sourceTree = "<group>"; };
@@ -135,6 +138,7 @@
 		AA1001022EBC1D6F00000001 /* DefaultInferenceEngineFactoryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DefaultInferenceEngineFactoryTests.swift; sourceTree = "<group>"; };
 		AA1001032EBC1D6F00000001 /* AudioInputAdapterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AudioInputAdapterTests.swift; sourceTree = "<group>"; };
 		FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FluidAudioASREngineTests.swift; sourceTree = "<group>"; };
+		FA1000142F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FluidAudioSystemChunkTranscriptionEngineTests.swift; sourceTree = "<group>"; };
 		FA4000022F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FluidAudioDiarizationModelProviderTests.swift; sourceTree = "<group>"; };
 		FA5000022F0E000000000001 /* ModelSettingsViewModelTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ModelSettingsViewModelTests.swift; sourceTree = "<group>"; };
 		9C41A2112D82A10000A13B02 /* Recordly.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recordly.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -201,6 +205,7 @@
 				AA1001022EBC1D6F00000001 /* DefaultInferenceEngineFactoryTests.swift */,
 				AA1001032EBC1D6F00000001 /* AudioInputAdapterTests.swift */,
 				FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */,
+				FA1000142F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift */,
 				FA4000022F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift */,
 				FA5000022F0E000000000001 /* ModelSettingsViewModelTests.swift */,
 			);
@@ -255,6 +260,7 @@
 				AB1100162EBC1D6F00000001 /* DefaultInferenceEngineFactory.swift */,
 				AB1100172EBC1D6F00000001 /* DefaultInferenceComposition.swift */,
 				A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */,
+				FA30000A2F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift */,
 				FA3000022F0C000000000001 /* FluidAudioSessionAudioLoader.swift */,
 				FA3000042F0C000000000001 /* FluidAudioVADService.swift */,
 				FA3000062F0C000000000001 /* FluidAudioTranscriptionService.swift */,
@@ -565,6 +571,7 @@
 				AA1002022EBC1D6F00000001 /* DefaultInferenceEngineFactoryTests.swift in Sources */,
 				AA1002032EBC1D6F00000001 /* AudioInputAdapterTests.swift in Sources */,
 				FA1000112F0A000000000001 /* FluidAudioASREngineTests.swift in Sources */,
+				FA1000132F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift in Sources */,
 				FA4000012F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift in Sources */,
 				FA5000012F0E000000000001 /* ModelSettingsViewModelTests.swift in Sources */,
 			);
@@ -593,6 +600,7 @@
 				CAB301012EBC1D6F00000001 /* SessionMergeService.swift in Sources */,
 				CAB301032EBC1D6F00000001 /* DirectPCMMixService.swift in Sources */,
 				8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */,
+				FA3000092F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift in Sources */,
 				FA3000012F0C000000000001 /* FluidAudioSessionAudioLoader.swift in Sources */,
 				FA3000032F0C000000000001 /* FluidAudioVADService.swift in Sources */,
 				FA3000052F0C000000000001 /* FluidAudioTranscriptionService.swift in Sources */,

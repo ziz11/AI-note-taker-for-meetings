@@ -54,6 +54,34 @@ extension ASREngine {
     }
 }
 
+struct SystemChunkTranscriptSegment: Codable, Hashable, Sendable {
+    var id: String
+    var speakerKey: String
+    var startMs: Int
+    var endMs: Int
+    var text: String
+    var confidence: Double?
+    var language: String?
+    var speakerConfidence: Double?
+    var words: [ASRWord]?
+}
+
+struct SystemChunkTranscriptionDocument: Codable, Hashable, Sendable {
+    var version: Int
+    var sessionID: UUID
+    var createdAt: Date
+    var segments: [SystemChunkTranscriptSegment]
+}
+
+protocol SystemChunkTranscriptionEngine {
+    func transcribeSystemChunks(
+        systemAudioURL: URL,
+        diarization: DiarizationDocument,
+        sessionID: UUID,
+        configuration: ASREngineConfiguration
+    ) async throws -> SystemChunkTranscriptionDocument
+}
+
 struct DiarizationEngineConfiguration: Sendable {
     var modelURL: URL?
 }

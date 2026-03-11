@@ -22,10 +22,12 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         )
 
         let asrEngine = try factory.makeASREngine(for: profile)
+        let systemChunkEngine = try XCTUnwrap(factory.makeSystemChunkTranscriptionEngine(for: profile))
         let diarizationEngine = try factory.makeDiarizationEngine(for: profile)
         let summarizationEngine = try factory.makeSummarizationEngine(for: profile)
 
         XCTAssertEqual(String(describing: type(of: asrEngine)), "FluidAudioASREngine")
+        XCTAssertEqual(String(describing: type(of: systemChunkEngine)), "FluidAudioSystemChunkTranscriptionEngine")
         XCTAssertEqual(String(describing: type(of: diarizationEngine)), "FluidAudioDiarizationEngine")
         XCTAssertEqual(String(describing: type(of: summarizationEngine)), "LlamaCppSummarizationEngine")
     }

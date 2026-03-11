@@ -86,4 +86,53 @@ final class SystemTranscriptAlignmentServiceTests: XCTestCase {
         XCTAssertEqual(aligned.first?.speakerRole, .unknown)
         XCTAssertNil(aligned.first?.speakerId)
     }
+
+    func testChunkTranscriptBuilderNormalizesSpeakerLabelsByFirstEncounterOrder() {
+        let builder = SystemChunkTranscriptBuilder()
+
+        let result = builder.build(from: SystemChunkTranscriptionDocument(
+            version: 1,
+            sessionID: UUID(),
+            createdAt: Date(),
+            segments: [
+                SystemChunkTranscriptSegment(
+                    id: "seg-1",
+                    speakerKey: "fluid-b",
+                    startMs: 1000,
+                    endMs: 1500,
+                    text: "first",
+                    confidence: nil,
+                    language: "ru",
+                    speakerConfidence: 0.9,
+                    words: nil
+                ),
+                SystemChunkTranscriptSegment(
+                    id: "seg-2",
+                    speakerKey: "fluid-a",
+                    startMs: 1600,
+                    endMs: 2100,
+                    text: "second",
+                    confidence: nil,
+                    language: "ru",
+                    speakerConfidence: 0.8,
+                    words: nil
+                ),
+                SystemChunkTranscriptSegment(
+                    id: "seg-3",
+                    speakerKey: "fluid-b",
+                    startMs: 2200,
+                    endMs: 2600,
+                    text: "third",
+                    confidence: nil,
+                    language: "ru",
+                    speakerConfidence: 0.9,
+                    words: nil
+                )
+            ]
+        ))
+
+        XCTAssertEqual(result.map(\.speaker), ["SPEAKER_01", "SPEAKER_02", "SPEAKER_01"])
+        XCTAssertEqual(result.map(\.speakerId), ["remote_1", "remote_2", "remote_1"])
+        XCTAssertEqual(result.map(\.speakerRole), [.remote, .remote, .remote])
+    }
 }

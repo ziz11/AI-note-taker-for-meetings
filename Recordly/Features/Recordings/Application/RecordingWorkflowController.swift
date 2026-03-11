@@ -187,7 +187,7 @@ final class RecordingWorkflowController {
             } catch {
                 updatedRecording.transcriptState = .failed
                 updatedRecording.lifecycleState = .failed
-                updatedRecording.notes = "Transcript failed."
+                updatedRecording.notes = transcriptionFailureNote(for: error)
                 try? repository.save(updatedRecording)
                 transcriptionResult = nil
                 processingError = error
@@ -241,7 +241,7 @@ final class RecordingWorkflowController {
             } catch {
                 recording.transcriptState = .failed
                 recording.lifecycleState = .failed
-                recording.notes = "Transcript failed."
+                recording.notes = transcriptionFailureNote(for: error)
                 try? repository.save(recording)
                 processingError = error
             }
@@ -286,7 +286,7 @@ final class RecordingWorkflowController {
         } catch {
             updatedRecording.transcriptState = .failed
             updatedRecording.lifecycleState = .failed
-            updatedRecording.notes = "Transcript failed."
+            updatedRecording.notes = transcriptionFailureNote(for: error)
             try? repository.save(updatedRecording)
             throw error
         }
@@ -470,7 +470,15 @@ final class RecordingWorkflowController {
         switch availability {
         case .unavailable:
             throw RecordingWorkflowError.transcriptionUnavailable(availability)
-        case .ready, .degradedNoDiarization:
+        case .degradedNoDiarization:
+            guard transcriptionPipeline.mode == .legacyFullFileDebug else {
+                throw RecordingWorkflowError.transcriptionUnavailable(
+                    .unavailable(
+                        reason: "System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
+                    )
+                )
+            }
+        case .ready:
             break
         }
 
@@ -615,6 +623,14 @@ final class RecordingWorkflowController {
 
         \(risksBullets)
         """
+    }
+
+    private func transcriptionFailureNote(for error: Error) -> String {
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else {
+            return "Transcript failed."
+        }
+        return "Transcript failed: \(message)"
     }
 
     private func parseSRTTimeline(_ text: String?) -> [(seconds: Int, timestamp: String, text: String)] {

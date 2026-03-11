@@ -30,6 +30,17 @@ struct DefaultInferenceEngineFactory: InferenceEngineFactory {
         }
     }
 
+    func makeSystemChunkTranscriptionEngine(for profile: InferenceRuntimeProfile) throws -> (any SystemChunkTranscriptionEngine)? {
+        switch profile.stageSelection.backend(for: .asr) {
+        case .fluidAudio:
+            return FluidAudioSystemChunkTranscriptionEngine()
+        case .disabled:
+            return nil
+        case let backend:
+            throw InferenceEngineFactoryError.unsupportedBackend(stage: .asr, backend: backend)
+        }
+    }
+
     @MainActor
     func makeDiarizationEngine(for profile: InferenceRuntimeProfile) throws -> any DiarizationEngine {
         switch profile.stageSelection.backend(for: .diarization) {

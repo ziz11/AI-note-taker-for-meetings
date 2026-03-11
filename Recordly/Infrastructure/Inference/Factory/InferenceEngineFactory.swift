@@ -15,6 +15,7 @@ protocol InferenceEngineFactory {
     @MainActor
     func makeAudioCaptureEngine(for profile: InferenceRuntimeProfile) throws -> any AudioCaptureEngine
     func makeASREngine(for profile: InferenceRuntimeProfile) throws -> any ASREngine
+    func makeSystemChunkTranscriptionEngine(for profile: InferenceRuntimeProfile) throws -> (any SystemChunkTranscriptionEngine)?
     @MainActor
     func makeDiarizationEngine(for profile: InferenceRuntimeProfile) throws -> any DiarizationEngine
     func makeSummarizationEngine(for profile: InferenceRuntimeProfile) throws -> any SummarizationEngine

@@ -112,6 +112,53 @@ struct SystemTranscriptAlignmentService {
     }
 }
 
+struct SystemChunkTranscriptBuilder {
+    func build(from chunkDocument: SystemChunkTranscriptionDocument) -> [TranscriptSegment] {
+        let orderedSegments = chunkDocument.segments.sorted { lhs, rhs in
+            if lhs.startMs != rhs.startMs { return lhs.startMs < rhs.startMs }
+            if lhs.endMs != rhs.endMs { return lhs.endMs < rhs.endMs }
+            return lhs.id < rhs.id
+        }
+
+        var aliases: [String: (speaker: String, speakerId: String)] = [:]
+        var result: [TranscriptSegment] = []
+
+        for segment in orderedSegments {
+            let alias: (speaker: String, speakerId: String)
+            if let existing = aliases[segment.speakerKey] {
+                alias = existing
+            } else {
+                let index = aliases.count + 1
+                let created = (
+                    speaker: String(format: "SPEAKER_%02d", index),
+                    speakerId: "remote_\(index)"
+                )
+                aliases[segment.speakerKey] = created
+                alias = created
+            }
+
+            result.append(
+                TranscriptSegment(
+                    id: segment.id,
+                    channel: .system,
+                    speaker: alias.speaker,
+                    speakerRole: .remote,
+                    speakerId: alias.speakerId,
+                    startMs: segment.startMs,
+                    endMs: segment.endMs,
+                    text: segment.text,
+                    confidence: segment.confidence,
+                    language: segment.language,
+                    speakerConfidence: segment.speakerConfidence,
+                    words: segment.words
+                )
+            )
+        }
+
+        return result
+    }
+}
+
 // Legacy compatibility wrapper. Keep this out of the new main path.
 struct SystemSpeakerMappingService {
     let overlapThresholdRatio: Double
