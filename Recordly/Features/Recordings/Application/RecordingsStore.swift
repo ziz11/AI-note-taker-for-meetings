@@ -798,16 +798,13 @@ final class RecordingsStore: ObservableObject {
         do {
             let updatedRecording = try await workflow.transcribe(
                 recording: recording,
+                summarizeAfterTranscription: summarizeAfterCompletion,
                 onStateChange: { [weak self] state in
                     self?.applyTranscriptionProgress(state: state, recordingID: recordingID)
                 }
             )
             replaceRecording(updatedRecording)
             playbackController.syncSelection(selectedRecording)
-
-            if summarizeAfterCompletion {
-                enqueueSummarization(for: recordingID)
-            }
         } catch {
             if !Task.isCancelled {
                 handleTranscriptionError(error, isBackground: true)

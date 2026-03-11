@@ -2,486 +2,332 @@ import XCTest
 @testable import Recordly
 
 final class TranscriptionPipelineTests: XCTestCase {
-    func testPipelineRebuildsASRWhenModelChanges() async throws {
-        let asrEngine = RecordingASREngine()
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: asrEngine, diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let modelA = temp.appendingPathComponent("model-a.bin")
-        let modelB = temp.appendingPathComponent("model-b.bin")
-        try Data("a".utf8).write(to: modelA)
-        try Data("b".utf8).write(to: modelB)
-
-        _ = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: modelA, diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        _ = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: modelB, diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        let calls = asrEngine.calls
-        XCTAssertEqual(calls.count, 4)
-        XCTAssertEqual(calls.map(\.modelName), ["model-a.bin", "model-a.bin", "model-b.bin", "model-b.bin"])
-    }
-
-    func testPipelineRebuildsASRWhenFingerprintChanges() async throws {
-        let asrEngine = RecordingASREngine()
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: asrEngine, diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let model = temp.appendingPathComponent("model.bin")
-        try Data("same-model".utf8).write(to: model)
-
-        asrEngine.setFingerprintTag("ru")
-        _ = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: model, diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        asrEngine.setFingerprintTag("en")
-        _ = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: model, diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        let calls = asrEngine.calls
-        XCTAssertEqual(calls.count, 4)
-    }
-
     func testPipelineMicSegmentsPersistExplicitMeRole() async throws {
         let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        let micFile = temp.appendingPathComponent("mic.raw.caf")
-        let systemFile = temp.appendingPathComponent("system.raw.caf")
-        FileManager.default.createFile(atPath: micFile.path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: systemFile.path, contents: Data("audio".utf8))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: ClosureASREngine { channel, sessionID in
+                ASRDocument(
+                    version: 1,
+                    sessionID: sessionID,
+                    channel: channel,
+                    createdAt: Date(),
+                    segments: [
+                        ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
+                    ]
+                )
+            },
+            diarizationEngine: FailingDiarizationEngine()
         )
 
-        let modelData = Data("model:asr-balanced-v1:1.0.0".utf8)
-        let modelURL = temp.appendingPathComponent("model.bin")
-        try modelData.write(to: modelURL)
+        let fixture = try makeFixture(includeMic: true, includeSystem: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
         _ = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: modelURL, diarizationModelURL: nil),
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: nil),
             engineFactory: factory
         )
 
-        let transcriptURL = temp.appendingPathComponent("transcript.json")
-        let data = try Data(contentsOf: transcriptURL)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let doc = try decoder.decode(TranscriptDocument.self, from: data)
+        let doc = try decodeTranscriptDocument(in: fixture.directory)
         let micSegment = try XCTUnwrap(doc.segments.first(where: { $0.channel == .mic }))
         XCTAssertEqual(micSegment.speaker, "You")
         XCTAssertEqual(micSegment.speakerRole, .me)
         XCTAssertEqual(micSegment.speakerId, "me")
     }
 
-    func testPipelineNoDiarizationModelFallsBackToUnknownRoleWithRemoteDisplayLabel() async throws {
+    func testPipelineSuccessfulDiarizationWritesArtifactAndUsesBestOverlapSpeaker() async throws {
         let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        let micFile = temp.appendingPathComponent("mic.raw.caf")
-        let systemFile = temp.appendingPathComponent("system.raw.caf")
-        FileManager.default.createFile(atPath: micFile.path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: systemFile.path, contents: Data("audio".utf8))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: ClosureASREngine { channel, sessionID in
+                switch channel {
+                case .mic:
+                    return ASRDocument(
+                        version: 1,
+                        sessionID: sessionID,
+                        channel: channel,
+                        createdAt: Date(),
+                        segments: [
+                            ASRSegment(id: "mic-1", startMs: 0, endMs: 800, text: "me", confidence: nil, language: "ru", words: nil)
+                        ]
+                    )
+                case .system:
+                    return ASRDocument(
+                        version: 1,
+                        sessionID: sessionID,
+                        channel: channel,
+                        createdAt: Date(),
+                        segments: [
+                            ASRSegment(id: "system-1", startMs: 1000, endMs: 2000, text: "them", confidence: nil, language: "ru", words: nil)
+                        ]
+                    )
+                }
+            },
+            diarizationEngine: OverlappingDiarizationEngine()
         )
 
-        let modelData = Data("model:asr-balanced-v1:1.0.0".utf8)
-        let modelURL = temp.appendingPathComponent("model.bin")
-        try modelData.write(to: modelURL)
+        let fixture = try makeFixture(includeMic: true, includeSystem: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
         let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: modelURL, diarizationModelURL: nil),
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: fixture.diarizationModelURL),
             engineFactory: factory
         )
 
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertFalse(result.diarizationApplied)
-        XCTAssertEqual(result.diarizationDegradedReason, "Diarization failed with code 1: mock failure")
-        XCTAssertNil(result.systemDiarizationJSONFile)
+        XCTAssertTrue(result.diarizationApplied)
+        XCTAssertNil(result.diarizationDegradedReason)
+        XCTAssertEqual(result.systemDiarizationJSONFile, "system.diarization.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("system.diarization.json").path))
 
-        let transcriptURL = temp.appendingPathComponent("transcript.json")
-        let data = try Data(contentsOf: transcriptURL)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let doc = try decoder.decode(TranscriptDocument.self, from: data)
+        let doc = try decodeTranscriptDocument(in: fixture.directory)
+        let systemSegment = try XCTUnwrap(doc.segments.first(where: { $0.channel == .system }))
+        XCTAssertEqual(systemSegment.speaker, "Speaker 1")
+        XCTAssertEqual(systemSegment.speakerRole, .remote)
+        XCTAssertEqual(systemSegment.speakerId, "remote_1")
+    }
+
+    func testPipelineDiarizationFailureFallsBackToRemoteAndKeepsObservability() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: ClosureASREngine { channel, sessionID in
+                ASRDocument(
+                    version: 1,
+                    sessionID: sessionID,
+                    channel: channel,
+                    createdAt: Date(),
+                    segments: [
+                        ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
+                    ]
+                )
+            },
+            diarizationEngine: FailingDiarizationEngine()
+        )
+
+        let fixture = try makeFixture(includeMic: true, includeSystem: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try await pipeline.process(
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: fixture.diarizationModelURL),
+            engineFactory: factory
+        )
+
+        XCTAssertFalse(result.diarizationApplied)
+        XCTAssertNotNil(result.diarizationDegradedReason)
+        XCTAssertTrue(result.degradedReasons.contains(.diarizationDegraded))
+
+        let doc = try decodeTranscriptDocument(in: fixture.directory)
         let systemSegment = try XCTUnwrap(doc.segments.first(where: { $0.channel == .system }))
         XCTAssertEqual(systemSegment.speaker, "Remote")
         XCTAssertEqual(systemSegment.speakerRole, .unknown)
         XCTAssertNil(systemSegment.speakerId)
     }
 
-    func testPipelineDiarizationFailureFallsBackToRemote() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-
-        let micFile = temp.appendingPathComponent("mic.raw.caf")
-        let systemFile = temp.appendingPathComponent("system.raw.caf")
-        let diarizationModel = temp.appendingPathComponent("diarization.bin")
-        FileManager.default.createFile(atPath: micFile.path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: systemFile.path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: diarizationModel.path, contents: Data("dmodel".utf8))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let asrModelURL = temp.appendingPathComponent("model.bin")
-        try Data("asr-model".utf8).write(to: asrModelURL)
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: asrModelURL, diarizationModelURL: diarizationModel),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertFalse(result.diarizationApplied)
-        XCTAssertNotNil(result.diarizationDegradedReason)
-        XCTAssertNil(result.systemDiarizationJSONFile)
-    }
-
-    func testPipelineSuccessfulDiarizationWritesArtifact() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: SuccessfulDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("diarization.bin").path, contents: Data("dmodel".utf8))
-        try Data("asr-model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(
-                asrModelURL: temp.appendingPathComponent("asr.bin"),
-                diarizationModelURL: temp.appendingPathComponent("diarization.bin")
-            ),
-            engineFactory: factory
-        )
-
-        XCTAssertTrue(result.diarizationApplied)
-        XCTAssertNil(result.diarizationDegradedReason)
-        XCTAssertEqual(result.systemDiarizationJSONFile, "system.diarization.json")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("system.diarization.json").path))
-    }
-
     func testPipelineRunsDiarizationWithNilModelURLWhenEngineIsAvailable() async throws {
         let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: SuccessfulDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
-        try Data("asr-model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: ClosureASREngine { channel, sessionID in
+                ASRDocument(
+                    version: 1,
+                    sessionID: sessionID,
+                    channel: channel,
+                    createdAt: Date(),
+                    segments: [
+                        ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
+                    ]
+                )
+            },
+            diarizationEngine: SimpleDiarizationEngine()
         )
 
+        let fixture = try makeFixture(includeMic: true, includeSystem: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
         let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(
-                asrModelURL: temp.appendingPathComponent("asr.bin"),
-                diarizationModelURL: nil
-            ),
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: nil),
             engineFactory: factory
         )
 
         XCTAssertTrue(result.diarizationApplied)
-        XCTAssertNil(result.diarizationDegradedReason)
         XCTAssertEqual(result.diarizationModelUsed, "sdk-managed")
-        XCTAssertEqual(result.systemDiarizationJSONFile, "system.diarization.json")
     }
 
-    func testPipelineCreatesEmptySystemASRWhenSystemAudioUnavailable() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: SystemUnavailableASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-
-        let micFile = temp.appendingPathComponent("mic.raw.caf")
-        let systemFile = temp.appendingPathComponent("system.raw.caf")
-        FileManager.default.createFile(atPath: micFile.path, contents: Data("mic".utf8))
-        FileManager.default.createFile(atPath: systemFile.path, contents: Data())
-        try Data("asr-model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(
-                asrModelURL: temp.appendingPathComponent("asr.bin"),
-                diarizationModelURL: nil
-            ),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertEqual(result.systemASRJSONFile, "system.asr.json")
-        let systemASRURL = temp.appendingPathComponent("system.asr.json")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: systemASRURL.path))
-        let data = try Data(contentsOf: systemASRURL)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let doc = try decoder.decode(ASRDocument.self, from: data)
-        XCTAssertEqual(doc.channel, .system)
-        XCTAssertTrue(doc.segments.isEmpty)
-    }
-
-    func testPipelineWithZeroByteSystemAudioFallsBackButSucceedsWithMicASR() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("mic".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertEqual(result.micASRJSONFile, "mic.asr.json")
-        XCTAssertEqual(result.systemASRJSONFile, "system.asr.json")
-        XCTAssertTrue(result.degradedReasons.contains(.systemASRFailedFallbackUsed))
-        XCTAssertTrue(result.degradedReasons.contains(.emptySystemASR))
-    }
-
-    func testPipelineWithUnsupportedSystemFormatFallsBackButSucceedsWithMicASR() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: SystemUnsupportedFormatASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("mic".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertEqual(result.micASRJSONFile, "mic.asr.json")
-        XCTAssertEqual(result.systemASRJSONFile, "system.asr.json")
-        XCTAssertTrue(result.degradedReasons.contains(.systemASRFailedFallbackUsed))
-        XCTAssertTrue(result.degradedReasons.contains(.emptySystemASR))
-    }
-
-    func testPipelineWithUnsupportedSystemFormatAndMicFailureStillFails() async throws {
+    func testPipelineSystemASRFailureDegradesToMicOnlyTranscript() async throws {
         let pipeline = TranscriptionPipeline()
         let factory = StaticInferenceEngineFactory(
-            asrEngine: UnsupportedFormatAndMicFailASREngine(),
+            asrEngine: ClosureASREngine { channel, sessionID in
+                if channel == .system {
+                    throw ASREngineRuntimeError.inferenceFailed(message: "system backend unavailable")
+                }
+                return ASRDocument(
+                    version: 1,
+                    sessionID: sessionID,
+                    channel: channel,
+                    createdAt: Date(),
+                    segments: [
+                        ASRSegment(id: "mic-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
+                    ]
+                )
+            },
             diarizationEngine: FailingDiarizationEngine()
         )
 
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
+        let fixture = try makeFixture(includeMic: true, includeSystem: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("mic".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
+        let result = try await pipeline.process(
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: nil),
+            engineFactory: factory
         )
+
+        XCTAssertEqual(result.micASRJSONFile, "mic.asr.json")
+        XCTAssertNil(result.systemASRJSONFile)
+        XCTAssertTrue(result.degradedReasons.contains(.systemASRFailedFallbackUsed))
+
+        let doc = try decodeTranscriptDocument(in: fixture.directory)
+        XCTAssertEqual(doc.segments.map(\.channel), [.mic])
+    }
+
+    func testMicOnlyInputProducesTranscriptWithoutSystemArtifacts() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: ClosureASREngine { channel, sessionID in
+                ASRDocument(
+                    version: 1,
+                    sessionID: sessionID,
+                    channel: channel,
+                    createdAt: Date(),
+                    segments: [
+                        ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
+                    ]
+                )
+            },
+            diarizationEngine: SimpleDiarizationEngine()
+        )
+
+        let fixture = try makeFixture(includeMic: true, includeSystem: false)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try await pipeline.process(
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: nil),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(result.micASRJSONFile, "mic.asr.json")
+        XCTAssertNil(result.systemASRJSONFile)
+        XCTAssertNil(result.systemDiarizationJSONFile)
+    }
+
+    func testSystemOnlyInputProducesTranscriptWithoutMicASR() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: ClosureASREngine { channel, sessionID in
+                ASRDocument(
+                    version: 1,
+                    sessionID: sessionID,
+                    channel: channel,
+                    createdAt: Date(),
+                    segments: [
+                        ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
+                    ]
+                )
+            },
+            diarizationEngine: SimpleDiarizationEngine()
+        )
+
+        let fixture = try makeFixture(includeMic: false, includeSystem: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try await pipeline.process(
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: nil),
+            engineFactory: factory
+        )
+
+        XCTAssertNil(result.micASRJSONFile)
+        XCTAssertEqual(result.systemASRJSONFile, "system.asr.json")
+    }
+
+    func testMicFailureStillFailsWhenSystemSucceeds() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: ClosureASREngine { channel, sessionID in
+                if channel == .mic {
+                    throw ASREngineRuntimeError.inferenceFailed(message: "mic audio corrupt")
+                }
+                return ASRDocument(
+                    version: 1,
+                    sessionID: sessionID,
+                    channel: channel,
+                    createdAt: Date(),
+                    segments: [
+                        ASRSegment(id: "system-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
+                    ]
+                )
+            },
+            diarizationEngine: FailingDiarizationEngine()
+        )
+
+        let fixture = try makeFixture(includeMic: true, includeSystem: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
         await XCTAssertThrowsErrorAsync(
             try await pipeline.process(
-                recording: recording,
-                in: temp,
-                runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
+                recording: fixture.recording,
+                in: fixture.directory,
+                runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: nil),
                 engineFactory: factory
             )
         )
+    }
+
+    func testPipelineProducesMinimalArtifactsWithoutStructuredTranscriptOutputs() async throws {
+        let pipeline = TranscriptionPipeline()
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: ClosureASREngine { channel, sessionID in
+                ASRDocument(
+                    version: 1,
+                    sessionID: sessionID,
+                    channel: channel,
+                    createdAt: Date(),
+                    segments: [
+                        ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
+                    ]
+                )
+            },
+            diarizationEngine: SimpleDiarizationEngine()
+        )
+
+        let fixture = try makeFixture(includeMic: true, includeSystem: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let result = try await pipeline.process(
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: fixture.diarizationModelURL),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(result.transcriptFile, "transcript.txt")
+        XCTAssertEqual(result.srtFile, "transcript.srt")
+        XCTAssertEqual(result.transcriptJSONFile, "transcript.json")
+        XCTAssertEqual(result.micASRJSONFile, "mic.asr.json")
+        XCTAssertEqual(result.systemASRJSONFile, "system.asr.json")
+        XCTAssertEqual(result.systemDiarizationJSONFile, "system.diarization.json")
+        XCTAssertNil(result.structuredTranscriptJSONFile)
+        XCTAssertNil(result.structuredTranscriptTextFile)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("structured-transcript.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("structured-transcript.txt").path))
     }
 
     func testProcessDiarizationRunnerParsesValidJSON() async throws {
@@ -641,585 +487,51 @@ final class TranscriptionPipelineTests: XCTestCase {
         }
     }
 
-    func testPlaceholderDiarizationEngineNilModelURLThrows() async throws {
-        let service = PlaceholderDiarizationEngine()
+    private func makeFixture(includeMic: Bool, includeSystem: Bool) throws -> (directory: URL, recording: RecordingSession, asrModelURL: URL, diarizationModelURL: URL) {
         let sessionID = UUID()
-        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.raw.caf")
-        FileManager.default.createFile(atPath: audioURL.path, contents: Data())
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
 
-        await XCTAssertThrowsErrorAsync(try await service.diarize(
-            systemAudioURL: audioURL,
-            sessionID: sessionID,
-            configuration: DiarizationEngineConfiguration(modelURL: nil)
-        )) { error in
-            guard case DiarizationRuntimeError.modelMissing = error else {
-                XCTFail("Unexpected error: \(error)")
-                return
-            }
+        if includeMic {
+            FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("mic".utf8))
         }
-    }
+        if includeSystem {
+            FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
+        }
 
-    // MARK: - Phase 1 reliability tests
-
-    func testEmptyASROnOneChannelReturnsDegradedResult() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: EmptySystemASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
+        let asrModelURL = temp.appendingPathComponent("asr.bin")
+        let diarizationModelURL = temp.appendingPathComponent("diarization.bin")
+        try Data("asr".utf8).write(to: asrModelURL)
+        try Data("diarization".utf8).write(to: diarizationModelURL)
 
         let recording = RecordingSession(
             id: sessionID,
-            title: "t",
+            title: "test",
             createdAt: Date(),
             duration: 10,
             lifecycleState: .ready,
             transcriptState: .queued,
             source: .liveCapture,
             notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertTrue(result.degradedReasons.contains(.emptySystemASR))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.json").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.txt").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.srt").path))
-    }
-
-    func testOneChannelRuntimeFailureOtherUsableProducesTranscript() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: SystemFailingASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertTrue(result.degradedReasons.contains(.systemASRFailedFallbackUsed))
-        XCTAssertNotNil(result.transcriptFile)
-        XCTAssertNotNil(result.transcriptJSONFile)
-    }
-
-    func testBothChannelsUnusableFails() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: AllFailingASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        await XCTAssertThrowsErrorAsync(
-            try await pipeline.process(
-                recording: recording,
-                in: temp,
-                runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
-                engineFactory: factory
+            assets: RecordingAssets(
+                microphoneFile: includeMic ? "mic.raw.caf" : nil,
+                systemAudioFile: includeSystem ? "system.raw.caf" : nil
             )
         )
+
+        return (temp, recording, asrModelURL, diarizationModelURL)
     }
 
-    func testDegradedReasonsPersistedInResult() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: EmptyBothASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("diarization.bin").path, contents: Data("dmodel".utf8))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(
-                asrModelURL: temp.appendingPathComponent("asr.bin"),
-                diarizationModelURL: temp.appendingPathComponent("diarization.bin")
-            ),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertTrue(result.degradedReasons.contains(.emptyMicASR))
-        XCTAssertTrue(result.degradedReasons.contains(.emptySystemASR))
-        XCTAssertTrue(result.degradedReasons.contains(.diarizationDegraded))
-    }
-
-    func testMicOnlyInputProducesTranscriptWithoutSystemASR() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: nil)
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertNotNil(result.micASRJSONFile)
-        XCTAssertNil(result.systemASRJSONFile)
-        XCTAssertNotNil(result.transcriptFile)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.json").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.txt").path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.srt").path))
-    }
-
-    func testSystemOnlyInputProducesTranscriptWithoutMicASR() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: nil, systemAudioFile: "system.raw.caf")
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertNil(result.micASRJSONFile)
-        XCTAssertNotNil(result.systemASRJSONFile)
-        XCTAssertNotNil(result.transcriptFile)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("transcript.json").path))
-    }
-
-    func testMicFailsSystemSucceedsProducesDegradedTranscript() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: MicFailingASREngine(), diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: temp.appendingPathComponent("asr.bin"), diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.state, .ready)
-        XCTAssertTrue(result.degradedReasons.contains(.micASRFailedFallbackUsed))
-        XCTAssertNil(result.micASRJSONFile)
-        XCTAssertNotNil(result.systemASRJSONFile)
-        XCTAssertNotNil(result.transcriptFile)
-    }
-
-    func testPipelineProducesAllExpectedArtifacts() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: MockASREngine(), diarizationEngine: SuccessfulDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("system".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("diarization.bin").path, contents: Data("dmodel".utf8))
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        let result = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(
-                asrModelURL: temp.appendingPathComponent("asr.bin"),
-                diarizationModelURL: temp.appendingPathComponent("diarization.bin")
-            ),
-            engineFactory: factory
-        )
-
-        XCTAssertEqual(result.micASRJSONFile, "mic.asr.json")
-        XCTAssertEqual(result.systemASRJSONFile, "system.asr.json")
-        XCTAssertEqual(result.transcriptJSONFile, "transcript.json")
-        XCTAssertEqual(result.transcriptFile, "transcript.txt")
-        XCTAssertEqual(result.srtFile, "transcript.srt")
-        XCTAssertEqual(result.structuredTranscriptJSONFile, "structured-transcript.json")
-        XCTAssertEqual(result.structuredTranscriptTextFile, "structured-transcript.txt")
-        XCTAssertEqual(result.systemDiarizationJSONFile, "system.diarization.json")
-
-        let expectedFiles = [
-            "mic.asr.json",
-            "system.asr.json",
-            "transcript.json",
-            "transcript.txt",
-            "transcript.srt",
-            "structured-transcript.json",
-            "structured-transcript.txt",
-            "system.diarization.json"
-        ]
-        for file in expectedFiles {
-            XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent(file).path), "Missing artifact: \(file)")
-        }
-
+    private func decodeTranscriptDocument(in directory: URL) throws -> TranscriptDocument {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-
-        let micData = try Data(contentsOf: temp.appendingPathComponent("mic.asr.json"))
-        let micDoc = try decoder.decode(ASRDocument.self, from: micData)
-        XCTAssertEqual(micDoc.channel, .mic)
-        XCTAssertFalse(micDoc.segments.isEmpty)
-
-        let sysData = try Data(contentsOf: temp.appendingPathComponent("system.asr.json"))
-        let sysDoc = try decoder.decode(ASRDocument.self, from: sysData)
-        XCTAssertEqual(sysDoc.channel, .system)
-        XCTAssertFalse(sysDoc.segments.isEmpty)
-
-        let transcriptData = try Data(contentsOf: temp.appendingPathComponent("transcript.json"))
-        let transcriptDoc = try decoder.decode(TranscriptDocument.self, from: transcriptData)
-        XCTAssertFalse(transcriptDoc.segments.isEmpty)
-        XCTAssertTrue(transcriptDoc.diarizationApplied)
-
-        let structuredData = try Data(contentsOf: temp.appendingPathComponent("structured-transcript.json"))
-        let structuredDoc = try decoder.decode(StructuredTranscriptDocument.self, from: structuredData)
-        XCTAssertFalse(structuredDoc.segments.isEmpty)
-        XCTAssertEqual(structuredDoc.segments.map(\.startMs), structuredDoc.segments.map(\.startMs).sorted())
-
-        let structuredText = try String(contentsOf: temp.appendingPathComponent("structured-transcript.txt"), encoding: .utf8)
-        XCTAssertTrue(structuredText.contains("00:00:00 | You | hello"))
-        XCTAssertTrue(structuredText.contains("00:00:00 | Speaker 1 | hello"))
-    }
-
-    func testPipelineWritesStructuredTranscriptWithReflowedWordTimedSegments() async throws {
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(
-            asrEngine: WordTimedASREngine(),
-            diarizationEngine: SuccessfulSplitDiarizationEngine()
-        )
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data("audio".utf8))
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data("audio".utf8))
-        try Data("model".utf8).write(to: temp.appendingPathComponent("asr.bin"))
-        try Data("diarization".utf8).write(to: temp.appendingPathComponent("diarization.bin"))
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "reflow",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        _ = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(
-                asrModelURL: temp.appendingPathComponent("asr.bin"),
-                diarizationModelURL: temp.appendingPathComponent("diarization.bin")
-            ),
-            engineFactory: factory
-        )
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-
-        let structuredData = try Data(contentsOf: temp.appendingPathComponent("structured-transcript.json"))
-        let structuredDoc = try decoder.decode(StructuredTranscriptDocument.self, from: structuredData)
-
-        XCTAssertEqual(structuredDoc.segments.map(\.speaker), ["You", "Speaker 1", "Speaker 2"])
-        XCTAssertEqual(structuredDoc.segments.map(\.text), [
-            "Nu tam macOS, a ne iOS.",
-            "Da, tam macOS.",
-            "To est eksperimentalny port."
-        ])
-        XCTAssertEqual(structuredDoc.segments.map(\.startTimestamp), ["00:00:00", "00:00:03", "00:00:05"])
-    }
-
-    func testPipelineWithFluidAudioBackendUsesFluidFingerprint() async throws {
-        let asrEngine = RecordingASREngine()
-        let pipeline = TranscriptionPipeline()
-        let factory = StaticInferenceEngineFactory(asrEngine: asrEngine, diarizationEngine: FailingDiarizationEngine())
-
-        let sessionID = UUID()
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString)
-        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: temp) }
-
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.caf").path, contents: Data())
-        FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.caf").path, contents: Data())
-        let model = temp.appendingPathComponent("model.bin")
-        try Data("model".utf8).write(to: model)
-
-        let recording = RecordingSession(
-            id: sessionID,
-            title: "t",
-            createdAt: Date(),
-            duration: 10,
-            lifecycleState: .ready,
-            transcriptState: .queued,
-            source: .liveCapture,
-            notes: "",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf", systemAudioFile: "system.raw.caf")
-        )
-
-        _ = try await pipeline.process(
-            recording: recording,
-            in: temp,
-            runtimeProfile: makeRuntimeProfile(asrModelURL: model, diarizationModelURL: nil),
-            engineFactory: factory
-        )
-
-        let micFingerprint = try String(contentsOf: temp.appendingPathComponent("mic.asr.model.txt"), encoding: .utf8)
-        XCTAssertFalse(micFingerprint.isEmpty)
-
-        let systemFingerprint = try String(contentsOf: temp.appendingPathComponent("system.asr.model.txt"), encoding: .utf8)
-        XCTAssertFalse(systemFingerprint.isEmpty)
-    }
-
-    // MARK: - Phase 1 mock engines
-
-    private struct EmptySystemASREngine: ASREngine {
-        var displayName: String { "empty-system-mock" }
-
-        func transcribe(
-            audioURL: URL,
-            channel: TranscriptChannel,
-            sessionID: UUID,
-            configuration: ASREngineConfiguration
-        ) async throws -> ASRDocument {
-            ASRDocument(
-                version: 1,
-                sessionID: sessionID,
-                channel: channel,
-                createdAt: Date(),
-                segments: channel == .system ? [] : [
-                    ASRSegment(id: "mic-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
-                ]
-            )
-        }
-    }
-
-    private struct SystemFailingASREngine: ASREngine {
-        var displayName: String { "system-failing-mock" }
-
-        func transcribe(
-            audioURL: URL,
-            channel: TranscriptChannel,
-            sessionID: UUID,
-            configuration: ASREngineConfiguration
-        ) async throws -> ASRDocument {
-            if channel == .system {
-                throw ASREngineRuntimeError.inferenceFailed(message: "system audio corrupt")
-            }
-            return ASRDocument(
-                version: 1,
-                sessionID: sessionID,
-                channel: channel,
-                createdAt: Date(),
-                segments: [
-                    ASRSegment(id: "mic-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
-                ]
-            )
-        }
-    }
-
-    private struct AllFailingASREngine: ASREngine {
-        var displayName: String { "all-failing-mock" }
-
-        func transcribe(
-            audioURL: URL,
-            channel: TranscriptChannel,
-            sessionID: UUID,
-            configuration: ASREngineConfiguration
-        ) async throws -> ASRDocument {
-            throw ASREngineRuntimeError.inferenceFailed(message: "\(channel.rawValue) failed")
-        }
-    }
-
-    private struct MicFailingASREngine: ASREngine {
-        var displayName: String { "mic-failing-mock" }
-
-        func transcribe(
-            audioURL: URL,
-            channel: TranscriptChannel,
-            sessionID: UUID,
-            configuration: ASREngineConfiguration
-        ) async throws -> ASRDocument {
-            if channel == .mic {
-                throw ASREngineRuntimeError.inferenceFailed(message: "mic audio corrupt")
-            }
-            return ASRDocument(
-                version: 1,
-                sessionID: sessionID,
-                channel: channel,
-                createdAt: Date(),
-                segments: [
-                    ASRSegment(id: "system-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
-                ]
-            )
-        }
-    }
-
-    private struct EmptyBothASREngine: ASREngine {
-        var displayName: String { "empty-both-mock" }
-
-        func transcribe(
-            audioURL: URL,
-            channel: TranscriptChannel,
-            sessionID: UUID,
-            configuration: ASREngineConfiguration
-        ) async throws -> ASRDocument {
-            ASRDocument(
-                version: 1,
-                sessionID: sessionID,
-                channel: channel,
-                createdAt: Date(),
-                segments: []
-            )
-        }
+        let data = try Data(contentsOf: directory.appendingPathComponent("transcript.json"))
+        return try decoder.decode(TranscriptDocument.self, from: data)
     }
 
     private func makeRuntimeProfile(
         asrModelURL: URL,
-        diarizationModelURL: URL?,
+        diarizationModelURL: URL?
     ) -> InferenceRuntimeProfile {
         InferenceRuntimeProfile(
             stageSelection: .defaultLocal,
@@ -1232,8 +544,10 @@ final class TranscriptionPipelineTests: XCTestCase {
         )
     }
 
-    private struct MockASREngine: ASREngine {
-        var displayName: String { "mock" }
+    private struct ClosureASREngine: ASREngine {
+        let handler: @Sendable (TranscriptChannel, UUID) throws -> ASRDocument
+
+        var displayName: String { "closure-asr" }
 
         func transcribe(
             audioURL: URL,
@@ -1241,143 +555,7 @@ final class TranscriptionPipelineTests: XCTestCase {
             sessionID: UUID,
             configuration: ASREngineConfiguration
         ) async throws -> ASRDocument {
-            ASRDocument(
-                version: 1,
-                sessionID: sessionID,
-                channel: channel,
-                createdAt: Date(),
-                segments: [
-                    ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
-                ]
-            )
-        }
-    }
-
-    private struct SystemUnavailableASREngine: ASREngine {
-        var displayName: String { "system-unavailable-mock" }
-
-        func transcribe(
-            audioURL: URL,
-            channel: TranscriptChannel,
-            sessionID: UUID,
-            configuration: ASREngineConfiguration
-        ) async throws -> ASRDocument {
-            if channel == .system {
-                throw ASREngineRuntimeError.inferenceFailed(
-                    message: "ASR backend failed to read the frames of the audio data (Invalid argument)"
-                )
-            }
-
-            return ASRDocument(
-                version: 1,
-                sessionID: sessionID,
-                channel: channel,
-                createdAt: Date(),
-                segments: [
-                    ASRSegment(id: "mic-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
-                ]
-            )
-        }
-    }
-
-    private struct SystemUnsupportedFormatASREngine: ASREngine {
-        var displayName: String { "system-unsupported-format-mock" }
-
-        func transcribe(
-            audioURL: URL,
-            channel: TranscriptChannel,
-            sessionID: UUID,
-            configuration: ASREngineConfiguration
-        ) async throws -> ASRDocument {
-            if channel == .system {
-                throw ASREngineRuntimeError.unsupportedFormat(audioURL)
-            }
-
-            return ASRDocument(
-                version: 1,
-                sessionID: sessionID,
-                channel: channel,
-                createdAt: Date(),
-                segments: [
-                    ASRSegment(id: "mic-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: "ru", words: nil)
-                ]
-            )
-        }
-    }
-
-    private struct UnsupportedFormatAndMicFailASREngine: ASREngine {
-        var displayName: String { "unsupported-format-and-mic-fail-mock" }
-
-        func transcribe(
-            audioURL: URL,
-            channel: TranscriptChannel,
-            sessionID: UUID,
-            configuration: ASREngineConfiguration
-        ) async throws -> ASRDocument {
-            if channel == .system {
-                throw ASREngineRuntimeError.unsupportedFormat(audioURL)
-            }
-            throw ASREngineRuntimeError.inferenceFailed(message: "mic audio corrupt")
-        }
-    }
-
-    private final class RecordingASREngine: ASREngine, @unchecked Sendable {
-        struct Call: Equatable {
-            let channel: TranscriptChannel
-            let modelName: String
-        }
-
-        private let lock = NSLock()
-        private var storedCalls: [Call] = []
-        private var fingerprintTag: String = "ru"
-
-        var calls: [Call] {
-            lock.lock()
-            defer { lock.unlock() }
-            return storedCalls
-        }
-
-        func setFingerprintTag(_ value: String) {
-            lock.lock()
-            defer { lock.unlock() }
-            fingerprintTag = value
-        }
-
-        func cacheFingerprint(configuration: ASREngineConfiguration) -> String {
-            lock.lock()
-            let tag = fingerprintTag
-            lock.unlock()
-            return "\(configuration.modelURL.standardizedFileURL.path)|lang:\(tag)"
-        }
-
-        var displayName: String { "recording-mock" }
-
-        func transcribe(
-            audioURL: URL,
-            channel: TranscriptChannel,
-            sessionID: UUID,
-            configuration: ASREngineConfiguration
-        ) async throws -> ASRDocument {
-            lock.lock()
-            storedCalls.append(Call(channel: channel, modelName: configuration.modelURL.lastPathComponent))
-            lock.unlock()
-            return ASRDocument(
-                version: 1,
-                sessionID: sessionID,
-                channel: channel,
-                createdAt: Date(),
-                segments: [
-                    ASRSegment(
-                        id: "\(channel.rawValue)-1",
-                        startMs: 0,
-                        endMs: 1000,
-                        text: configuration.modelURL.lastPathComponent,
-                        confidence: nil,
-                        language: "ru",
-                        words: nil
-                    )
-                ]
-            )
+            try handler(channel, sessionID)
         }
     }
 
@@ -1391,7 +569,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         }
     }
 
-    private struct SuccessfulDiarizationEngine: DiarizationEngine {
+    private struct SimpleDiarizationEngine: DiarizationEngine {
         func diarize(
             systemAudioURL: URL,
             sessionID: UUID,
@@ -1402,13 +580,13 @@ final class TranscriptionPipelineTests: XCTestCase {
                 sessionID: sessionID,
                 createdAt: Date(),
                 segments: [
-                    DiarizationSegment(id: "d1", speaker: "Speaker A", startMs: 0, endMs: 1000, confidence: 0.9)
+                    DiarizationSegment(id: "d1", speaker: "speaker-a", startMs: 0, endMs: 1000, confidence: 0.9)
                 ]
             )
         }
     }
 
-    private struct SuccessfulSplitDiarizationEngine: DiarizationEngine {
+    private struct OverlappingDiarizationEngine: DiarizationEngine {
         func diarize(
             systemAudioURL: URL,
             sessionID: UUID,
@@ -1419,71 +597,9 @@ final class TranscriptionPipelineTests: XCTestCase {
                 sessionID: sessionID,
                 createdAt: Date(),
                 segments: [
-                    DiarizationSegment(id: "d1", speaker: "Speaker A", startMs: 3_000, endMs: 4_999, confidence: 0.9),
-                    DiarizationSegment(id: "d2", speaker: "Speaker B", startMs: 5_000, endMs: 8_999, confidence: 0.85)
+                    DiarizationSegment(id: "d1", speaker: "speaker-a", startMs: 900, endMs: 2100, confidence: 0.9),
+                    DiarizationSegment(id: "d2", speaker: "speaker-b", startMs: 1400, endMs: 1700, confidence: 0.95)
                 ]
-            )
-        }
-    }
-
-    private struct WordTimedASREngine: ASREngine {
-        var displayName: String { "word-timed-mock" }
-
-        func transcribe(
-            audioURL: URL,
-            channel: TranscriptChannel,
-            sessionID: UUID,
-            configuration: ASREngineConfiguration
-        ) async throws -> ASRDocument {
-            let segments: [ASRSegment]
-            switch channel {
-            case .mic:
-                segments = [
-                    ASRSegment(
-                        id: "mic-1",
-                        startMs: 0,
-                        endMs: 2_999,
-                        text: "Nu tam macOS, a ne iOS.",
-                        confidence: nil,
-                        language: "ru",
-                        words: [
-                            ASRWord(word: "Nu", startMs: 0, endMs: 300, confidence: nil),
-                            ASRWord(word: "tam", startMs: 320, endMs: 700, confidence: nil),
-                            ASRWord(word: "macOS,", startMs: 710, endMs: 1_500, confidence: nil),
-                            ASRWord(word: "a", startMs: 1_700, endMs: 1_900, confidence: nil),
-                            ASRWord(word: "ne", startMs: 1_920, endMs: 2_200, confidence: nil),
-                            ASRWord(word: "iOS.", startMs: 2_220, endMs: 2_999, confidence: nil)
-                        ]
-                    )
-                ]
-            case .system:
-                segments = [
-                    ASRSegment(
-                        id: "system-1",
-                        startMs: 3_000,
-                        endMs: 8_999,
-                        text: "Da, tam macOS. To est eksperimentalny port.",
-                        confidence: nil,
-                        language: "ru",
-                        words: [
-                            ASRWord(word: "Da,", startMs: 3_000, endMs: 3_400, confidence: nil),
-                            ASRWord(word: "tam", startMs: 3_420, endMs: 3_800, confidence: nil),
-                            ASRWord(word: "macOS.", startMs: 3_820, endMs: 4_999, confidence: nil),
-                            ASRWord(word: "To", startMs: 5_000, endMs: 5_300, confidence: nil),
-                            ASRWord(word: "est", startMs: 5_320, endMs: 5_700, confidence: nil),
-                            ASRWord(word: "eksperimentalny", startMs: 5_720, endMs: 7_400, confidence: nil),
-                            ASRWord(word: "port.", startMs: 7_420, endMs: 8_999, confidence: nil)
-                        ]
-                    )
-                ]
-            }
-
-            return ASRDocument(
-                version: 1,
-                sessionID: sessionID,
-                channel: channel,
-                createdAt: Date(),
-                segments: segments
             )
         }
     }
@@ -1526,7 +642,6 @@ final class TranscriptionPipelineTests: XCTestCase {
             result
         }
     }
-
 }
 
 private func XCTAssertThrowsErrorAsync<T>(

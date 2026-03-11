@@ -258,6 +258,7 @@ final class RecordingWorkflowController {
 
     func transcribe(
         recording: RecordingSession,
+        summarizeAfterTranscription: Bool = false,
         onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
     ) async throws -> RecordingSession {
         var updatedRecording = recording
@@ -273,6 +274,14 @@ final class RecordingWorkflowController {
             )
             updatedRecording = applyTranscriptionResult(transcriptionResult, to: updatedRecording)
             try repository.save(updatedRecording)
+            if summarizeAfterTranscription {
+                do {
+                    updatedRecording = try await summarize(recording: updatedRecording)
+                } catch {
+                    updatedRecording.notes = "Transcript ready. Summary unavailable."
+                    try? repository.save(updatedRecording)
+                }
+            }
             return updatedRecording
         } catch {
             updatedRecording.transcriptState = .failed
@@ -295,30 +304,12 @@ final class RecordingWorkflowController {
         logLines.append("recording_id=\(recording.id.uuidString)")
         logLines.append("recording_title=\(recording.title)")
 
-        let transcript = repository.transcriptText(for: recording)
-        logLines.append("transcript_chars=\(transcript?.count ?? 0)")
-        let structuredTranscriptText: String?
-        if let structuredTranscriptTextFile = recording.assets.structuredTranscriptTextFile {
-            let structuredTranscriptURL = sessionDirectory.appendingPathComponent(structuredTranscriptTextFile)
-            structuredTranscriptText = try? String(contentsOf: structuredTranscriptURL, encoding: .utf8)
-            logLines.append("structured_transcript_file=\(structuredTranscriptTextFile)")
-        } else {
-            structuredTranscriptText = nil
-            logLines.append("structured_transcript_file=<none>")
-        }
-        logLines.append("structured_transcript_chars=\(structuredTranscriptText?.count ?? 0)")
-        let srtText: String?
-        if let srtFile = recording.assets.srtFile {
-            let srtURL = sessionDirectory.appendingPathComponent(srtFile)
-            srtText = try? String(contentsOf: srtURL, encoding: .utf8)
-            logLines.append("srt_file=\(srtFile)")
-        } else {
-            srtText = nil
-            logLines.append("srt_file=<none>")
-        }
-        logLines.append("srt_chars=\(srtText?.count ?? 0)")
+        let summaryInputs = loadSummaryInputs(for: recording, in: sessionDirectory)
+        logLines.append("summary_input=\(summaryInputs.transcript != nil ? "transcript" : "srt")")
+        logLines.append("transcript_chars=\(summaryInputs.transcript?.count ?? 0)")
+        logLines.append("srt_chars=\(summaryInputs.srtText?.count ?? 0)")
 
-        guard transcript != nil || srtText != nil else {
+        guard summaryInputs.transcript != nil || summaryInputs.srtText != nil else {
             logLines.append("result=failed")
             logLines.append("reason=missing-transcript-and-srt")
             persistSummarizationLog(lines: logLines, in: sessionDirectory)
@@ -353,8 +344,8 @@ final class RecordingWorkflowController {
                 )
                 let doc = try await summarizeWithTimeout(timeoutSeconds: summarizationTimeoutSeconds) {
                     try await summarizationEngine.summarize(
-                        transcript: structuredTranscriptText ?? transcript ?? "",
-                        srtText: structuredTranscriptText == nil ? srtText : nil,
+                        transcript: summaryInputs.transcript ?? "",
+                        srtText: summaryInputs.srtText,
                         recordingTitle: recording.title,
                         configuration: config
                     )
@@ -384,7 +375,11 @@ final class RecordingWorkflowController {
 
         if summary == nil {
             onProgress?(0.75, "Building fallback summary")
-            summary = composeSummary(recording: recording, transcript: transcript, srtText: srtText)
+            summary = composeSummary(
+                recording: recording,
+                transcript: summaryInputs.transcript,
+                srtText: summaryInputs.srtText
+            )
             summarySource = "fallback"
             logLines.append("fallback_status=used")
             logLines.append("summary_chars=\(summary?.count ?? 0)")
@@ -532,6 +527,21 @@ final class RecordingWorkflowController {
         }
     }
 
+    private func loadSummaryInputs(for recording: RecordingSession, in sessionDirectory: URL) -> SummaryInputs {
+        let transcript = repository.transcriptText(for: recording)
+        guard transcript == nil else {
+            return SummaryInputs(transcript: transcript, srtText: nil)
+        }
+
+        guard let srtFile = recording.assets.srtFile else {
+            return SummaryInputs(transcript: nil, srtText: nil)
+        }
+
+        let srtURL = sessionDirectory.appendingPathComponent(srtFile)
+        let srtText = try? String(contentsOf: srtURL, encoding: .utf8)
+        return SummaryInputs(transcript: nil, srtText: srtText)
+    }
+
     private func composeSummary(
         recording: RecordingSession,
         transcript: String?,
@@ -643,6 +653,11 @@ final class RecordingWorkflowController {
         }
 
         return timeline.sorted(by: { $0.seconds < $1.seconds })
+    }
+
+    private struct SummaryInputs {
+        let transcript: String?
+        let srtText: String?
     }
 
     private func parseSRTSeconds(_ raw: String) -> Int {

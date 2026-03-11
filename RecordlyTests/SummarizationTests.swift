@@ -121,7 +121,19 @@ final class SequencedLlamaProcessExecutor: LlamaProcessExecutor {
 }
 
 struct TestInferenceEngineFactory: InferenceEngineFactory {
+    let asrEngine: any ASREngine
+    let diarizationEngine: any DiarizationEngine
     let summarizationEngine: any SummarizationEngine
+
+    init(
+        asrEngine: any ASREngine = NoopASREngine(),
+        diarizationEngine: any DiarizationEngine = NoopDiarizationEngine(),
+        summarizationEngine: any SummarizationEngine
+    ) {
+        self.asrEngine = asrEngine
+        self.diarizationEngine = diarizationEngine
+        self.summarizationEngine = summarizationEngine
+    }
 
     @MainActor
     func makeAudioCaptureEngine(for profile: InferenceRuntimeProfile) throws -> any AudioCaptureEngine {
@@ -129,12 +141,12 @@ struct TestInferenceEngineFactory: InferenceEngineFactory {
     }
 
     func makeASREngine(for profile: InferenceRuntimeProfile) throws -> any ASREngine {
-        NoopASREngine()
+        asrEngine
     }
 
     @MainActor
     func makeDiarizationEngine(for profile: InferenceRuntimeProfile) throws -> any DiarizationEngine {
-        NoopDiarizationEngine()
+        diarizationEngine
     }
 
     func makeSummarizationEngine(for profile: InferenceRuntimeProfile) throws -> any SummarizationEngine {
@@ -172,6 +184,24 @@ struct NoopDiarizationEngine: DiarizationEngine {
         configuration: DiarizationEngineConfiguration
     ) async throws -> DiarizationDocument {
         DiarizationDocument(version: 1, sessionID: sessionID, createdAt: Date(), segments: [])
+    }
+}
+
+@MainActor
+private struct StaticRuntimeProfileSelector: InferenceRuntimeProfileSelecting {
+    let transcriptionProfile: InferenceRuntimeProfile
+    let summarizationProfile: InferenceRuntimeProfile
+
+    func transcriptionAvailability(for profile: ModelProfile) -> TranscriptionAvailability {
+        .ready
+    }
+
+    func resolveTranscriptionProfile(for profile: ModelProfile) throws -> InferenceRuntimeProfile {
+        transcriptionProfile
+    }
+
+    func resolveSummarizationProfile(for profile: ModelProfile) throws -> InferenceRuntimeProfile {
+        summarizationProfile
     }
 }
 
@@ -230,6 +260,18 @@ final class InMemoryRecordingsRepository: RecordingsPersistence {
     }
 
     func transcriptText(for recording: RecordingSession) -> String? {
+        if let cached = transcriptBodies[recording.id] {
+            return cached
+        }
+
+        if let transcriptFile = recording.assets.transcriptFile,
+           let directory = sessionDirectories[recording.id] {
+            let url = directory.appendingPathComponent(transcriptFile)
+            if let transcript = try? String(contentsOf: url, encoding: .utf8) {
+                return transcript
+            }
+        }
+
         if let directory = sessionDirectories[recording.id],
            let structuredTranscriptTextFile = recording.assets.structuredTranscriptTextFile {
             let url = directory.appendingPathComponent(structuredTranscriptTextFile)
@@ -238,17 +280,7 @@ final class InMemoryRecordingsRepository: RecordingsPersistence {
             }
         }
 
-        if let cached = transcriptBodies[recording.id] {
-            return cached
-        }
-
-        guard let transcriptFile = recording.assets.transcriptFile,
-              let directory = sessionDirectories[recording.id] else {
-            return nil
-        }
-
-        let url = directory.appendingPathComponent(transcriptFile)
-        return try? String(contentsOf: url, encoding: .utf8)
+        return nil
     }
 
     func summaryText(for recording: RecordingSession) -> String? {
@@ -949,21 +981,17 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         XCTAssertTrue(logText.contains("summary_source=llm"))
     }
 
-    func testSummarizePrefersStructuredTranscriptTextOverSRT() async throws {
+    func testSummarizePrefersTranscriptTextAndDoesNotPassSRTWhenTranscriptExists() async throws {
         let recordingID = UUID()
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
 
-        let structuredText = """
-        00:00:00 | You | Nu tam macOS, a ne iOS.
-        00:00:03 | Speaker 1 | Da, tam macOS.
-        """
         let srtText = """
         1
         00:00:00,000 --> 00:00:05,000
         [You] giant raw block
         """
-        try structuredText.write(
+        try "legacy structured transcript".write(
             to: sessionDirectory.appendingPathComponent("structured-transcript.txt"),
             atomically: true,
             encoding: .utf8
@@ -976,7 +1004,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
 
         let recording = RecordingSession(
             id: recordingID,
-            title: "Structured preferred",
+            title: "Transcript preferred",
             createdAt: Date(),
             duration: 90,
             lifecycleState: .ready,
@@ -993,18 +1021,18 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let repository = InMemoryRecordingsRepository(
             recordings: [recording],
             sessionDirectories: [recordingID: sessionDirectory],
-            transcriptBodies: [recordingID: "plain transcript fallback"]
+            transcriptBodies: [recordingID: "plain transcript input"]
         )
 
         let modelURL = try makeSummarizationModel(named: "structured-model.gguf")
         let modelManager = makeModelManager(modelURL: modelURL)
         let capturingEngine = CapturingSummaryEngine(result: .success(
             SummaryDocument(
-                topics: ["Structured transcript used"],
+                topics: ["Plain transcript used"],
                 decisions: [],
                 actionItems: [],
                 risks: [],
-                rawMarkdown: "## Topics\n- Structured transcript used"
+                rawMarkdown: "## Topics\n- Plain transcript used"
             )
         ))
 
@@ -1017,8 +1045,92 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
 
         _ = try await workflow.summarize(recording: recording)
 
-        XCTAssertEqual(capturingEngine.capturedTranscript, structuredText)
+        XCTAssertEqual(capturingEngine.capturedTranscript, "plain transcript input")
         XCTAssertNil(capturingEngine.capturedSRTText)
+    }
+
+    func testTranscribeCanChainSummaryInSameWorkflowPath() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+
+        FileManager.default.createFile(
+            atPath: sessionDirectory.appendingPathComponent("mic.raw.caf").path,
+            contents: Data("mic".utf8)
+        )
+
+        let asrModelURL = sessionDirectory.appendingPathComponent("asr.bin")
+        let summarizationModelURL = try makeSummarizationModel(named: "workflow-chain.gguf")
+        try Data("asr".utf8).write(to: asrModelURL)
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Workflow chain",
+            createdAt: Date(),
+            duration: 45,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "Queued",
+            assets: RecordingAssets(microphoneFile: "mic.raw.caf")
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory]
+        )
+
+        let runtimeSelector = StaticRuntimeProfileSelector(
+            transcriptionProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: InferenceModelArtifacts(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: nil,
+                    summarizationModelURL: nil
+                ),
+                summarizationRuntimeSettings: .default
+            ),
+            summarizationProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: InferenceModelArtifacts(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: nil,
+                    summarizationModelURL: summarizationModelURL
+                ),
+                summarizationRuntimeSettings: .default
+            )
+        )
+        let summaryEngine = CapturingSummaryEngine(result: .success(
+            SummaryDocument(
+                topics: ["Chained summary"],
+                decisions: [],
+                actionItems: [],
+                risks: [],
+                rawMarkdown: "## Topics\n- Chained summary"
+            )
+        ))
+        let engineFactory = TestInferenceEngineFactory(
+            asrEngine: WorkflowASREngine(),
+            summarizationEngine: summaryEngine
+        )
+
+        let workflow = RecordingWorkflowController(
+            audioCaptureEngine: AudioCaptureService(),
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: runtimeSelector,
+            inferenceEngineFactory: engineFactory,
+            repository: repository
+        )
+
+        let updated = try await workflow.transcribe(
+            recording: recording,
+            summarizeAfterTranscription: true
+        )
+
+        XCTAssertEqual(updated.assets.transcriptFile, "transcript.txt")
+        XCTAssertEqual(updated.assets.summaryFile, "summary.md")
+        XCTAssertEqual(updated.transcriptState, .ready)
+        XCTAssertEqual(summaryEngine.capturedTranscript, "[00:00 - 00:01] [You] chained transcript")
+        XCTAssertNil(summaryEngine.capturedSRTText)
     }
 
     private func makeSummarizationModel(named name: String) throws -> URL {
@@ -1063,6 +1175,35 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             repository: repository,
             selectedModelProfile: .balanced,
             summarizationTimeoutSeconds: summarizationTimeoutSeconds
+        )
+    }
+}
+
+private struct WorkflowASREngine: ASREngine {
+    var displayName: String { "workflow-asr" }
+
+    func transcribe(
+        audioURL: URL,
+        channel: TranscriptChannel,
+        sessionID: UUID,
+        configuration: ASREngineConfiguration
+    ) async throws -> ASRDocument {
+        ASRDocument(
+            version: 1,
+            sessionID: sessionID,
+            channel: channel,
+            createdAt: Date(),
+            segments: [
+                ASRSegment(
+                    id: "\(channel.rawValue)-1",
+                    startMs: 0,
+                    endMs: 1000,
+                    text: "chained transcript",
+                    confidence: nil,
+                    language: "en",
+                    words: nil
+                )
+            ]
         )
     }
 }

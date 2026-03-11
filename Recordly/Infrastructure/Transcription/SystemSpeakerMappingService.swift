@@ -1,6 +1,6 @@
 import Foundation
 
-struct SystemSpeakerMappingService {
+struct SystemTranscriptAlignmentService {
     let overlapThresholdRatio: Double
 
     private struct SpeakerInfo {
@@ -19,7 +19,7 @@ struct SystemSpeakerMappingService {
         self.overlapThresholdRatio = overlapThresholdRatio
     }
 
-    func mapSystemSpeakers(asrSegments: [ASRSegment], diarization: DiarizationDocument?) -> [TranscriptSegment] {
+    func align(asrSegments: [ASRSegment], diarization: DiarizationDocument?) -> [TranscriptSegment] {
         let remoteAliases = makeRemoteSpeakerAliases(in: diarization)
 
         return asrSegments.map { asr in
@@ -65,12 +65,17 @@ struct SystemSpeakerMappingService {
         }
 
         guard let bestMatch else {
-            return SpeakerInfo(displayLabel: "Unknown Speaker", role: .unknown, speakerId: nil, confidence: nil)
+            return SpeakerInfo(displayLabel: "Remote", role: .unknown, speakerId: nil, confidence: nil)
         }
 
         let ratio = Double(bestOverlap) / Double(segmentDuration)
         guard ratio >= overlapThresholdRatio else {
-            return SpeakerInfo(displayLabel: "Unknown Speaker", role: .unknown, speakerId: nil, confidence: bestMatch.confidence)
+            return SpeakerInfo(
+                displayLabel: "Remote",
+                role: .unknown,
+                speakerId: nil,
+                confidence: bestMatch.confidence
+            )
         }
 
         let alias = remoteAliases[bestMatch.speaker]
@@ -104,5 +109,19 @@ struct SystemSpeakerMappingService {
         }
 
         return aliases
+    }
+}
+
+// Legacy compatibility wrapper. Keep this out of the new main path.
+struct SystemSpeakerMappingService {
+    let overlapThresholdRatio: Double
+
+    init(overlapThresholdRatio: Double = 0.25) {
+        self.overlapThresholdRatio = overlapThresholdRatio
+    }
+
+    func mapSystemSpeakers(asrSegments: [ASRSegment], diarization: DiarizationDocument?) -> [TranscriptSegment] {
+        SystemTranscriptAlignmentService(overlapThresholdRatio: overlapThresholdRatio)
+            .align(asrSegments: asrSegments, diarization: diarization)
     }
 }

@@ -102,14 +102,6 @@ final class RecordingsRepository: RecordingsPersistence {
             return nil
         }
 
-        if let structuredTranscriptTextFile = recording.assets.structuredTranscriptTextFile {
-            let structuredTranscriptURL = sessionDirectory.appendingPathComponent(structuredTranscriptTextFile)
-            if let transcript = try? String(contentsOf: structuredTranscriptURL, encoding: .utf8) {
-                transcriptCache[recording.id] = transcript
-                return transcript
-            }
-        }
-
         if let transcriptFile = recording.assets.transcriptFile {
             let transcriptURL = sessionDirectory.appendingPathComponent(transcriptFile)
             if let transcript = try? String(contentsOf: transcriptURL, encoding: .utf8) {
@@ -118,27 +110,30 @@ final class RecordingsRepository: RecordingsPersistence {
             }
         }
 
-        guard let transcriptJSONFile = recording.assets.transcriptJSONFile else {
-            return nil
+        if let transcriptJSONFile = recording.assets.transcriptJSONFile {
+            let transcriptURL = sessionDirectory.appendingPathComponent(transcriptJSONFile)
+            if let data = try? Data(contentsOf: transcriptURL) {
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                if let document = try? decoder.decode(TranscriptDocument.self, from: data) {
+                    let transcript = document.segments
+                        .map { "[\($0.displaySpeakerLabel)] \($0.text)" }
+                        .joined(separator: "\n")
+                    transcriptCache[recording.id] = transcript
+                    return transcript
+                }
+            }
         }
 
-        let transcriptURL = sessionDirectory.appendingPathComponent(transcriptJSONFile)
-        guard let data = try? Data(contentsOf: transcriptURL) else {
-            return nil
+        if let structuredTranscriptTextFile = recording.assets.structuredTranscriptTextFile {
+            let structuredTranscriptURL = sessionDirectory.appendingPathComponent(structuredTranscriptTextFile)
+            if let transcript = try? String(contentsOf: structuredTranscriptURL, encoding: .utf8) {
+                transcriptCache[recording.id] = transcript
+                return transcript
+            }
         }
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let document = try? decoder.decode(TranscriptDocument.self, from: data) else {
-            return nil
-        }
-
-        let transcript = document.segments
-            .map { "[\($0.displaySpeakerLabel)] \($0.text)" }
-            .joined(separator: "\n")
-
-        transcriptCache[recording.id] = transcript
-        return transcript
+        return nil
     }
 
     func summaryText(for recording: RecordingSession) -> String? {

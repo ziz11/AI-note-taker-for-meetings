@@ -51,6 +51,7 @@ struct TranscriptRenderService {
     }
 }
 
+// Legacy export path retained for compatibility. The default transcription flow no longer writes these artifacts.
 struct StructuredTranscriptExportService {
     let maxCharactersPerSegment: Int
     let longPauseThresholdMs: Int
