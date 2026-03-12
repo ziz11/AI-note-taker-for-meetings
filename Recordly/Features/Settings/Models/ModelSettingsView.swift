@@ -10,79 +10,105 @@ struct ModelSettingsView: View {
             AppTheme.contentBackground
                 .ignoresSafeArea()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    header
-                    sectionHeader(
-                        eyebrow: "Dictation Models",
-                        title: "Local transcription and speaker tools",
-                        subtitle: "FluidAudio is featured first. Custom local ASR and summarization models appear below in the same catalog."
-                    )
-                    fluidAudioFeaturedCard
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        header
 
-                    if !viewModel.localASRModels.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Custom Local ASR")
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(.primary)
-
-                            ForEach(viewModel.localASRModels) { model in
-                                catalogRow(model: model, actionTitle: nil) {}
-                            }
-                        }
-                    }
-
-                    sectionHeader(
-                        eyebrow: "Speaker Separation",
-                        title: "FluidAudio diarization",
-                        subtitle: "Provision once through the SDK to enable local speaker separation. Legacy diarization selection remains untouched underneath, but is not surfaced here."
-                    )
-                    fluidAudioDiarizationCard
-
-                    sectionHeader(
-                        eyebrow: "Summarization",
-                        title: "Local summary models",
-                        subtitle: "Choose the local model used for summary generation. Current runtime behavior stays unchanged."
-                    )
-
-                    if viewModel.summarizationCatalogModels.isEmpty {
-                        emptyStateCard(
-                            title: "No summarization models discovered",
-                            subtitle: "Add compatible `.gguf` or `.bin` files to a summarization models folder to use local summaries."
+                        sectionHeader(
+                            eyebrow: "Dictation Models",
+                            title: "Local transcription and speaker tools",
+                            subtitle: "Featured dictation and shared catalogs in one place."
                         )
-                    } else {
-                        VStack(spacing: 10) {
-                            ForEach(viewModel.summarizationCatalogModels) { model in
-                                catalogRow(
-                                    model: model,
-                                    actionTitle: model.isSelected ? "Now Using" : "Use Model",
-                                    actionProminent: !model.isSelected
-                                ) {
-                                    guard !model.isSelected else { return }
-                                    viewModel.selectSummarizationModel(model.id)
+                        fluidAudioFeaturedCard
+
+                        if !viewModel.localASRModels.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Custom Local ASR")
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(.primary)
+
+                                ForEach(viewModel.localASRModels) { model in
+                                    catalogRow(model: model, actionTitle: nil) {}
                                 }
                             }
                         }
-                    }
 
-                    folderActions
+                        VStack(alignment: .leading, spacing: 8) {
+                            sectionHeader(
+                                eyebrow: "Speaker Separation",
+                                title: "FluidAudio diarization",
+                                subtitle: "Provision once through the SDK to enable local speaker separation."
+                            )
+                            fluidAudioDiarizationCard
+                        }
+                        .id("fluidAudioDiarizationSection")
+
+                        sectionHeader(
+                            eyebrow: "Summarization",
+                            title: "Local summary models",
+                            subtitle: "Choose the local model used for summary generation."
+                        )
+
+                        if viewModel.summarizationCatalogModels.isEmpty {
+                            emptyStateCard(
+                                title: "No summarization models discovered",
+                                subtitle: "Add compatible `.gguf` or `.bin` files to a summarization models folder to use local summaries."
+                            )
+                        } else {
+                            VStack(spacing: 10) {
+                                ForEach(viewModel.summarizationCatalogModels) { model in
+                                    catalogRow(
+                                        model: model,
+                                        actionTitle: model.isSelected ? "Now Using" : "Use Model",
+                                        actionProminent: !model.isSelected
+                                    ) {
+                                        guard !model.isSelected else { return }
+                                        viewModel.selectSummarizationModel(model.id)
+                                    }
+                                }
+                            }
+                        }
+
+                        folderActions
+                    }
+                    .padding(14)
                 }
-                .padding(20)
+                .onAppear {
+                    viewModel.refresh()
+                    if viewModel.shouldScrollToDiarizationSection {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            proxy.scrollTo("fluidAudioDiarizationSection", anchor: .top)
+                        }
+                        viewModel.consumeDiarizationSectionFocusRequest()
+                    }
+                }
+                .onChange(of: viewModel.shouldScrollToDiarizationSection) { shouldScroll in
+                    guard shouldScroll else {
+                        return
+                    }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        proxy.scrollTo("fluidAudioDiarizationSection", anchor: .top)
+                    }
+                    viewModel.consumeDiarizationSectionFocusRequest()
+                }
+                .onDisappear {
+                    viewModel.consumeDiarizationSectionFocusRequest()
+                }
             }
         }
         .frame(minWidth: 960, minHeight: 680)
-        .onAppear { viewModel.refresh() }
     }
 
     private var header: some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Models")
                     .font(.system(size: 34, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
 
                 Text("Catalog view for on-device dictation, speaker separation, and summarization.")
-                    .font(.headline)
+                    .font(.subheadline)
                     .foregroundStyle(AppTheme.secondaryText)
             }
 
@@ -102,11 +128,11 @@ struct ModelSettingsView: View {
     }
 
     private var fluidAudioFeaturedCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 modelGlyph(systemName: "waveform.badge.magnifyingglass", tint: Color.blue)
 
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .center, spacing: 8) {
                         Text("FluidAudio v3")
                             .font(.system(size: 24, weight: .bold, design: .rounded))
@@ -117,8 +143,8 @@ struct ModelSettingsView: View {
                         capsule("SDK Managed", tint: Color.orange)
                     }
 
-                    Text("Primary on-device dictation engine powered by the FluidAudio SDK. Download once, then transcribe locally without manual model file management.")
-                        .font(.subheadline.weight(.medium))
+                    Text("Primary on-device dictation engine powered by FluidAudio SDK. Download once, then transcribe locally.")
+                        .font(.footnote.weight(.medium))
                         .foregroundStyle(AppTheme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -135,35 +161,35 @@ struct ModelSettingsView: View {
                     viewModel.downloadFluidAudioModel()
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
+                .controlSize(.small)
                 .disabled(!viewModel.canDownloadFluidModel)
             }
 
             statusMessage(for: viewModel.fluidProvisioningState, noun: "FluidAudio v3 model")
         }
-        .padding(18)
-        .appPanel(selected: viewModel.isFluidModelReady, prominent: true, cornerRadius: 28)
+        .padding(14)
+        .appPanel(selected: viewModel.isFluidModelReady, prominent: true, cornerRadius: 20)
     }
 
     private var fluidAudioDiarizationCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 modelGlyph(systemName: "person.2.wave.2.fill", tint: Color.orange)
 
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .center, spacing: 8) {
                         Text("FluidAudio Speaker Separation")
                             .font(.title3.weight(.bold))
                             .foregroundStyle(.primary)
 
-                        capsule("Provision Card", tint: Color.orange)
+                        capsule("SDK managed", tint: Color.orange)
                         if viewModel.isFluidDiarizationModelReady {
                             capsule("Ready", tint: Color.green)
                         }
                     }
 
-                    Text("SDK-managed diarization package for local speaker separation. This card reflects provisioning status only and does not alter existing legacy model state.")
-                        .font(.subheadline.weight(.medium))
+                    Text("SDK-managed diarization package used for local speaker separation.")
+                        .font(.footnote.weight(.medium))
                         .foregroundStyle(AppTheme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -176,27 +202,27 @@ struct ModelSettingsView: View {
 
                 Spacer()
 
-                Button(viewModel.isFluidDiarizationModelReady ? "Ready" : "Download") {
+                Button(viewModel.isFluidDiarizationModelReady ? "Ready" : "Download speaker separation") {
                     viewModel.downloadFluidDiarizationModel()
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
+                .controlSize(.small)
                 .disabled(!viewModel.canDownloadFluidDiarizationModel)
             }
 
             statusMessage(for: viewModel.fluidDiarizationProvisioningState, noun: "FluidAudio diarization package")
         }
-        .padding(18)
-        .appPanel(selected: viewModel.isFluidDiarizationModelReady, prominent: true, cornerRadius: 28)
+        .padding(14)
+        .appPanel(selected: viewModel.isFluidDiarizationModelReady, prominent: true, cornerRadius: 20)
     }
 
     private var folderActions: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Model Folders")
                 .font(.headline)
                 .foregroundStyle(.primary)
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 folderButton(title: "Open Summaries Folder", url: viewModel.folderURL(for: .summarization, source: .userLocal))
                 folderButton(title: "Open Shared Folder", url: viewModel.folderURL(for: .summarization, source: .shared))
                 folderButton(title: "Open App Support Folder", url: viewModel.folderURL(for: .summarization, source: .appSupport))
@@ -232,7 +258,7 @@ struct ModelSettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(model.title)
-                        .font(.headline.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
@@ -247,19 +273,19 @@ struct ModelSettingsView: View {
                         if actionProminent {
                             Button(actionTitle, action: action)
                                 .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
+                                .controlSize(.mini)
                                 .disabled(!model.supportsSelection || model.isSelected)
                         } else {
                             Button(actionTitle, action: action)
                                 .buttonStyle(.bordered)
-                                .controlSize(.small)
+                                .controlSize(.mini)
                                 .disabled(!model.supportsSelection || model.isSelected)
                         }
                     }
                 }
 
                 Text(model.subtitle)
-                    .font(.subheadline)
+                    .font(.caption)
                     .foregroundStyle(AppTheme.secondaryText)
 
                 WrapHStack(spacing: 8, lineSpacing: 8) {
@@ -270,15 +296,15 @@ struct ModelSettingsView: View {
 
                 if let footnote = model.footnote {
                     Text(footnote)
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(AppTheme.tertiaryText)
                         .lineLimit(1)
                         .textSelection(.enabled)
                 }
             }
         }
-        .padding(16)
-        .appPanel(selected: model.isSelected, cornerRadius: 22)
+        .padding(12)
+        .appPanel(selected: model.isSelected, cornerRadius: 18)
     }
 
     private func emptyStateCard(title: String, subtitle: String) -> some View {
@@ -290,9 +316,9 @@ struct ModelSettingsView: View {
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.secondaryText)
         }
-        .padding(16)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .appPanel(cornerRadius: 22)
+        .appPanel(cornerRadius: 18)
     }
 
     private func folderButton(title: String, url: URL?) -> some View {
@@ -322,23 +348,23 @@ struct ModelSettingsView: View {
         switch state {
         case .ready:
             Text("\(noun) is installed and ready.")
-                .font(.body.weight(.semibold))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.green.opacity(0.95))
         case .needsDownload:
             Text("\(noun) is not installed yet.")
-                .font(.body.weight(.semibold))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.orange.opacity(0.95))
         case .downloading:
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
                 Text("Downloading \(noun.lowercased())...")
-                    .font(.body.weight(.semibold))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
             }
         case .failed(let message):
             Text("Download failed: \(message)")
-                .font(.body.weight(.semibold))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.red.opacity(0.92))
         }
     }
@@ -369,10 +395,10 @@ struct ModelSettingsView: View {
         ZStack {
             RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
                 .fill(tint.opacity(0.12))
-                .frame(width: compact ? 52 : 76, height: compact ? 52 : 76)
+                .frame(width: compact ? 44 : 64, height: compact ? 44 : 64)
 
             Image(systemName: systemName)
-                .font(.system(size: compact ? 20 : 28, weight: .semibold))
+                .font(.system(size: compact ? 18 : 24, weight: .semibold))
                 .foregroundStyle(tint.opacity(0.95))
         }
     }

@@ -115,7 +115,9 @@ struct StructuredTranscriptExportService {
         segment: TranscriptSegment,
         diarization: DiarizationDocument?
     ) -> [StructuredTranscriptSegment] {
-        guard let words = segment.words, !words.isEmpty else {
+        guard let words = segment.words,
+              !words.isEmpty,
+              shouldUseWordTimings(for: segment, words: words) else {
             return [makeStructuredSegment(from: segment, diarization: diarization, idSuffix: nil, startMs: segment.startMs, endMs: segment.endMs, text: segment.text)]
         }
 
@@ -161,6 +163,26 @@ struct StructuredTranscriptExportService {
         }
 
         return result
+    }
+
+    private func shouldUseWordTimings(for segment: TranscriptSegment, words: [ASRWord]) -> Bool {
+        let lexicalWords = lexicalWordCount(in: segment.text)
+        guard lexicalWords > 0 else { return true }
+
+        let alphabeticTokens = words
+            .map(\.word)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter(isAlphabeticToken)
+
+        guard alphabeticTokens.count >= lexicalWords * 2 else {
+            return true
+        }
+
+        let shortAlphabeticTokens = alphabeticTokens.filter { $0.count <= 2 }
+        let shortTokenRatio = Double(shortAlphabeticTokens.count) / Double(alphabeticTokens.count)
+        let averageTokenLength = Double(alphabeticTokens.reduce(0) { $0 + $1.count }) / Double(alphabeticTokens.count)
+
+        return !(shortTokenRatio >= 0.6 && averageTokenLength <= 2.5)
     }
 
     private func makeStructuredSegment(
@@ -259,6 +281,15 @@ struct StructuredTranscriptExportService {
         return max(0, next.startMs - word.endMs)
     }
 
+    private func lexicalWordCount(in text: String) -> Int {
+        text
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+            .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+            .filter { !$0.isEmpty }
+            .count
+    }
+
     private func endsSentence(_ token: String) -> Bool {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.hasSuffix(".") || trimmed.hasSuffix("!") || trimmed.hasSuffix("?") || trimmed.hasSuffix("…")
@@ -283,6 +314,11 @@ struct StructuredTranscriptExportService {
 
     private func isTightPunctuation(_ character: Character) -> Bool {
         [",", ".", "!", "?", ";", ":", ")", "]", "}"].contains(character)
+    }
+
+    private func isAlphabeticToken(_ token: String) -> Bool {
+        guard !token.isEmpty else { return false }
+        return token.unicodeScalars.allSatisfy { CharacterSet.letters.contains($0) }
     }
 }
 

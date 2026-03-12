@@ -99,6 +99,22 @@ final class RecordingsPhaseOneTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: duplicateDirectory.appendingPathComponent("transcript.txt").path))
     }
 
+    func testOpenModelsFromAlertOpensModelSettingsSheetAndRequestsFocus() {
+        let repository = InMemoryRecordingsRepository()
+        let store = makeStore(repository: repository)
+
+        store.viewState.alert = RecordingsAlertState(
+            message: "Models required",
+            primaryAction: .openModels
+        )
+
+        store.openModelsFromAlert()
+
+        XCTAssertTrue(store.isModelsSheetPresented)
+        XCTAssertNil(store.viewState.alert)
+        XCTAssertTrue(store.modelSettingsViewModelProxy.shouldScrollToDiarizationSection)
+    }
+
     func testPlaybackRateCanChangeAndSurvivesSourceSwitch() {
         let repository = InMemoryRecordingsRepository()
         let controller = PlaybackController(repository: repository, previewMode: true)

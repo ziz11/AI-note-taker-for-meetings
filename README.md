@@ -13,7 +13,7 @@ Recordly is a local-first macOS app for call capture with session-based storage 
   - provider/runtime grouping stays explicit
 - Inference architecture is backend-agnostic and stage-driven (`contracts -> runtime profile -> selector/factory -> backend modules`).
 - ASR inference is FluidAudio-only in this branch. `FluidAudioASREngine` uses the FluidAudio SDK (v3, CoreML-based) through thin backend-local adapters.
-- ASR model provisioning is SDK-managed via `FluidAudioModelProvider`. Models are downloaded and cached by the SDK, not picked from local `.bin` files.
+- ASR model provisioning is SDK-managed via `FluidAudioASRModelProvider`. Models are downloaded and cached by the SDK, not picked from local `.bin` files.
 - Legacy ASR preference keys (`selectedASRBackend`, `selectedASRLanguage`) are preserved for migration compatibility only and do not affect active runtime language/backend behavior.
 - Default diarization inference is FluidAudio-based via `FluidAudioDiarizationEngine`, with degraded fallback when model/output is unavailable.
 - Summarization inference is wired through llama.cpp-compatible runner (`main`/`llama-cli`) in `LlamaCppSummarizationEngine`. Falls back to template summary when LLM is unavailable.
@@ -22,7 +22,8 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 
 ## Reliability behavior
 
-- Transcription still succeeds when diarization is unavailable (degraded speaker mapping path).
+- Default system-path transcription currently requires the FluidAudio diarization package. If it is missing, auto-transcription can fail immediately before pipeline work starts.
+- Degraded diarization behavior is still available in legacy/debug-oriented paths, but it is not the default system-path behavior.
 - Summarization falls back to template summary if LLM path fails.
 - ASR failure is a hard failure for transcription.
 - Persisted transcript/srt/json artifacts and recovery flow remain unchanged.
@@ -65,15 +66,18 @@ Legacy diarization `.bin` selections are not auto-migrated and degrade cleanly.
 
 - Live capture does not arrive as `.caf` or `.wav` files. `ScreenCaptureKit` delivers microphone and system audio as `CMSampleBuffer` streams.
 - The app normalizes those buffers into a single internal working format before persistence: `Float32 PCM`, `48 kHz`, `mono`, non-interleaved.
-- Those normalized working tracks are stored as `mic.raw.caf` and `system.raw.caf`. `CAF` is the internal container; `PCM` is the actual audio format stored inside it.
-- `CAF` was chosen as the internal working container because the merge pipeline, drift accounting, and frame-offset math all assume a stable PCM format. The design goal is deterministic offline processing, not end-user interoperability at this stage.
-- `merged-call.caf` is an intermediate merged artifact. The app then exports `merged-call.m4a` for normal playback/export when that export succeeds.
+- Live capture writes temporary fast-path source artifacts `mic.raw.caf` and `system.raw.caf` in parallel with durable recovery artifacts `mic.m4a` and `system.m4a`.
+- `CAF` remains the internal PCM working container for immediate post-capture processing; durable per-source `m4a` files are AAC-encoded and intended for recovery and reprocessing.
+- Offline merge may still use an internal `merged-call.caf` intermediate, but `merged-call.m4a` is the normal persisted playback/export artifact.
+- `merged-call.m4a` is the normal playback/export artifact. Source-track routing for ASR/diarization should not depend on it.
+- Temporary `CAF` source files may be cleaned up after transcription reaches a terminal state; durable `m4a` source tracks remain the restart/recovery path.
 - Do not switch the internal recording pipeline to `WAV` just to satisfy a downstream tool. If a consumer requires another format, adapt at that integration boundary.
 
 ## FluidAudio audio boundary
 
-- Internal capture remains `CAF + PCM`.
-- The active FluidAudio path explicitly loads persisted session artifacts from `CAF` or `FLAC` and prepares mono Float32 PCM inside the backend module before SDK calls.
+- Immediate live processing prefers persisted `CAF` PCM source tracks when they are present and valid.
+- Recovery, later reprocessing, and durable live-capture fallback use per-source `m4a` artifacts.
+- The active FluidAudio path explicitly loads persisted session artifacts from `CAF`, `FLAC`, or durable per-source `m4a` and prepares mono Float32 PCM inside the backend module before SDK calls.
 - Do not document or reintroduce a `CAF -> WAV -> whisper-cli` path for current ASR behavior.
 
 ## Documentation

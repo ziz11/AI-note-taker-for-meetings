@@ -21,6 +21,7 @@ final class ModelSettingsViewModel: ObservableObject {
 
     @Published var selectedDiarizationModelID: String?
     @Published var selectedSummarizationModelID: String?
+    @Published private(set) var shouldScrollToDiarizationSection = false
 
     @Published private(set) var fluidProvisioningState: FluidAudioModelProvisioningState = .needsDownload
     @Published private(set) var fluidDiarizationProvisioningState: FluidAudioModelProvisioningState = .needsDownload
@@ -148,6 +149,14 @@ final class ModelSettingsViewModel: ObservableObject {
             fluidDiarizationProvisioningState = fluidAudioDiarizationModelProvider.state
             refresh()
         }
+    }
+
+    func requestDiarizationSectionFocus() {
+        shouldScrollToDiarizationSection = true
+    }
+
+    func consumeDiarizationSectionFocusRequest() {
+        shouldScrollToDiarizationSection = false
     }
 
     private func discoverLocalASRModels() -> [CatalogModel] {

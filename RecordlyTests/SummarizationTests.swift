@@ -87,6 +87,29 @@ final class MockLlamaProcessExecutor: LlamaProcessExecutor {
     }
 }
 
+@MainActor
+final class StubAudioCaptureEngine: AudioCaptureEngine {
+    var systemAudioStatusLabel: String = "Captured"
+    private let artifacts: CaptureArtifacts
+
+    init(artifacts: CaptureArtifacts) {
+        self.artifacts = artifacts
+    }
+
+    func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+        XCTFail("startCapture should not be called in this test stub.")
+        return CaptureArtifacts()
+    }
+
+    func stopCapture() async throws -> CaptureArtifacts {
+        artifacts
+    }
+
+    func currentMicrophoneLevel() -> Double { 0 }
+    func currentSystemAudioLevel() -> Double { 0 }
+    func recoverPendingSessions(in recordingsDirectory: URL) async {}
+}
+
 final class CapturingLlamaProcessExecutor: LlamaProcessExecutor {
     var capturedExecutableURL: URL?
     var capturedArguments: [String] = []
@@ -1137,6 +1160,156 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         XCTAssertEqual(updated.transcriptState, .ready)
         XCTAssertEqual(summaryEngine.capturedTranscript, "[00:00 - 00:01] [You] chained transcript")
         XCTAssertNil(summaryEngine.capturedSRTText)
+    }
+
+    func testCompleteCaptureWithTranscriptionUnavailablePrecheckKeepsSessionFailed() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        try Data("audio".utf8).write(to: sessionDirectory.appendingPathComponent("mic.raw.flac"))
+        try Data("audio".utf8).write(to: sessionDirectory.appendingPathComponent("system.raw.flac"))
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Auto-transcribe blocked",
+            createdAt: Date(),
+            duration: 12,
+            lifecycleState: .ready,
+            transcriptState: .idle,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.raw.flac",
+                systemAudioFile: "system.raw.flac"
+            )
+        )
+
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory]
+        )
+
+        let asrModelURL = sessionDirectory.appendingPathComponent("asr-model")
+        try Data("asr".utf8).write(to: asrModelURL)
+
+        let runtimeSelector = StaticRuntimeProfileSelector(
+            availability: .degradedNoDiarization,
+            transcriptionProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: InferenceModelArtifacts(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: nil,
+                    summarizationModelURL: nil
+                ),
+                summarizationRuntimeSettings: .default
+            ),
+            summarizationProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: .empty,
+                summarizationRuntimeSettings: .default
+            )
+        )
+
+        let workflow = RecordingWorkflowController(
+            audioCaptureEngine: StubAudioCaptureEngine(
+                artifacts: CaptureArtifacts(
+                    microphoneFile: "mic.raw.flac",
+                    systemAudioFile: "system.raw.flac"
+                )
+            ),
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: runtimeSelector,
+            inferenceEngineFactory: TestInferenceEngineFactory(summarizationEngine: MockSummaryEngine()),
+            repository: repository
+        )
+
+        let result = try await workflow.completeCapture(
+            for: recording,
+            duration: 12,
+            runTranscription: true
+        )
+
+        XCTAssertNil(result.transcriptionResult)
+        XCTAssertEqual(result.recording.transcriptState, .failed)
+        XCTAssertEqual(result.recording.lifecycleState, .failed)
+        XCTAssertTrue(result.recording.notes.hasPrefix("Transcript failed:"))
+
+        guard let workflowError = result.processingError as? RecordingWorkflowError else {
+            return XCTFail("Expected recording workflow error.")
+        }
+        guard case let .transcriptionUnavailable(.unavailable(reason)) = workflowError else {
+            return XCTFail("Expected transcriptionUnavailable reason.")
+        }
+        XCTAssertEqual(
+            reason,
+            "System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
+        )
+
+        let persisted = try XCTUnwrap(repository.recordings.first(where: { $0.id == recordingID }))
+        XCTAssertEqual(persisted.transcriptState, .failed)
+        XCTAssertEqual(persisted.lifecycleState, .failed)
+        XCTAssertTrue(persisted.notes.hasPrefix("Transcript failed:"))
+    }
+
+    func testRecoverPendingMergesPreservesTranscriptionFailureNote() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        try Data("offline merge".utf8).write(
+            to: sessionDirectory.appendingPathComponent("merged-call.m4a")
+        )
+
+        let failureReason = "Transcript failed: System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Recovered capture",
+            createdAt: Date(),
+            duration: 0,
+            lifecycleState: .ready,
+            transcriptState: .failed,
+            source: .liveCapture,
+            notes: failureReason,
+            assets: RecordingAssets()
+        )
+
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory]
+        )
+
+        let runtimeSelector = StaticRuntimeProfileSelector(
+            availability: .ready,
+            transcriptionProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: InferenceModelArtifacts(
+                    asrModelURL: nil,
+                    diarizationModelURL: nil,
+                    summarizationModelURL: nil
+                ),
+                summarizationRuntimeSettings: .default
+            ),
+            summarizationProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: .empty,
+                summarizationRuntimeSettings: .default
+            )
+        )
+
+        let workflow = RecordingWorkflowController(
+            audioCaptureEngine: StubAudioCaptureEngine(artifacts: CaptureArtifacts()),
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: runtimeSelector,
+            inferenceEngineFactory: TestInferenceEngineFactory(summarizationEngine: MockSummaryEngine()),
+            repository: repository
+        )
+
+        await workflow.recoverPendingMerges()
+
+        let restored: RecordingSession = try XCTUnwrap(
+            repository.recordings.first(where: { $0.id == recordingID })
+        )
+        XCTAssertEqual(restored.assets.mergedCallFile, "merged-call.m4a")
+        XCTAssertEqual(restored.notes, failureReason)
     }
 
     func testWorkflowDefaultChunkedTranscriptionFailsFastWhenDiarizationPackageMissing() async throws {

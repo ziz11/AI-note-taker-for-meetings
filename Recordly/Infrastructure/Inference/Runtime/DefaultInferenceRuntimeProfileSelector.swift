@@ -70,9 +70,12 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
     func transcriptionAvailability(for profile: ModelProfile) -> TranscriptionAvailability {
         asrModelProvider.refreshState()
         diarizationModelProvider.refreshState()
+
+        let usesFluidAudioDiarization = stageSelection.backend(for: .diarization) == .fluidAudio
+
         switch asrModelProvider.state {
         case .ready:
-            if diarizationModelProvider.state != .ready {
+            if usesFluidAudioDiarization && diarizationModelProvider.state != .ready {
                 return .degradedNoDiarization
             }
             return .ready

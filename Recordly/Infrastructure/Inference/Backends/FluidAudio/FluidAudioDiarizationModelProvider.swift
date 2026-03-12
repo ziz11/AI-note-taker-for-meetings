@@ -76,9 +76,11 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
 
     private var cachedManager: (any OfflineDiarizationManaging)?
     private let managerFactory: () -> any OfflineDiarizationManaging
+    private let fileManager: FileManager
 
     init(managerFactory: @escaping () -> any OfflineDiarizationManaging = makeDefaultFluidAudioDiarizationManager) {
         self.managerFactory = managerFactory
+        self.fileManager = .default
         refreshState()
     }
 
@@ -89,18 +91,22 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
     ) {
         self.cachedManager = preparedManager
         self.managerFactory = managerFactory
+        self.fileManager = .default
         self.state = .ready
     }
 
     func refreshState() {
         guard case .downloading = state else {
-            state = cachedManager != nil ? .ready : .needsDownload
+            state = currentState()
             return
         }
     }
 
     func downloadDefaultModel() async {
-        guard !isDownloading, cachedManager == nil else { return }
+        guard !isDownloading else { return }
+        if case .ready = state {
+            return
+        }
 
         state = .downloading
         do {
@@ -114,7 +120,7 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
     }
 
     func resolveForRuntime() throws -> any OfflineDiarizationManaging {
-        guard let manager = cachedManager else {
+        guard cachedManager != nil || hasInstalledModelOnDisk() else {
             switch state {
             case .ready, .needsDownload:
                 throw FluidAudioModelProvisioningError.noModelProvisioned
@@ -124,6 +130,13 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
                 throw FluidAudioModelProvisioningError.downloadFailed(message: message)
             }
         }
+
+        if let cachedManager {
+            return cachedManager
+        }
+
+        let manager = makeManager()
+        cachedManager = manager
         return manager
     }
 
@@ -134,6 +147,32 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
 
     private func makeManager() -> any OfflineDiarizationManaging {
         managerFactory()
+    }
+
+    private func currentState() -> FluidAudioModelProvisioningState {
+        if cachedManager != nil || hasInstalledModelOnDisk() {
+            return .ready
+        }
+
+        if case let .failed(message) = state {
+            return .failed(message: message)
+        }
+
+        return .needsDownload
+    }
+
+    private func hasInstalledModelOnDisk() -> Bool {
+        guard let modelsRoot = AppPaths.fluidAudioSDKModelsDirectory() else {
+            return false
+        }
+
+        let contents = (try? fileManager.contentsOfDirectory(
+            at: modelsRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        return !contents.isEmpty
     }
 }
 

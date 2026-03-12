@@ -50,8 +50,8 @@ Workflow and pipeline:
 Runtime selection:
 
 - `DefaultInferenceRuntimeProfileSelector` resolves `InferenceRuntimeProfile`.
-- It resolves ASR model via `FluidAudioModelProvider` (SDK-managed provisioning).
-- It resolves diarization/summarization model artifacts via `ModelManager`.
+- It resolves ASR model via `FluidAudioASRModelProvider` (SDK-managed provisioning).
+- It resolves summarization model artifacts via `ModelManager` and delegates diarization model readiness to `FluidAudioDiarizationModelProvider`.
 - It must not run inference, instantiate engines, or decide product fallback policy.
 
 Factory and routing:
@@ -63,7 +63,7 @@ Factory and routing:
 Model layer:
 
 - `ModelManager` owns discovery, install state, selected model IDs, artifact resolution, and runtime settings persistence for diarization and summarization.
-- `FluidAudioModelProvider` owns ASR model provisioning (SDK-managed download/cache/resolve).
+- `FluidAudioASRModelProvider` owns ASR model provisioning (SDK-managed download/cache/resolve).
 - Any legacy ASR preference fields that still exist are compatibility residue, not an active local-file Whisper path.
 - Model layers must not become orchestration or inference-execution layers.
 - Models settings UX should remain provider-first. Do not flatten provider-managed and local-file-backed models into one generic selector.
@@ -112,6 +112,8 @@ Canonical live artifacts:
 - `mic.raw.caf`
 - `system.raw.caf`
 - `merged-call.caf`
+- `mic.m4a`
+- `system.m4a`
 - `merged-call.m4a`
 
 Do not change without an explicit migration reason:
@@ -128,7 +130,9 @@ Backend rule:
 ## Audio invariants
 
 - internal capture stays `CAF + PCM`
-- backend-local FluidAudio adapters may load persisted `CAF` or `FLAC` session artifacts and prepare SDK-ready PCM
+- live capture may persist durable per-source `m4a` alongside temporary `CAF`
+- immediate live processing prefers source-track `CAF`; recovery and later reprocessing may use per-source `m4a`
+- backend-local FluidAudio adapters may load persisted `CAF`, `FLAC`, or per-source `m4a` session artifacts and prepare SDK-ready PCM
 - if a future backend needs WAV, FLAC, buffers, or another representation, adapt at the consumer boundary
 - do not rewrite the capture pipeline for one backend format preference
 

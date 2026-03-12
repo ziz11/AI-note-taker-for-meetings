@@ -56,7 +56,7 @@ Recordly/
           FluidAudioVADService.swift
           FluidAudioTranscriptionService.swift
           FluidAudioDiarizationEngine.swift
-          FluidAudioModelProvider.swift
+          FluidAudioASRModelProvider.swift
         CliDiarization/
           CliDiarizationEngine.swift
         LlamaCpp/
@@ -93,7 +93,7 @@ Inference is capability + backend-centric and split by responsibility:
 
 - Stage contracts: `AudioCaptureEngine`, `ASREngine`, `DiarizationEngine`, `SummarizationEngine`, `VoiceActivityDetectionEngine`.
 - Runtime selection: `InferenceStage`, `InferenceBackend`, `StageRuntimeSelection`, `InferenceRuntimeProfile`.
-- Profile resolving: `DefaultInferenceRuntimeProfileSelector` resolves ASR model via `FluidAudioModelProvider` (SDK-managed provisioning) and reads `ModelManager` for diarization/summarization.
+- Profile resolving: `DefaultInferenceRuntimeProfileSelector` resolves ASR model via `FluidAudioASRModelProvider` (SDK-managed provisioning), reads summarization artifacts from `ModelManager`, and checks diarization readiness through `FluidAudioDiarizationModelProvider`.
 - Engine routing: `DefaultInferenceEngineFactory` creates concrete stage engines by `stage + backend`.
 - Composition root: `DefaultInferenceComposition` is the single place where per-stage backend defaults are selected. In this branch the default ASR and diarization backends are `fluidAudio`.
 
@@ -119,7 +119,7 @@ RecordlyApp
 Current ASR path:
 
 - capture/import produces canonical session audio artifacts
-- runtime selector resolves the FluidAudio ASR model via `FluidAudioModelProvider`
+- runtime selector resolves the FluidAudio ASR model via `FluidAudioASRModelProvider`
 - factory routes `.asr -> .fluidAudio`
 - `FluidAudioASREngine` orchestrates backend-local audio loading + transcription services and produces ASR documents
 - default diarization routing is `.diarization -> .fluidAudio`
@@ -136,8 +136,8 @@ Fallback ownership:
 ## Model Responsibilities
 
 - `ModelManager` is not an orchestration center.
-- `ModelManager` owns model discovery/install/resolution, availability checks, and runtime settings persistence.
-- `FluidAudioModelProvider` owns ASR model provisioning via FluidAudio SDK (download, cache, resolve).
+- `ModelManager` owns model discovery/install/resolution, and runtime settings persistence for summarization.
+- `FluidAudioASRModelProvider` owns ASR model provisioning via FluidAudio SDK (download, cache, resolve).
 - ASR is not resolved from user-picked Whisper `.bin` files in this branch.
 - `InferenceRuntimeProfile` carries resolved artifacts and stage runtime params into pipeline execution.
 
@@ -155,10 +155,12 @@ Reference brief:
 
 ## Audio Boundary
 
-- Capture and imported-audio processing keep session storage centered on canonical PCM in CAF (`mic.raw.caf`, `system.raw.caf`, `merged-call.caf`).
-- Backend-local FluidAudio adapters may load persisted `CAF` or `FLAC` session artifacts and prepare SDK-ready mono Float32 PCM at the consumer boundary.
+- Live capture writes temporary PCM `CAF` source tracks (`mic.raw.caf`, `system.raw.caf`) and durable AAC `m4a` source tracks (`mic.m4a`, `system.m4a`) in parallel.
+- Immediate live transcription prefers source-track `CAF`; recovery and later reprocessing fall back to durable per-source `m4a`.
+- Merge/render may still use `merged-call.caf` internally as a deterministic PCM intermediate.
+- Backend-local FluidAudio adapters may load persisted `CAF`, `FLAC`, or per-source `m4a` session artifacts and prepare SDK-ready mono Float32 PCM at the consumer boundary.
 - `AudioInput`/`AudioInputAdapter` provide boundary-level adaptation for stage engines without changing capture/storage contracts.
-- `merged-call.m4a` remains preferred playback artifact for live recordings.
+- `merged-call.m4a` remains preferred playback artifact for live recordings and should not become the source-track input of record for ASR/diarization.
 
 Historical note:
 

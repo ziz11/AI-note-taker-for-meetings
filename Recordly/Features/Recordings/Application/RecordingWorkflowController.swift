@@ -439,7 +439,11 @@ final class RecordingWorkflowController {
                 if recordings[index].lifecycleState != .failed {
                     recordings[index].lifecycleState = .ready
                 }
-                recordings[index].notes = "Offline merge completed."
+                let shouldPreserveTranscriptFailureNote = recordings[index].transcriptState == .failed
+                    && isTranscriptFailureNote(recordings[index].notes)
+                if !shouldPreserveTranscriptFailureNote {
+                    recordings[index].notes = "Offline merge completed."
+                }
                 try? repository.save(recordings[index])
             }
         }
@@ -469,23 +473,9 @@ final class RecordingWorkflowController {
         for recording: RecordingSession,
         onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
     ) async throws -> TranscriptionResult {
-        let sessionDirectory = try repository.sessionDirectory(for: recording.id)
-        let availability = runtimeProfileSelector.transcriptionAvailability(for: selectedModelProfile)
-        switch availability {
-        case .unavailable:
-            throw RecordingWorkflowError.transcriptionUnavailable(availability)
-        case .degradedNoDiarization:
-            guard transcriptionPipeline.mode == .legacyFullFileDebug else {
-                throw RecordingWorkflowError.transcriptionUnavailable(
-                    .unavailable(
-                        reason: "System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
-                    )
-                )
-            }
-        case .ready:
-            break
-        }
+        try transcriptionPrecheck()
 
+        let sessionDirectory = try repository.sessionDirectory(for: recording.id)
         let runtimeProfile: InferenceRuntimeProfile
         do {
             runtimeProfile = try runtimeProfileSelector.resolveTranscriptionProfile(for: selectedModelProfile)
@@ -529,12 +519,30 @@ final class RecordingWorkflowController {
         return updated
     }
 
+    func transcriptionPrecheck() throws -> TranscriptionAvailability {
+        let availability = runtimeProfileSelector.transcriptionAvailability(for: selectedModelProfile)
+        try validateTranscriptionAvailability(availability)
+        return availability
+    }
+
+    func transcriptionAvailabilityCheck() throws -> TranscriptionAvailability {
+        try transcriptionPrecheck()
+    }
+
+    func transcriptionFailureNote(for error: Error) -> String {
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else {
+            return "Transcript failed."
+        }
+        return "Transcript failed: \(message)"
+    }
+
     private func shouldRecoverTranscription(for recording: RecordingSession) -> Bool {
         switch recording.transcriptState {
         case .queued, .transcribingMic, .transcribingSystem, .diarizingSystem, .merging, .renderingOutputs:
             return true
         case .failed:
-            return recording.assets.transcriptJSONFile == nil
+            return false
         case .idle, .ready:
             return false
         }
@@ -661,12 +669,20 @@ final class RecordingWorkflowController {
         """
     }
 
-    private func transcriptionFailureNote(for error: Error) -> String {
-        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty else {
-            return "Transcript failed."
+    private func validateTranscriptionAvailability(_ availability: TranscriptionAvailability) throws {
+        switch availability {
+        case .unavailable:
+            throw RecordingWorkflowError.transcriptionUnavailable(availability)
+        case .degradedNoDiarization:
+            break
+        case .ready:
+            break
         }
-        return "Transcript failed: \(message)"
+    }
+
+    private func isTranscriptFailureNote(_ notes: String) -> Bool {
+        notes.hasPrefix("Transcript failed:")
+            || notes == "Transcript failed."
     }
 
     private func parseSRTTimeline(_ text: String?) -> [(seconds: Int, timestamp: String, text: String)] {

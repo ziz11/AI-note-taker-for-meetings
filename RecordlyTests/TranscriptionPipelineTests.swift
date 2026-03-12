@@ -919,6 +919,68 @@ final class TranscriptionPipelineTests: XCTestCase {
         )
     }
 
+    func testTranscriptRenderFallsBackToSegmentTextWhenWordTokensLookSyllabified() {
+        let service = TranscriptRenderService()
+        let sessionID = UUID()
+        let document = TranscriptDocument(
+            version: 1,
+            sessionID: sessionID,
+            createdAt: Date(),
+            channelsPresent: [.mic],
+            diarizationApplied: false,
+            mergePolicy: .deterministicStartEndChannelID,
+            segments: [
+                TranscriptSegment(
+                    id: "mic-ru-1",
+                    channel: .mic,
+                    speaker: "You",
+                    speakerRole: .me,
+                    speakerId: "me",
+                    startMs: 133_000,
+                    endMs: 135_000,
+                    text: "Технологии обанкротили всех нас.",
+                    confidence: 0.95,
+                    language: "ru",
+                    speakerConfidence: nil,
+                    words: [
+                        ASRWord(word: "Те", startMs: 133_000, endMs: 133_120, confidence: 0.9),
+                        ASRWord(word: "х", startMs: 133_130, endMs: 133_160, confidence: 0.9),
+                        ASRWord(word: "но", startMs: 133_170, endMs: 133_260, confidence: 0.9),
+                        ASRWord(word: "ло", startMs: 133_270, endMs: 133_360, confidence: 0.9),
+                        ASRWord(word: "ги", startMs: 133_370, endMs: 133_460, confidence: 0.9),
+                        ASRWord(word: "и", startMs: 133_470, endMs: 133_520, confidence: 0.9),
+                        ASRWord(word: "об", startMs: 133_560, endMs: 133_650, confidence: 0.9),
+                        ASRWord(word: "ан", startMs: 133_660, endMs: 133_750, confidence: 0.9),
+                        ASRWord(word: "к", startMs: 133_760, endMs: 133_790, confidence: 0.9),
+                        ASRWord(word: "ро", startMs: 133_800, endMs: 133_890, confidence: 0.9),
+                        ASRWord(word: "ти", startMs: 133_900, endMs: 133_990, confidence: 0.9),
+                        ASRWord(word: "ли", startMs: 134_000, endMs: 134_090, confidence: 0.9),
+                        ASRWord(word: "все", startMs: 134_130, endMs: 134_260, confidence: 0.9),
+                        ASRWord(word: "х", startMs: 134_270, endMs: 134_300, confidence: 0.9),
+                        ASRWord(word: "нас.", startMs: 134_340, endMs: 135_000, confidence: 0.9)
+                    ]
+                )
+            ]
+        )
+
+        let rendered = service.render(document: document)
+
+        XCTAssertEqual(
+            rendered.transcriptText,
+            """
+            [02:13 - 02:15] [You] Технологии обанкротили всех нас.
+            """
+        )
+        XCTAssertEqual(
+            rendered.srtText,
+            """
+            1
+            00:02:13,000 --> 00:02:15,000
+            [You] Технологии обанкротили всех нас.
+            """
+        )
+    }
+
     func testProcessDiarizationRunnerParsesValidJSON() async throws {
         let executor = MockDiarizationProcessExecutor(result: DiarizationProcessResult(
             exitCode: 0,
