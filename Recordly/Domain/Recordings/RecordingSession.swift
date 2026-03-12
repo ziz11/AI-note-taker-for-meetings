@@ -142,6 +142,12 @@ enum PlaybackAudioSource: String, CaseIterable, Equatable {
     }
 }
 
+enum TranscriptionAudioProvenance: String, Codable, CaseIterable, Hashable {
+    case cafPcmFastPath
+    case m4aRecovery
+    case m4aReprocess
+}
+
 struct RecordingAssets: Codable, Hashable {
     var microphoneFile: String? = nil
     var systemAudioFile: String? = nil
@@ -158,6 +164,7 @@ struct RecordingAssets: Codable, Hashable {
     var summaryFile: String? = nil
     var connectorNotesFile: String? = nil
     var degradedReasons: [String]? = nil
+    var transcriptionAudioProvenance: TranscriptionAudioProvenance? = nil
 }
 
 struct RecordingSession: Identifiable, Codable, Hashable {

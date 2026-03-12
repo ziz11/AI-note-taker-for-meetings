@@ -57,6 +57,7 @@ struct TranscriptionResult {
     var degradedReasons: [PipelineDegradationReason]
     var state: TranscriptPipelineState
     var summary: String
+    var audioProvenance: TranscriptionAudioProvenance?
 }
 
 enum SystemTranscriptionMode: Sendable {
@@ -109,19 +110,24 @@ struct TranscriptionPipeline {
     ) async throws -> TranscriptionResult {
         await onStateChange?(.queued)
 
-        let micInput = try prepareInput(
-            fileName: recording.assets.microphoneFile,
+        let micInput = try preparePreferredLiveCaptureInput(
+            recording: recording,
             channel: .mic,
             in: sessionDirectory
         )
-        let systemInput = try prepareInput(
-            fileName: recording.assets.systemAudioFile,
+        let systemInput = try preparePreferredLiveCaptureInput(
+            recording: recording,
             channel: .system,
             in: sessionDirectory
         )
         let importedInput = try prepareImportedInput(
             fileName: recording.assets.importedAudioFile,
             in: sessionDirectory
+        )
+        let audioProvenance = resolveAudioProvenance(
+            recording: recording,
+            micInput: micInput,
+            systemInput: systemInput
         )
 
         guard micInput != nil || systemInput != nil || importedInput != nil else {
@@ -271,11 +277,55 @@ struct TranscriptionPipeline {
             summary: makeReadySummary(
                 diarizationDegradedReason: diarizationOutcome.degradedReason,
                 degradedReasons: degradedReasons
-            )
+            ),
+            audioProvenance: audioProvenance
         )
     }
 
-    private func prepareInput(
+    private func preparePreferredLiveCaptureInput(
+        recording: RecordingSession,
+        channel: TranscriptChannel,
+        in sessionDirectory: URL
+    ) throws -> PreparedAudioInput? {
+        guard recording.source == .liveCapture else {
+            let fileName = channel == .mic ? recording.assets.microphoneFile : recording.assets.systemAudioFile
+            return try prepareInputCandidate(fileName: fileName, channel: channel, in: sessionDirectory)
+        }
+
+        for candidate in liveCaptureCandidates(for: channel, recording: recording) {
+            if let prepared = try prepareInputCandidate(fileName: candidate, channel: channel, in: sessionDirectory) {
+                return prepared
+            }
+        }
+        return nil
+    }
+
+    private func liveCaptureCandidates(
+        for channel: TranscriptChannel,
+        recording: RecordingSession
+    ) -> [String] {
+        let assetFileName = channel == .mic ? recording.assets.microphoneFile : recording.assets.systemAudioFile
+        let canonicalDurable = channel == .mic ? "mic.m4a" : "system.m4a"
+        let legacyRaw = channel == .mic ? "mic.raw.flac" : "system.raw.flac"
+        let canonicalRaw = channel == .mic ? "mic.raw.caf" : "system.raw.caf"
+
+        let orderedCandidates = [
+            canonicalRaw,
+            legacyRaw,
+            canonicalDurable,
+            assetFileName
+        ]
+
+        var unique: [String] = []
+        for candidate in orderedCandidates.compactMap({ $0 }) where candidate != "merged-call.m4a" {
+            if !unique.contains(candidate) {
+                unique.append(candidate)
+            }
+        }
+        return unique
+    }
+
+    private func prepareInputCandidate(
         fileName: String?,
         channel: TranscriptChannel,
         in sessionDirectory: URL
@@ -300,6 +350,42 @@ struct TranscriptionPipeline {
             .sessionAsset(fileName: fileName, channel: .mic),
             in: sessionDirectory
         )
+    }
+
+    private func resolveAudioProvenance(
+        recording: RecordingSession,
+        micInput: PreparedAudioInput?,
+        systemInput: PreparedAudioInput?
+    ) -> TranscriptionAudioProvenance? {
+        guard recording.source == .liveCapture else {
+            return nil
+        }
+
+        let selectedFileNames = [micInput?.url.lastPathComponent, systemInput?.url.lastPathComponent].compactMap { $0 }
+        guard !selectedFileNames.isEmpty else {
+            return nil
+        }
+
+        if selectedFileNames.contains(where: isTemporaryFastPathFileName(_:)) {
+            return .cafPcmFastPath
+        }
+
+        if selectedFileNames.contains(where: isDurableSourceFileName(_:)) {
+            return .m4aRecovery
+        }
+
+        return nil
+    }
+
+    private func isTemporaryFastPathFileName(_ fileName: String) -> Bool {
+        fileName == "mic.raw.caf"
+            || fileName == "system.raw.caf"
+            || fileName.hasSuffix(".raw.flac")
+    }
+
+    private func isDurableSourceFileName(_ fileName: String) -> Bool {
+        fileName == "mic.m4a"
+            || fileName == "system.m4a"
     }
 
     private func runMainPathASR(
@@ -582,7 +668,7 @@ struct TranscriptionPipeline {
             return DiarizationLoadOutcome(document: nil, degradedReason: nil, modelUsed: nil)
         }
 
-        guard ["system.raw.caf", "system.raw.flac"].contains(systemAudioURL.lastPathComponent) else {
+        guard ["system.raw.caf", "system.raw.flac", "system.m4a"].contains(systemAudioURL.lastPathComponent) else {
             return DiarizationLoadOutcome(document: nil, degradedReason: "unsupported system audio source", modelUsed: nil)
         }
 

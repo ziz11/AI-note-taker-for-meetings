@@ -141,6 +141,18 @@ Fallback ownership:
 - ASR is not resolved from user-picked Whisper `.bin` files in this branch.
 - `InferenceRuntimeProfile` carries resolved artifacts and stage runtime params into pipeline execution.
 
+## Model Settings Surface
+
+- The Models settings screen should be organized by provider/runtime first, then by task/stage inside each provider.
+- The screen must preserve two separate actions:
+  - download or install a model
+  - select the active model for the relevant stage
+- SDK-managed models and local-file-backed models should be visually distinguished rather than merged into a single flat list.
+
+Reference brief:
+
+- `docs/prompts/2026-03-11-model-settings-screen-redesign.md`
+
 ## Audio Boundary
 
 - Capture and imported-audio processing keep session storage centered on canonical PCM in CAF (`mic.raw.caf`, `system.raw.caf`, `merged-call.caf`).

@@ -66,6 +66,8 @@ Model layer:
 - `FluidAudioModelProvider` owns ASR model provisioning (SDK-managed download/cache/resolve).
 - Any legacy ASR preference fields that still exist are compatibility residue, not an active local-file Whisper path.
 - Model layers must not become orchestration or inference-execution layers.
+- Models settings UX should remain provider-first. Do not flatten provider-managed and local-file-backed models into one generic selector.
+- Keep download/install actions separate from active-model selection in the settings surface.
 
 Backend modules:
 
@@ -244,3 +246,7 @@ Do not:
 - `Recordly/Infrastructure/Transcription/TranscriptionPipeline.swift`
 - `Recordly/Infrastructure/Models/ModelManager.swift`
 - `Recordly/Infrastructure/Persistence/RecordingsRepository.swift`
+
+UI design reference:
+
+- `docs/prompts/2026-03-11-model-settings-screen-redesign.md`

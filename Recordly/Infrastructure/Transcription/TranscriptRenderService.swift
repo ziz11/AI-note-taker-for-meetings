@@ -32,15 +32,17 @@ struct StructuredTranscriptRenderOutput {
 
 struct TranscriptRenderService {
     func render(document: TranscriptDocument) -> TranscriptRenderOutput {
-        let transcript = document.segments
-            .map { "[\(Self.formatTime($0.startMs)) - \(Self.formatTime($0.endMs))] [\($0.displaySpeakerLabel)] \($0.text)" }
+        let renderedSegments = displaySegments(for: document.segments)
+
+        let transcript = renderedSegments
+            .map { "[\(Self.formatTime($0.startMs)) - \(Self.formatTime($0.endMs))] [\($0.speaker)] \($0.text)" }
             .joined(separator: "\n")
 
-        let srtChunks = document.segments.enumerated().map { index, segment in
+        let srtChunks = renderedSegments.enumerated().map { index, segment in
             """
             \(index + 1)
             \(Self.formatSRTTime(segment.startMs)) --> \(Self.formatSRTTime(segment.endMs))
-            [\(segment.displaySpeakerLabel)] \(segment.text)
+            [\(segment.speaker)] \(segment.text)
             """
         }
 
@@ -48,6 +50,14 @@ struct TranscriptRenderService {
             transcriptText: transcript,
             srtText: srtChunks.joined(separator: "\n\n")
         )
+    }
+
+    func renderPlainText(document: TranscriptDocument) -> String {
+        render(document: document).transcriptText
+    }
+
+    private func displaySegments(for segments: [TranscriptSegment]) -> [StructuredTranscriptSegment] {
+        StructuredTranscriptExportService().makeDisplaySegments(from: segments)
     }
 }
 
@@ -68,14 +78,7 @@ struct StructuredTranscriptExportService {
         document: TranscriptDocument,
         diarization: DiarizationDocument? = nil
     ) -> StructuredTranscriptRenderOutput {
-        let structuredSegments = document.segments
-            .flatMap { reflow(segment: $0, diarization: diarization) }
-            .sorted { lhs, rhs in
-                if lhs.startMs != rhs.startMs { return lhs.startMs < rhs.startMs }
-                if lhs.endMs != rhs.endMs { return lhs.endMs < rhs.endMs }
-                if lhs.channel.priority != rhs.channel.priority { return lhs.channel.priority < rhs.channel.priority }
-                return lhs.id < rhs.id
-            }
+        let structuredSegments = makeDisplaySegments(from: document.segments, diarization: diarization)
 
         let structuredDocument = StructuredTranscriptDocument(
             version: 1,
@@ -92,6 +95,20 @@ struct StructuredTranscriptExportService {
             document: structuredDocument,
             text: text
         )
+    }
+
+    func makeDisplaySegments(
+        from segments: [TranscriptSegment],
+        diarization: DiarizationDocument? = nil
+    ) -> [StructuredTranscriptSegment] {
+        segments
+            .flatMap { reflow(segment: $0, diarization: diarization) }
+            .sorted { lhs, rhs in
+                if lhs.startMs != rhs.startMs { return lhs.startMs < rhs.startMs }
+                if lhs.endMs != rhs.endMs { return lhs.endMs < rhs.endMs }
+                if lhs.channel.priority != rhs.channel.priority { return lhs.channel.priority < rhs.channel.priority }
+                return lhs.id < rhs.id
+            }
     }
 
     private func reflow(

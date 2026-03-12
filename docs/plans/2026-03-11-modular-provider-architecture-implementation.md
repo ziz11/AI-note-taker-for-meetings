@@ -207,6 +207,16 @@ Expected: FAIL because the UI/view-model does not yet expose the provider-select
 
 Update the settings view-model and view to show provider pickers/cards immediately, with only valid provider options exposed. Keep existing model download/provisioning cards where they still reflect real runtime behavior.
 
+UI requirements for this task:
+
+- organize the screen by provider/runtime first
+- inside each provider, group models by stage (`ASR`, `diarization`, `summarization`)
+- make download/install actions visually distinct from select-active-model actions
+- show installed, selected, downloading, and failed states directly in each provider/task section
+
+Reference prompt for the UI pass:
+- `docs/prompts/2026-03-11-model-settings-screen-redesign.md`
+
 **Step 4: Run test to verify it passes**
 
 Run: `xcodebuild test -scheme Recordly -only-testing:RecordlyTests/RecordingsPhaseOneTests`

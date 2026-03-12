@@ -124,6 +124,14 @@ Decide first whether the capability is cross-backend or backend-private.
 - ASR model provisioning is SDK-managed via `FluidAudioModelProvider`. Do not force it into local-file picking patterns.
 - Diarization and summarization models remain local-file based via `ModelManager`.
 - Treat model artifact resolution and backend selection as separate concerns.
+- Models settings UX must keep provider/runtime grouping explicit. Do not collapse provider-owned models into one flat undifferentiated picker.
+- Models settings UX must preserve two distinct user actions:
+  - download or install a model
+  - select the active model for a stage
+
+Reference UI brief:
+
+- `docs/prompts/2026-03-11-model-settings-screen-redesign.md`
 
 ## Extension Checklists
 

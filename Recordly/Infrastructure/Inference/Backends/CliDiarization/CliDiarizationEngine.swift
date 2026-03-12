@@ -229,7 +229,7 @@ struct CliDiarizationEngine: DiarizationEngine {
             throw DiarizationRuntimeError.invalidInput
         }
 
-        guard ["system.raw.caf", "system.raw.flac"].contains(systemAudioURL.lastPathComponent) else {
+        guard ["system.raw.caf", "system.raw.flac", "system.m4a"].contains(systemAudioURL.lastPathComponent) else {
             throw DiarizationRuntimeError.invalidInput
         }
 
