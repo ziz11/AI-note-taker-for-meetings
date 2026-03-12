@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import Recordly
 
@@ -359,11 +360,318 @@ final class TranscriptionPipelineTests: XCTestCase {
         )
 
         XCTAssertEqual(asrEngine.recordedChannels, [.mic, .system])
+        XCTAssertEqual(
+            asrEngine.recordedAudioFileNames,
+            ["mic.raw.flac", "system.raw.flac"]
+        )
 
         let doc = try decodeTranscriptDocument(in: fixture.directory)
         let systemSegment = try XCTUnwrap(doc.segments.first(where: { $0.channel == .system }))
         XCTAssertEqual(systemSegment.speaker, "Speaker 1")
         XCTAssertEqual(systemSegment.speakerId, "remote_1")
+    }
+
+    func testLiveCaptureImmediatePathPrefersCAFSourceTracksOverDurableM4A() async throws {
+        let asrEngine = RecordingASREngine { channel, sessionID in
+            ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: [
+                    ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1000, text: channel.rawValue, confidence: nil, language: "en", words: nil)
+                ]
+            )
+        }
+        let pipeline = TranscriptionPipeline(mode: .legacyFullFileDebug)
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: asrEngine,
+            diarizationEngine: SimpleDiarizationEngine()
+        )
+
+        let fixture = try makeLiveCaptureSelectionFixture(
+            microphoneAsset: "mic.m4a",
+            systemAsset: "system.m4a",
+            files: [
+                "mic.raw.caf": "mic-caf",
+                "system.raw.caf": "system-caf",
+                "mic.m4a": "mic-m4a",
+                "system.m4a": "system-m4a"
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        _ = try await pipeline.process(
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: fixture.diarizationModelURL),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(
+            asrEngine.recordedAudioFileNames,
+            ["mic.raw.caf", "system.raw.caf"]
+        )
+    }
+
+    func testLiveCaptureRecoveryFallsBackToDurableM4AWhenCAFSourceTracksMissing() async throws {
+        let asrEngine = RecordingASREngine { channel, sessionID in
+            ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: [
+                    ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1000, text: channel.rawValue, confidence: nil, language: "en", words: nil)
+                ]
+            )
+        }
+        let pipeline = TranscriptionPipeline(mode: .legacyFullFileDebug)
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: asrEngine,
+            diarizationEngine: SimpleDiarizationEngine()
+        )
+
+        let fixture = try makeLiveCaptureSelectionFixture(
+            microphoneAsset: "mic.m4a",
+            systemAsset: "system.m4a",
+            files: [
+                "mic.m4a": "mic-m4a",
+                "system.m4a": "system-m4a"
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        _ = try await pipeline.process(
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: fixture.diarizationModelURL),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(
+            asrEngine.recordedAudioFileNames,
+            ["mic.m4a", "system.m4a"]
+        )
+    }
+
+    func testLiveCaptureSourceSelectionNeverUsesMergedPlaybackTrackWhenSourceTracksExist() async throws {
+        let asrEngine = RecordingASREngine { channel, sessionID in
+            ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: [
+                    ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1000, text: channel.rawValue, confidence: nil, language: "en", words: nil)
+                ]
+            )
+        }
+        let pipeline = TranscriptionPipeline(mode: .legacyFullFileDebug)
+        let factory = StaticInferenceEngineFactory(
+            asrEngine: asrEngine,
+            diarizationEngine: SimpleDiarizationEngine()
+        )
+
+        let fixture = try makeLiveCaptureSelectionFixture(
+            microphoneAsset: "mic.m4a",
+            systemAsset: "merged-call.m4a",
+            files: [
+                "mic.raw.caf": "mic-caf",
+                "system.raw.caf": "system-caf",
+                "mic.m4a": "mic-m4a",
+                "system.m4a": "system-m4a",
+                "merged-call.m4a": "mixed"
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        _ = try await pipeline.process(
+            recording: fixture.recording,
+            in: fixture.directory,
+            runtimeProfile: makeRuntimeProfile(asrModelURL: fixture.asrModelURL, diarizationModelURL: fixture.diarizationModelURL),
+            engineFactory: factory
+        )
+
+        XCTAssertEqual(
+            asrEngine.recordedAudioFileNames,
+            ["mic.raw.caf", "system.raw.caf"]
+        )
+        XCTAssertFalse(asrEngine.recordedAudioFileNames.contains("merged-call.m4a"))
+    }
+
+    func testRecordingSessionPersistsTranscriptionAudioProvenance() throws {
+        let session = RecordingSession(
+            id: UUID(),
+            title: "provenance",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .ready,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a",
+                transcriptionAudioProvenance: .m4aRecovery
+            )
+        )
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(session)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(RecordingSession.self, from: data)
+
+        XCTAssertEqual(decoded.assets.transcriptionAudioProvenance, .m4aRecovery)
+    }
+
+    func testMirroredTrackWriterCreatesTemporaryCAFAndDurableM4A() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        var writer: MirroredTrackWriter? = try MirroredTrackWriter(
+            temporary: PCMTrackWriter(
+                kind: .microphone,
+                fileName: "mic.raw.caf",
+                fileURL: directory.appendingPathComponent("mic.raw.caf")
+            ),
+            durable: PCMTrackWriter(
+                kind: .microphone,
+                fileName: "mic.m4a",
+                fileURL: directory.appendingPathComponent("mic.m4a")
+            )
+        )
+
+        try await writer?.append(pcmBuffer: makeCapturePCMBuffer(frameCount: 4_800))
+        let stats = await writer?.finalize() ?? []
+        writer = nil
+
+        XCTAssertEqual(stats.map(\.fileName), ["mic.raw.caf", "mic.m4a"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("mic.raw.caf").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("mic.m4a").path))
+        XCTAssertNoThrow(try AVAudioFile(forReading: directory.appendingPathComponent("mic.raw.caf")))
+        XCTAssertNoThrow(try AVAudioFile(forReading: directory.appendingPathComponent("mic.m4a")))
+    }
+
+    @MainActor
+    func testWorkflowRetainsTemporaryCAFDuringProcessingAndCleansThemAfterReady() async throws {
+        let asrEngine = RecordingASREngine { channel, sessionID in
+            ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: [
+                    ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1_000, text: channel.rawValue, confidence: nil, language: "en", words: nil)
+                ]
+            )
+        }
+        let fixture = try makeLiveCaptureSelectionFixture(
+            microphoneAsset: "mic.m4a",
+            systemAsset: "system.m4a",
+            files: [
+                "mic.raw.caf": "mic-caf",
+                "system.raw.caf": "system-caf",
+                "mic.m4a": "mic-m4a",
+                "system.m4a": "system-m4a"
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let repository = InMemoryRecordingsRepository(
+            recordings: [fixture.recording],
+            sessionDirectories: [fixture.recording.id: fixture.directory]
+        )
+        let controller = RecordingWorkflowController(
+            audioCaptureEngine: UnusedAudioCaptureEngine(),
+            transcriptionPipeline: TranscriptionPipeline(mode: .legacyFullFileDebug),
+            runtimeProfileSelector: WorkflowRuntimeProfileSelector(
+                transcriptionProfile: makeRuntimeProfile(
+                    asrModelURL: fixture.asrModelURL,
+                    diarizationModelURL: fixture.diarizationModelURL
+                )
+            ),
+            inferenceEngineFactory: StaticInferenceEngineFactory(
+                asrEngine: asrEngine,
+                diarizationEngine: SimpleDiarizationEngine()
+            ),
+            repository: repository
+        )
+
+        let micRawURL = fixture.directory.appendingPathComponent("mic.raw.caf")
+        let systemRawURL = fixture.directory.appendingPathComponent("system.raw.caf")
+        var observedPreTerminalState = false
+
+        let updated = try await controller.transcribe(recording: fixture.recording) { state in
+            guard state != .ready, state != .failed else { return }
+            observedPreTerminalState = true
+            XCTAssertTrue(FileManager.default.fileExists(atPath: micRawURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: systemRawURL.path))
+        }
+
+        XCTAssertTrue(observedPreTerminalState)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
+        XCTAssertEqual(updated.assets.transcriptionAudioProvenance, .cafPcmFastPath)
+    }
+
+    @MainActor
+    func testWorkflowCleansTemporaryCAFAfterFailedTranscription() async throws {
+        let fixture = try makeLiveCaptureSelectionFixture(
+            microphoneAsset: "mic.m4a",
+            systemAsset: "system.m4a",
+            files: [
+                "mic.raw.caf": "mic-caf",
+                "system.raw.caf": "system-caf",
+                "mic.m4a": "mic-m4a",
+                "system.m4a": "system-m4a"
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let repository = InMemoryRecordingsRepository(
+            recordings: [fixture.recording],
+            sessionDirectories: [fixture.recording.id: fixture.directory]
+        )
+        let controller = RecordingWorkflowController(
+            audioCaptureEngine: UnusedAudioCaptureEngine(),
+            transcriptionPipeline: TranscriptionPipeline(mode: .legacyFullFileDebug),
+            runtimeProfileSelector: WorkflowRuntimeProfileSelector(
+                transcriptionProfile: makeRuntimeProfile(
+                    asrModelURL: fixture.asrModelURL,
+                    diarizationModelURL: fixture.diarizationModelURL
+                )
+            ),
+            inferenceEngineFactory: StaticInferenceEngineFactory(
+                asrEngine: ClosureASREngine { _, _ in
+                    throw ASREngineRuntimeError.inferenceFailed(message: "boom")
+                },
+                diarizationEngine: SimpleDiarizationEngine()
+            ),
+            repository: repository
+        )
+
+        let micRawURL = fixture.directory.appendingPathComponent("mic.raw.caf")
+        let systemRawURL = fixture.directory.appendingPathComponent("system.raw.caf")
+        var observedPreTerminalState = false
+
+        await XCTAssertThrowsErrorAsync(
+            try await controller.transcribe(recording: fixture.recording) { state in
+                guard state != .ready, state != .failed else { return }
+                observedPreTerminalState = true
+                XCTAssertTrue(FileManager.default.fileExists(atPath: micRawURL.path))
+                XCTAssertTrue(FileManager.default.fileExists(atPath: systemRawURL.path))
+            }
+        )
+
+        XCTAssertTrue(observedPreTerminalState)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
+        XCTAssertEqual(repository.recordings.first?.transcriptState, .failed)
     }
 
     func testMicOnlyInputProducesTranscriptWithoutSystemArtifacts() async throws {
@@ -539,6 +847,65 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertNil(result.structuredTranscriptTextFile)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("structured-transcript.json").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("structured-transcript.txt").path))
+    }
+
+    func testTranscriptRenderSplitsMicSegmentIntoMultipleTimestampedLinesUsingWordTimings() {
+        let service = TranscriptRenderService()
+        let sessionID = UUID()
+        let document = TranscriptDocument(
+            version: 1,
+            sessionID: sessionID,
+            createdAt: Date(),
+            channelsPresent: [.mic],
+            diarizationApplied: false,
+            mergePolicy: .deterministicStartEndChannelID,
+            segments: [
+                TranscriptSegment(
+                    id: "mic-1",
+                    channel: .mic,
+                    speaker: "You",
+                    speakerRole: .me,
+                    speakerId: "me",
+                    startMs: 12_000,
+                    endMs: 55_280,
+                    text: "Hello there. This is a second sentence.",
+                    confidence: 0.95,
+                    language: "en",
+                    speakerConfidence: nil,
+                    words: [
+                        ASRWord(word: "Hello", startMs: 12_000, endMs: 12_400, confidence: 0.9),
+                        ASRWord(word: "there.", startMs: 12_450, endMs: 13_100, confidence: 0.9),
+                        ASRWord(word: "This", startMs: 13_900, endMs: 14_200, confidence: 0.9),
+                        ASRWord(word: "is", startMs: 14_250, endMs: 14_450, confidence: 0.9),
+                        ASRWord(word: "a", startMs: 14_500, endMs: 14_600, confidence: 0.9),
+                        ASRWord(word: "second", startMs: 14_650, endMs: 15_050, confidence: 0.9),
+                        ASRWord(word: "sentence.", startMs: 15_100, endMs: 15_700, confidence: 0.9)
+                    ]
+                )
+            ]
+        )
+
+        let rendered = service.render(document: document)
+
+        XCTAssertEqual(
+            rendered.transcriptText,
+            """
+            [00:12 - 00:13] [You] Hello there.
+            [00:13 - 00:15] [You] This is a second sentence.
+            """
+        )
+        XCTAssertEqual(
+            rendered.srtText,
+            """
+            1
+            00:00:12,000 --> 00:00:13,100
+            [You] Hello there.
+
+            2
+            00:00:13,900 --> 00:00:15,700
+            [You] This is a second sentence.
+            """
+        )
     }
 
     func testProcessDiarizationRunnerParsesValidJSON() async throws {
@@ -733,6 +1100,46 @@ final class TranscriptionPipelineTests: XCTestCase {
         return (temp, recording, asrModelURL, diarizationModelURL)
     }
 
+    private func makeLiveCaptureSelectionFixture(
+        microphoneAsset: String?,
+        systemAsset: String?,
+        files: [String: String]
+    ) throws -> (directory: URL, recording: RecordingSession, asrModelURL: URL, diarizationModelURL: URL) {
+        let sessionID = UUID()
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+
+        for (name, contents) in files {
+            FileManager.default.createFile(
+                atPath: temp.appendingPathComponent(name).path,
+                contents: Data(contents.utf8)
+            )
+        }
+
+        let asrModelURL = temp.appendingPathComponent("asr.bin")
+        let diarizationModelURL = temp.appendingPathComponent("diarization.bin")
+        try Data("asr".utf8).write(to: asrModelURL)
+        try Data("diarization".utf8).write(to: diarizationModelURL)
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "test",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: microphoneAsset,
+                systemAudioFile: systemAsset,
+                mergedCallFile: files.keys.contains("merged-call.m4a") ? "merged-call.m4a" : nil
+            )
+        )
+
+        return (temp, recording, asrModelURL, diarizationModelURL)
+    }
+
     private func decodeTranscriptDocument(in directory: URL) throws -> TranscriptDocument {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -760,6 +1167,27 @@ final class TranscriptionPipelineTests: XCTestCase {
             ),
             summarizationRuntimeSettings: .default
         )
+    }
+
+    private func makeCapturePCMBuffer(frameCount: AVAudioFrameCount) throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: PCMTrackWriter.canonicalSampleRate,
+                channels: PCMTrackWriter.canonicalChannels,
+                interleaved: false
+            )
+        )
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount))
+        buffer.frameLength = frameCount
+
+        if let channel = buffer.floatChannelData?[0] {
+            for index in 0 ..< Int(frameCount) {
+                channel[index] = sin(Float(index) * 0.01)
+            }
+        }
+
+        return buffer
     }
 
     private struct ClosureASREngine: ASREngine {
@@ -854,9 +1282,46 @@ final class TranscriptionPipelineTests: XCTestCase {
         }
     }
 
+    @MainActor
+    private struct WorkflowRuntimeProfileSelector: InferenceRuntimeProfileSelecting {
+        let transcriptionProfile: InferenceRuntimeProfile
+
+        func transcriptionAvailability(for profile: ModelProfile) -> TranscriptionAvailability {
+            .ready
+        }
+
+        func resolveTranscriptionProfile(for profile: ModelProfile) throws -> InferenceRuntimeProfile {
+            transcriptionProfile
+        }
+
+        func resolveSummarizationProfile(for profile: ModelProfile) throws -> InferenceRuntimeProfile {
+            transcriptionProfile
+        }
+    }
+
+    @MainActor
+    private final class UnusedAudioCaptureEngine: AudioCaptureEngine {
+        var systemAudioStatusLabel: String { "Captured" }
+
+        func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            XCTFail("startCapture should not be called in transcription cleanup tests")
+            return CaptureArtifacts()
+        }
+
+        func stopCapture() async throws -> CaptureArtifacts {
+            XCTFail("stopCapture should not be called in transcription cleanup tests")
+            return CaptureArtifacts()
+        }
+
+        func currentMicrophoneLevel() -> Double { 0 }
+        func currentSystemAudioLevel() -> Double { 0 }
+        func recoverPendingSessions(in recordingsDirectory: URL) async {}
+    }
+
     private final class RecordingASREngine: ASREngine, @unchecked Sendable {
         let handler: @Sendable (TranscriptChannel, UUID) throws -> ASRDocument
         private(set) var recordedChannels: [TranscriptChannel] = []
+        private(set) var recordedAudioFileNames: [String] = []
 
         init(handler: @escaping @Sendable (TranscriptChannel, UUID) throws -> ASRDocument) {
             self.handler = handler
@@ -871,6 +1336,7 @@ final class TranscriptionPipelineTests: XCTestCase {
             configuration: ASREngineConfiguration
         ) async throws -> ASRDocument {
             recordedChannels.append(channel)
+            recordedAudioFileNames.append(audioURL.lastPathComponent)
             return try handler(channel, sessionID)
         }
     }

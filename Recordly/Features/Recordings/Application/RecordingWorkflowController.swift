@@ -182,6 +182,7 @@ final class RecordingWorkflowController {
                 if let transcriptionResult {
                     updatedRecording = applyTranscriptionResult(transcriptionResult, to: updatedRecording)
                     try repository.save(updatedRecording)
+                    cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
                 }
                 processingError = nil
             } catch {
@@ -189,6 +190,7 @@ final class RecordingWorkflowController {
                 updatedRecording.lifecycleState = .failed
                 updatedRecording.notes = transcriptionFailureNote(for: error)
                 try? repository.save(updatedRecording)
+                cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
                 transcriptionResult = nil
                 processingError = error
             }
@@ -274,6 +276,7 @@ final class RecordingWorkflowController {
             )
             updatedRecording = applyTranscriptionResult(transcriptionResult, to: updatedRecording)
             try repository.save(updatedRecording)
+            cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
             if summarizeAfterTranscription {
                 do {
                     updatedRecording = try await summarize(recording: updatedRecording)
@@ -288,6 +291,7 @@ final class RecordingWorkflowController {
             updatedRecording.lifecycleState = .failed
             updatedRecording.notes = transcriptionFailureNote(for: error)
             try? repository.save(updatedRecording)
+            cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
             throw error
         }
     }
@@ -515,6 +519,7 @@ final class RecordingWorkflowController {
         updated.assets.micASRJSONFile = result.micASRJSONFile
         updated.assets.systemASRJSONFile = result.systemASRJSONFile
         updated.assets.systemDiarizationJSONFile = result.systemDiarizationJSONFile
+        updated.assets.transcriptionAudioProvenance = result.audioProvenance
         updated.transcriptState = result.state
         updated.lifecycleState = .ready
         updated.notes = result.summary
@@ -532,6 +537,37 @@ final class RecordingWorkflowController {
             return recording.assets.transcriptJSONFile == nil
         case .idle, .ready:
             return false
+        }
+    }
+
+    private func cleanupTemporaryCaptureArtifactsIfNeeded(for recording: inout RecordingSession) {
+        guard recording.source == .liveCapture else {
+            return
+        }
+
+        do {
+            let sessionDirectory = try repository.sessionDirectory(for: recording.id)
+            try cleanupTemporaryCaptureArtifacts(in: sessionDirectory)
+        } catch {
+            let warning = "Temporary audio cleanup failed: \(error.localizedDescription)"
+            if !recording.notes.contains(warning) {
+                recording.notes = recording.notes.isEmpty ? warning : "\(recording.notes) \(warning)"
+            }
+            try? repository.save(recording)
+        }
+    }
+
+    private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) throws {
+        let fileManager = FileManager.default
+        for fileName in [
+            "mic.raw.caf",
+            "system.raw.caf"
+        ] {
+            let url = sessionDirectory.appendingPathComponent(fileName)
+            guard fileManager.fileExists(atPath: url.path) else {
+                continue
+            }
+            try fileManager.removeItem(at: url)
         }
     }
 

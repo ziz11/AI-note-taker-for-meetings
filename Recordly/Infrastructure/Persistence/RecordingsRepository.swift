@@ -116,9 +116,7 @@ final class RecordingsRepository: RecordingsPersistence {
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 if let document = try? decoder.decode(TranscriptDocument.self, from: data) {
-                    let transcript = document.segments
-                        .map { "[\($0.displaySpeakerLabel)] \($0.text)" }
-                        .joined(separator: "\n")
+                    let transcript = TranscriptRenderService().renderPlainText(document: document)
                     transcriptCache[recording.id] = transcript
                     return transcript
                 }
