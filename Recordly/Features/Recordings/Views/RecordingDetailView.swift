@@ -35,7 +35,7 @@ struct RecordingDetailView: View {
             }
             .background {
                 Rectangle()
-                    .fill(detailBackground)
+                    .fill(AppTheme.contentBackground)
                     .ignoresSafeArea()
             }
         }
@@ -98,8 +98,8 @@ struct RecordingDetailView: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 54)
-        .background(Color.white.opacity(0.055), in: Capsule(style: .continuous))
-        .overlay(Capsule(style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .background(AppTheme.panelFill, in: Capsule(style: .continuous))
+        .overlay(Capsule(style: .continuous).stroke(AppTheme.hairline, lineWidth: 1))
     }
 
     private func heroPanel(isCompact: Bool) -> some View {
@@ -109,7 +109,7 @@ struct RecordingDetailView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: isCompact ? 28 : 40, weight: .bold, design: .rounded))
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .focused($isTitleFieldFocused)
                     .onSubmit {
                         applyRename()
@@ -130,7 +130,7 @@ struct RecordingDetailView: View {
                 } label: {
                     Text(recording.title)
                         .font(.system(size: isCompact ? 28 : 40, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
                         .frame(maxWidth: .infinity)
@@ -141,20 +141,20 @@ struct RecordingDetailView: View {
             HStack(spacing: 8) {
                 heroMetaText(recording.createdDayLabel)
                 Text("•")
-                    .foregroundStyle(Color.white.opacity(0.25))
+                    .foregroundStyle(AppTheme.tertiaryText)
                 heroMetaText(recording.durationLabel)
                 Text("•")
-                    .foregroundStyle(Color.white.opacity(0.25))
+                    .foregroundStyle(AppTheme.tertiaryText)
                 heroMetaText(recording.lifecycleState.label)
             }
 
             Text(recording.transcriptState.label)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.5))
+                .foregroundStyle(AppTheme.secondaryText)
         }
         .padding(isCompact ? 16 : 22)
         .frame(maxWidth: .infinity)
-        .background(panelBackground, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .appPanel(prominent: true, cornerRadius: 30)
     }
 
     @ViewBuilder
@@ -173,7 +173,7 @@ struct RecordingDetailView: View {
         VStack(spacing: isCompact ? 18 : 22) {
             VStack(spacing: 10) {
                 Slider(value: playbackProgressBinding, in: 0...1)
-                    .tint(Color(red: 0.13, green: 0.58, blue: 0.98))
+                    .tint(AppTheme.accent)
                     .disabled(!store.playbackState.isAvailable)
 
                 HStack {
@@ -182,7 +182,7 @@ struct RecordingDetailView: View {
                     Text(store.playbackState.remainingTimeLabel)
                 }
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.56))
+                .foregroundStyle(AppTheme.secondaryText)
                 .monospacedDigit()
             }
 
@@ -199,17 +199,10 @@ struct RecordingDetailView: View {
                         .foregroundStyle(.white)
                         .frame(width: isCompact ? 84 : 94, height: isCompact ? 84 : 94)
                         .background(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 0.17, green: 0.61, blue: 0.99),
-                                    Color(red: 0.05, green: 0.43, blue: 0.90)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
+                            AppTheme.accent.gradient,
                             in: Circle()
                         )
-                        .overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 1))
+                        .overlay(Circle().stroke(AppTheme.hairline, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.space, modifiers: [])
@@ -234,28 +227,14 @@ struct RecordingDetailView: View {
         }
         .padding(isCompact ? 20 : 24)
         .frame(maxWidth: .infinity)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color.white.opacity(0.08),
-                    Color.white.opacity(0.045)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 34, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .appPanel(prominent: true, cornerRadius: 34)
     }
 
     private func secondaryActionsPanel(isCompact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Actions")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.46))
+                .foregroundStyle(AppTheme.secondaryText)
 
             WrappingHStack(maxWidth: actionsPanelWidth, horizontalSpacing: 10, verticalSpacing: 10) {
                 secondaryActionButton(
@@ -327,7 +306,7 @@ struct RecordingDetailView: View {
         }
         .padding(isCompact ? 16 : 18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(panelBackground, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .appPanel(cornerRadius: 26)
     }
 
     private func notesPanel(isCompact: Bool) -> some View {
@@ -352,20 +331,20 @@ struct RecordingDetailView: View {
                     Label("Copy", systemImage: "doc.on.doc")
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(Color.white.opacity(0.14))
+                .tint(AppTheme.accent)
             }
 
             Text(activeNotesText)
                 .font(.system(size: 14))
-                .foregroundStyle(activeNotesIsFallback ? Color.white.opacity(0.48) : .white)
+                .foregroundStyle(activeNotesIsFallback ? AppTheme.secondaryText : .primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(isCompact ? 16 : 18)
-                .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .background(AppTheme.subtleFill, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .padding(isCompact ? 16 : 18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(panelBackground, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .appPanel(cornerRadius: 26)
     }
 
     private func metadataSection(isCompact: Bool) -> some View {
@@ -392,10 +371,10 @@ struct RecordingDetailView: View {
             .padding(.top, 14)
         }
         .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(.white)
+        .foregroundStyle(.primary)
         .padding(isCompact ? 16 : 18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(panelBackground, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .appPanel(cornerRadius: 26)
     }
 
     private var sourceSelector: some View {
@@ -412,11 +391,11 @@ struct RecordingDetailView: View {
                         }
                     }
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(option.source == store.playbackState.selectedSource ? .white : Color.white.opacity(0.6))
+                    .foregroundStyle(option.source == store.playbackState.selectedSource ? .primary : AppTheme.secondaryText)
                     .padding(.horizontal, 12)
                     .frame(height: 34)
                     .background(
-                        (option.source == store.playbackState.selectedSource ? Color.white.opacity(0.12) : Color.white.opacity(0.06)),
+                        (option.source == store.playbackState.selectedSource ? AppTheme.selectionFill : AppTheme.panelFill),
                         in: Capsule(style: .continuous)
                     )
                 }
@@ -439,34 +418,12 @@ struct RecordingDetailView: View {
                 Text(store.playbackState.playbackRateLabel)
             }
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 14)
             .frame(height: 36)
-            .background(Color.white.opacity(0.08), in: Capsule(style: .continuous))
+            .background(AppTheme.panelFill, in: Capsule(style: .continuous))
         }
         .menuStyle(.button)
-    }
-
-    private var panelBackground: some ShapeStyle {
-        LinearGradient(
-            colors: [
-                Color.white.opacity(0.055),
-                Color.white.opacity(0.03)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
-    private var detailBackground: some ShapeStyle {
-        LinearGradient(
-            colors: [
-                Color(red: 0.09, green: 0.09, blue: 0.10),
-                Color(red: 0.05, green: 0.05, blue: 0.06)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
     }
 
     private var hasTranscript: Bool {
@@ -503,7 +460,7 @@ struct RecordingDetailView: View {
 
     private var clusterDivider: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.08))
+            .fill(AppTheme.hairline)
             .frame(width: 1, height: 24)
             .padding(.vertical, 14)
     }
@@ -542,7 +499,7 @@ struct RecordingDetailView: View {
     private func heroMetaText(_ value: String) -> some View {
         Text(value)
             .font(.system(size: 15, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.white.opacity(0.72))
+            .foregroundStyle(AppTheme.secondaryText)
             .monospacedDigit()
     }
 
@@ -550,9 +507,9 @@ struct RecordingDetailView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .frame(width: 64, height: 64)
-                .background(Color.white.opacity(0.08), in: Circle())
+                .background(AppTheme.panelFill, in: Circle())
         }
         .buttonStyle(.plain)
         .disabled(!store.playbackState.isAvailable || store.isRecording)
@@ -567,10 +524,10 @@ struct RecordingDetailView: View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 14)
                 .frame(height: 38)
-                .background(Color.white.opacity(0.08), in: Capsule(style: .continuous))
+                .background(AppTheme.panelFill, in: Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
@@ -582,29 +539,29 @@ struct RecordingDetailView: View {
             HStack {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Spacer(minLength: 8)
                 Text(detail)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.5))
+                    .foregroundStyle(AppTheme.secondaryText)
             }
 
             ProgressView(value: value, total: 1)
-                .tint(Color(red: 0.13, green: 0.58, blue: 0.98))
+                .tint(AppTheme.accent)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(panelBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .appPanel(cornerRadius: 24)
     }
 
     private func metadataItem(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.46))
+                .foregroundStyle(AppTheme.secondaryText)
             Text(value)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

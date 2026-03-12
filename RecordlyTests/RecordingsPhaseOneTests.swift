@@ -99,6 +99,22 @@ final class RecordingsPhaseOneTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: duplicateDirectory.appendingPathComponent("transcript.txt").path))
     }
 
+    func testOpenModelsFromAlertOpensModelSettingsSheetAndRequestsFocus() {
+        let repository = InMemoryRecordingsRepository()
+        let store = makeStore(repository: repository)
+
+        store.viewState.alert = RecordingsAlertState(
+            message: "Models required",
+            primaryAction: .openModels
+        )
+
+        store.openModelsFromAlert()
+
+        XCTAssertTrue(store.isModelsSheetPresented)
+        XCTAssertNil(store.viewState.alert)
+        XCTAssertTrue(store.modelSettingsViewModelProxy.shouldScrollToDiarizationSection)
+    }
+
     func testPlaybackRateCanChangeAndSurvivesSourceSwitch() {
         let repository = InMemoryRecordingsRepository()
         let controller = PlaybackController(repository: repository, previewMode: true)
@@ -130,8 +146,13 @@ final class RecordingsPhaseOneTests: XCTestCase {
 
     private func makeStore(repository: InMemoryRecordingsRepository) -> RecordingsStore {
         let modelManager = ModelManager()
-        let fluidProvider = FluidAudioModelProvider()
-        let composition = DefaultInferenceComposition.make(modelManager: modelManager, fluidAudioModelProvider: fluidProvider)
+        let fluidProvider = FluidAudioASRModelProvider()
+        let diarizationProvider = FluidAudioDiarizationModelProvider()
+        let composition = DefaultInferenceComposition.make(
+            modelManager: modelManager,
+            asrModelProvider: fluidProvider,
+            diarizationModelProvider: diarizationProvider
+        )
         return RecordingsStore(
             audioCaptureEngine: composition.audioCaptureEngine,
             transcriptionPipeline: TranscriptionPipeline(),
@@ -140,6 +161,7 @@ final class RecordingsPhaseOneTests: XCTestCase {
             transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
             modelManager: modelManager,
             fluidAudioModelProvider: fluidProvider,
+            fluidAudioDiarizationModelProvider: diarizationProvider,
             repository: repository,
             previewMode: false
         )

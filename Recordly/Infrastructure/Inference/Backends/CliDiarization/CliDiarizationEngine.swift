@@ -221,20 +221,27 @@ struct CliDiarizationEngine: DiarizationEngine {
             throw DiarizationRuntimeError.cancelled
         }
 
+        guard let modelURL = configuration.modelURL else {
+            throw DiarizationRuntimeError.modelMissing(URL(fileURLWithPath: "<no model URL>"))
+        }
+
         guard fileManager.fileExists(atPath: systemAudioURL.path) else {
             throw DiarizationRuntimeError.invalidInput
         }
 
-        guard ["system.raw.caf", "system.raw.flac"].contains(systemAudioURL.lastPathComponent) else {
+        guard ["system.raw.caf", "system.raw.flac", "system.m4a"].contains(systemAudioURL.lastPathComponent) else {
             throw DiarizationRuntimeError.invalidInput
         }
 
-        guard fileManager.fileExists(atPath: configuration.modelURL.path) else {
-            throw DiarizationRuntimeError.modelMissing(configuration.modelURL)
+        guard let modelURL = configuration.modelURL else {
+            throw DiarizationRuntimeError.modelMissing(URL(fileURLWithPath: "<no model URL>"))
+        }
+        guard fileManager.fileExists(atPath: modelURL.path) else {
+            throw DiarizationRuntimeError.modelMissing(modelURL)
         }
 
         let runner = try runnerFactory()
-        let output = try await runner.diarize(audioURL: systemAudioURL, modelURL: configuration.modelURL)
+        let output = try await runner.diarize(audioURL: systemAudioURL, modelURL: modelURL)
 
         if Task.isCancelled {
             throw DiarizationRuntimeError.cancelled
@@ -270,8 +277,11 @@ struct PlaceholderDiarizationEngine: DiarizationEngine {
         guard exists else {
             throw CocoaError(.fileNoSuchFile)
         }
-        guard FileManager.default.fileExists(atPath: configuration.modelURL.path) else {
-            throw CocoaError(.fileNoSuchFile)
+        guard let modelURL = configuration.modelURL else {
+            throw DiarizationRuntimeError.modelMissing(URL(fileURLWithPath: "<no model URL>"))
+        }
+        guard FileManager.default.fileExists(atPath: modelURL.path) else {
+            throw DiarizationRuntimeError.modelMissing(modelURL)
         }
 
         return DiarizationDocument(

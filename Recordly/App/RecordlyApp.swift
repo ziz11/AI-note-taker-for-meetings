@@ -25,10 +25,12 @@ struct RecordlyApp: App {
 
     init() {
         let modelManager = ModelManager()
-        let fluidAudioModelProvider = FluidAudioModelProvider()
+        let fluidAudioModelProvider = FluidAudioASRModelProvider()
+        let fluidAudioDiarizationModelProvider = FluidAudioDiarizationModelProvider()
         let composition = DefaultInferenceComposition.make(
             modelManager: modelManager,
-            fluidAudioModelProvider: fluidAudioModelProvider
+            asrModelProvider: fluidAudioModelProvider,
+            diarizationModelProvider: fluidAudioDiarizationModelProvider
         )
         let pipeline = TranscriptionPipeline()
         _recordingsStore = StateObject(
@@ -39,7 +41,8 @@ struct RecordlyApp: App {
                 inferenceEngineFactory: composition.engineFactory,
                 transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
                 modelManager: modelManager,
-                fluidAudioModelProvider: fluidAudioModelProvider
+                fluidAudioModelProvider: fluidAudioModelProvider,
+                fluidAudioDiarizationModelProvider: fluidAudioDiarizationModelProvider
             )
         )
     }

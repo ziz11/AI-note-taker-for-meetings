@@ -7,54 +7,71 @@ struct ModelOnboardingView: View {
     @State private var selectedProfile: ModelProfile = .balanced
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(coordinator.style == .fullOnboarding ? "Install Local Transcription Models" : "Install Required ASR Model")
-                .font(.title2.weight(.semibold))
+        ZStack {
+            AppTheme.contentBackground
+                .ignoresSafeArea()
 
-            Text("Transcription runs fully on-device. Audio and transcripts stay local on your Mac.")
-            Text("Choose a profile by quality and download size. You can switch or remove models later in Models settings.")
-            Text("Enhanced includes an optional speaker separation package.")
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(coordinator.style == .fullOnboarding ? "Install Local Transcription Models" : "Install Required ASR Model")
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
 
-            ForEach(ModelProfile.allCases, id: \.self) { profile in
-                Button {
-                    selectedProfile = profile
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(profile.displayName).font(.headline)
-                            Text(profile.summary)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    Text("Transcription runs fully on-device. Audio and transcripts stay local on your Mac.")
+                        .foregroundStyle(.primary)
+                    Text("Choose a profile by quality and download size. You can switch or remove models later in Models settings.")
+                        .foregroundStyle(AppTheme.secondaryText)
+                    Text("Enhanced includes an optional speaker separation package.")
+                        .foregroundStyle(AppTheme.tertiaryText)
+                }
+
+                VStack(spacing: 10) {
+                    ForEach(ModelProfile.allCases, id: \.self) { profile in
+                        Button {
+                            selectedProfile = profile
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(profile.displayName)
+                                        .font(.headline)
+                                        .foregroundStyle(.primary)
+                                    Text(profile.summary)
+                                        .font(.subheadline)
+                                        .foregroundStyle(AppTheme.secondaryText)
+                                }
+                                Spacer()
+                                if selectedProfile == profile {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(AppTheme.accent)
+                                }
+                            }
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .appPanel(selected: selectedProfile == profile)
                         }
-                        Spacer()
-                        if selectedProfile == profile {
-                            Image(systemName: "checkmark.circle.fill")
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                HStack {
+                    Button("Not Now") {
+                        coordinator.notNow()
+                    }
+
+                    Spacer()
+
+                    Button("Download and Continue") {
+                        Task {
+                            await coordinator.downloadAndContinue(profile: selectedProfile)
                         }
                     }
-                    .padding(10)
-                    .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.plain)
             }
-
-            HStack {
-                Button("Not Now") {
-                    coordinator.notNow()
-                }
-
-                Spacer()
-
-                Button("Download and Continue") {
-                    Task {
-                        await coordinator.downloadAndContinue(profile: selectedProfile)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-            }
+            .padding(24)
+            .frame(width: 560)
+            .appPanel(prominent: true, cornerRadius: 24)
+            .padding(24)
         }
-        .padding(20)
-        .frame(width: 560)
         .onAppear {
             selectedProfile = modelManager.pendingProfileSelection ?? modelManager.selectedProfile
         }

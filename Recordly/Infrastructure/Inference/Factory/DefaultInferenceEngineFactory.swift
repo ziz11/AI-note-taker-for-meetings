@@ -1,6 +1,16 @@
 import Foundation
 
 struct DefaultInferenceEngineFactory: InferenceEngineFactory {
+    private let diarizationModelProvider: any FluidAudioDiarizationModelProviding
+
+    @MainActor
+    init() {
+        self.diarizationModelProvider = FluidAudioDiarizationModelProvider()
+    }
+    init(diarizationModelProvider: any FluidAudioDiarizationModelProviding) {
+        self.diarizationModelProvider = diarizationModelProvider
+    }
+
     @MainActor
     func makeAudioCaptureEngine(for profile: InferenceRuntimeProfile) throws -> any AudioCaptureEngine {
         switch profile.stageSelection.backend(for: .audioCapture) {
@@ -20,8 +30,23 @@ struct DefaultInferenceEngineFactory: InferenceEngineFactory {
         }
     }
 
+    func makeSystemChunkTranscriptionEngine(for profile: InferenceRuntimeProfile) throws -> (any SystemChunkTranscriptionEngine)? {
+        switch profile.stageSelection.backend(for: .asr) {
+        case .fluidAudio:
+            return FluidAudioSystemChunkTranscriptionEngine()
+        case .disabled:
+            return nil
+        case let backend:
+            throw InferenceEngineFactoryError.unsupportedBackend(stage: .asr, backend: backend)
+        }
+    }
+
+    @MainActor
     func makeDiarizationEngine(for profile: InferenceRuntimeProfile) throws -> any DiarizationEngine {
         switch profile.stageSelection.backend(for: .diarization) {
+        case .fluidAudio:
+            let manager = try diarizationModelProvider.resolveForRuntime()
+            return FluidAudioDiarizationEngine(manager: manager)
         case .cliDiarization:
             return CliDiarizationEngine()
         case let backend:

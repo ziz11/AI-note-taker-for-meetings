@@ -37,7 +37,7 @@ Short rationale: Recordly is designed so new backends, runtime mappings, and pre
 ### Runtime selection
 
 - `DefaultInferenceRuntimeProfileSelector` owns runtime profile resolution.
-- It resolves ASR model via `FluidAudioModelProvider` (SDK-managed) and diarization/summarization via `ModelManager`.
+- It resolves ASR model via `FluidAudioASRModelProvider` (SDK-managed), resolves summarization artifacts via `ModelManager`, and checks diarization via `FluidAudioDiarizationModelProvider`.
 - It must not run inference, instantiate backends, mutate session artifacts, or decide product fallback behavior.
 
 ### Factory and routing
@@ -49,7 +49,7 @@ Short rationale: Recordly is designed so new backends, runtime mappings, and pre
 ### Model layer
 
 - `ModelManager` owns model discovery, install state, selected model IDs, artifact resolution, and runtime settings persistence for diarization and summarization.
-- `FluidAudioModelProvider` owns ASR model provisioning (SDK-managed download/cache/resolve).
+- `FluidAudioASRModelProvider` owns ASR model provisioning (SDK-managed download/cache/resolve).
 - Model layers must not become orchestration centers.
 
 ### Backend modules
@@ -109,7 +109,7 @@ Decide first whether the capability is cross-backend or backend-private.
   - `merged-call.caf`
   - `merged-call.m4a`
 - Internal live-capture format remains normalized PCM in CAF.
-- FluidAudio SDK accepts CAF directly — no format conversion is needed at the ASR boundary.
+- Backend-local FluidAudio prep may load persisted `CAF` or `FLAC` session artifacts and convert them to SDK-ready PCM at the consumer boundary.
 - If a future backend needs WAV, FLAC, PCM buffers, or another representation, adapt at the consumer boundary.
 
 ### Persistence invariants
@@ -121,9 +121,17 @@ Decide first whether the capability is cross-backend or backend-private.
 
 ### Model invariants
 
-- ASR model provisioning is SDK-managed via `FluidAudioModelProvider`. Do not force it into local-file picking patterns.
+- ASR model provisioning is SDK-managed via `FluidAudioASRModelProvider`. Do not force it into local-file picking patterns.
 - Diarization and summarization models remain local-file based via `ModelManager`.
 - Treat model artifact resolution and backend selection as separate concerns.
+- Models settings UX must keep provider/runtime grouping explicit. Do not collapse provider-owned models into one flat undifferentiated picker.
+- Models settings UX must preserve two distinct user actions:
+  - download or install a model
+  - select the active model for a stage
+
+Reference UI brief:
+
+- `docs/prompts/2026-03-11-model-settings-screen-redesign.md`
 
 ## Extension Checklists
 
@@ -366,13 +374,13 @@ Use these files as the primary routing map for inference changes:
 - Workflow orchestration: `Recordly/Features/Recordings/Application/RecordingWorkflowController.swift`
 - Pipeline orchestration: `Recordly/Infrastructure/Transcription/TranscriptionPipeline.swift`
 - Model layer: `Recordly/Infrastructure/Models/ModelManager.swift`
-- ASR model provisioning: `Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioModelProvider.swift`
+- ASR model provisioning: `Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioASRModelProvider.swift`
 - Persistence layer: `Recordly/Infrastructure/Persistence/RecordingsRepository.swift`
 
 Current backend modules:
 
 - ASR: `FluidAudioASREngine` (FluidAudio SDK v3)
-- Diarization: `CliDiarizationEngine`
+- Diarization: `FluidAudioDiarizationEngine` (default local path), `CliDiarizationEngine` retained as legacy runtime path
 - Summarization: `LlamaCppSummarizationEngine`
 
 ## Final Operating Rule

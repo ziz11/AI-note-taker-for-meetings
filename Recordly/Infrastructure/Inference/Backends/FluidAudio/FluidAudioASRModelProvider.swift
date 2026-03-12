@@ -29,7 +29,7 @@ enum FluidAudioModelProvisioningError: LocalizedError, Equatable {
 }
 
 @MainActor
-protocol FluidAudioModelProviding: AnyObject {
+protocol FluidAudioASRModelProviding: AnyObject {
     var state: FluidAudioModelProvisioningState { get }
     func refreshState()
     func downloadDefaultModel() async
@@ -39,7 +39,7 @@ protocol FluidAudioModelProviding: AnyObject {
 /// Resolves FluidAudio v3 models from the SDK's local storage directory.
 /// Downloads are delegated to `AsrModels.downloadAndLoad` which handles caching internally.
 @MainActor
-final class FluidAudioModelProvider: ObservableObject, FluidAudioModelProviding {
+final class FluidAudioASRModelProvider: ObservableObject, FluidAudioASRModelProviding {
     @Published private(set) var state: FluidAudioModelProvisioningState = .needsDownload
 
     private let fileManager: FileManager

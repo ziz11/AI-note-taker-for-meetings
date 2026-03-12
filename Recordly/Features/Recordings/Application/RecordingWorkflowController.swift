@@ -182,13 +182,15 @@ final class RecordingWorkflowController {
                 if let transcriptionResult {
                     updatedRecording = applyTranscriptionResult(transcriptionResult, to: updatedRecording)
                     try repository.save(updatedRecording)
+                    cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
                 }
                 processingError = nil
             } catch {
                 updatedRecording.transcriptState = .failed
                 updatedRecording.lifecycleState = .failed
-                updatedRecording.notes = "Transcript failed."
+                updatedRecording.notes = transcriptionFailureNote(for: error)
                 try? repository.save(updatedRecording)
+                cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
                 transcriptionResult = nil
                 processingError = error
             }
@@ -241,7 +243,7 @@ final class RecordingWorkflowController {
             } catch {
                 recording.transcriptState = .failed
                 recording.lifecycleState = .failed
-                recording.notes = "Transcript failed."
+                recording.notes = transcriptionFailureNote(for: error)
                 try? repository.save(recording)
                 processingError = error
             }
@@ -258,6 +260,7 @@ final class RecordingWorkflowController {
 
     func transcribe(
         recording: RecordingSession,
+        summarizeAfterTranscription: Bool = false,
         onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
     ) async throws -> RecordingSession {
         var updatedRecording = recording
@@ -273,12 +276,22 @@ final class RecordingWorkflowController {
             )
             updatedRecording = applyTranscriptionResult(transcriptionResult, to: updatedRecording)
             try repository.save(updatedRecording)
+            cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
+            if summarizeAfterTranscription {
+                do {
+                    updatedRecording = try await summarize(recording: updatedRecording)
+                } catch {
+                    updatedRecording.notes = "Transcript ready. Summary unavailable."
+                    try? repository.save(updatedRecording)
+                }
+            }
             return updatedRecording
         } catch {
             updatedRecording.transcriptState = .failed
             updatedRecording.lifecycleState = .failed
-            updatedRecording.notes = "Transcript failed."
+            updatedRecording.notes = transcriptionFailureNote(for: error)
             try? repository.save(updatedRecording)
+            cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
             throw error
         }
     }
@@ -295,20 +308,12 @@ final class RecordingWorkflowController {
         logLines.append("recording_id=\(recording.id.uuidString)")
         logLines.append("recording_title=\(recording.title)")
 
-        let transcript = repository.transcriptText(for: recording)
-        logLines.append("transcript_chars=\(transcript?.count ?? 0)")
-        let srtText: String?
-        if let srtFile = recording.assets.srtFile {
-            let srtURL = sessionDirectory.appendingPathComponent(srtFile)
-            srtText = try? String(contentsOf: srtURL, encoding: .utf8)
-            logLines.append("srt_file=\(srtFile)")
-        } else {
-            srtText = nil
-            logLines.append("srt_file=<none>")
-        }
-        logLines.append("srt_chars=\(srtText?.count ?? 0)")
+        let summaryInputs = loadSummaryInputs(for: recording, in: sessionDirectory)
+        logLines.append("summary_input=\(summaryInputs.transcript != nil ? "transcript" : "srt")")
+        logLines.append("transcript_chars=\(summaryInputs.transcript?.count ?? 0)")
+        logLines.append("srt_chars=\(summaryInputs.srtText?.count ?? 0)")
 
-        guard transcript != nil || srtText != nil else {
+        guard summaryInputs.transcript != nil || summaryInputs.srtText != nil else {
             logLines.append("result=failed")
             logLines.append("reason=missing-transcript-and-srt")
             persistSummarizationLog(lines: logLines, in: sessionDirectory)
@@ -343,8 +348,8 @@ final class RecordingWorkflowController {
                 )
                 let doc = try await summarizeWithTimeout(timeoutSeconds: summarizationTimeoutSeconds) {
                     try await summarizationEngine.summarize(
-                        transcript: transcript ?? "",
-                        srtText: srtText,
+                        transcript: summaryInputs.transcript ?? "",
+                        srtText: summaryInputs.srtText,
                         recordingTitle: recording.title,
                         configuration: config
                     )
@@ -374,7 +379,11 @@ final class RecordingWorkflowController {
 
         if summary == nil {
             onProgress?(0.75, "Building fallback summary")
-            summary = composeSummary(recording: recording, transcript: transcript, srtText: srtText)
+            summary = composeSummary(
+                recording: recording,
+                transcript: summaryInputs.transcript,
+                srtText: summaryInputs.srtText
+            )
             summarySource = "fallback"
             logLines.append("fallback_status=used")
             logLines.append("summary_chars=\(summary?.count ?? 0)")
@@ -430,7 +439,11 @@ final class RecordingWorkflowController {
                 if recordings[index].lifecycleState != .failed {
                     recordings[index].lifecycleState = .ready
                 }
-                recordings[index].notes = "Offline merge completed."
+                let shouldPreserveTranscriptFailureNote = recordings[index].transcriptState == .failed
+                    && isTranscriptFailureNote(recordings[index].notes)
+                if !shouldPreserveTranscriptFailureNote {
+                    recordings[index].notes = "Offline merge completed."
+                }
                 try? repository.save(recordings[index])
             }
         }
@@ -460,15 +473,9 @@ final class RecordingWorkflowController {
         for recording: RecordingSession,
         onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
     ) async throws -> TranscriptionResult {
-        let sessionDirectory = try repository.sessionDirectory(for: recording.id)
-        let availability = runtimeProfileSelector.transcriptionAvailability(for: selectedModelProfile)
-        switch availability {
-        case .unavailable:
-            throw RecordingWorkflowError.transcriptionUnavailable(availability)
-        case .ready, .degradedNoDiarization:
-            break
-        }
+        try transcriptionPrecheck()
 
+        let sessionDirectory = try repository.sessionDirectory(for: recording.id)
         let runtimeProfile: InferenceRuntimeProfile
         do {
             runtimeProfile = try runtimeProfileSelector.resolveTranscriptionProfile(for: selectedModelProfile)
@@ -497,9 +504,12 @@ final class RecordingWorkflowController {
         updated.assets.transcriptFile = result.transcriptFile
         updated.assets.srtFile = result.srtFile
         updated.assets.transcriptJSONFile = result.transcriptJSONFile
+        updated.assets.structuredTranscriptJSONFile = result.structuredTranscriptJSONFile
+        updated.assets.structuredTranscriptTextFile = result.structuredTranscriptTextFile
         updated.assets.micASRJSONFile = result.micASRJSONFile
         updated.assets.systemASRJSONFile = result.systemASRJSONFile
         updated.assets.systemDiarizationJSONFile = result.systemDiarizationJSONFile
+        updated.assets.transcriptionAudioProvenance = result.audioProvenance
         updated.transcriptState = result.state
         updated.lifecycleState = .ready
         updated.notes = result.summary
@@ -509,15 +519,79 @@ final class RecordingWorkflowController {
         return updated
     }
 
+    func transcriptionPrecheck() throws -> TranscriptionAvailability {
+        let availability = runtimeProfileSelector.transcriptionAvailability(for: selectedModelProfile)
+        try validateTranscriptionAvailability(availability)
+        return availability
+    }
+
+    func transcriptionAvailabilityCheck() throws -> TranscriptionAvailability {
+        try transcriptionPrecheck()
+    }
+
+    func transcriptionFailureNote(for error: Error) -> String {
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else {
+            return "Transcript failed."
+        }
+        return "Transcript failed: \(message)"
+    }
+
     private func shouldRecoverTranscription(for recording: RecordingSession) -> Bool {
         switch recording.transcriptState {
         case .queued, .transcribingMic, .transcribingSystem, .diarizingSystem, .merging, .renderingOutputs:
             return true
         case .failed:
-            return recording.assets.transcriptJSONFile == nil
+            return false
         case .idle, .ready:
             return false
         }
+    }
+
+    private func cleanupTemporaryCaptureArtifactsIfNeeded(for recording: inout RecordingSession) {
+        guard recording.source == .liveCapture else {
+            return
+        }
+
+        do {
+            let sessionDirectory = try repository.sessionDirectory(for: recording.id)
+            try cleanupTemporaryCaptureArtifacts(in: sessionDirectory)
+        } catch {
+            let warning = "Temporary audio cleanup failed: \(error.localizedDescription)"
+            if !recording.notes.contains(warning) {
+                recording.notes = recording.notes.isEmpty ? warning : "\(recording.notes) \(warning)"
+            }
+            try? repository.save(recording)
+        }
+    }
+
+    private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) throws {
+        let fileManager = FileManager.default
+        for fileName in [
+            "mic.raw.caf",
+            "system.raw.caf"
+        ] {
+            let url = sessionDirectory.appendingPathComponent(fileName)
+            guard fileManager.fileExists(atPath: url.path) else {
+                continue
+            }
+            try fileManager.removeItem(at: url)
+        }
+    }
+
+    private func loadSummaryInputs(for recording: RecordingSession, in sessionDirectory: URL) -> SummaryInputs {
+        let transcript = repository.transcriptText(for: recording)
+        guard transcript == nil else {
+            return SummaryInputs(transcript: transcript, srtText: nil)
+        }
+
+        guard let srtFile = recording.assets.srtFile else {
+            return SummaryInputs(transcript: nil, srtText: nil)
+        }
+
+        let srtURL = sessionDirectory.appendingPathComponent(srtFile)
+        let srtText = try? String(contentsOf: srtURL, encoding: .utf8)
+        return SummaryInputs(transcript: nil, srtText: srtText)
     }
 
     private func composeSummary(
@@ -595,6 +669,22 @@ final class RecordingWorkflowController {
         """
     }
 
+    private func validateTranscriptionAvailability(_ availability: TranscriptionAvailability) throws {
+        switch availability {
+        case .unavailable:
+            throw RecordingWorkflowError.transcriptionUnavailable(availability)
+        case .degradedNoDiarization:
+            break
+        case .ready:
+            break
+        }
+    }
+
+    private func isTranscriptFailureNote(_ notes: String) -> Bool {
+        notes.hasPrefix("Transcript failed:")
+            || notes == "Transcript failed."
+    }
+
     private func parseSRTTimeline(_ text: String?) -> [(seconds: Int, timestamp: String, text: String)] {
         guard let text, !text.isEmpty else {
             return []
@@ -631,6 +721,11 @@ final class RecordingWorkflowController {
         }
 
         return timeline.sorted(by: { $0.seconds < $1.seconds })
+    }
+
+    private struct SummaryInputs {
+        let transcript: String?
+        let srtText: String?
     }
 
     private func parseSRTSeconds(_ raw: String) -> Int {

@@ -29,7 +29,6 @@ enum TranscriptionPipelineError: LocalizedError {
 enum PipelineDegradationReason: String, Codable, Equatable {
     case emptyMicASR
     case emptySystemASR
-    case micASRFailedFallbackUsed
     case systemASRFailedFallbackUsed
     case diarizationDegraded
     case summaryFallbackUsed
@@ -47,6 +46,8 @@ struct TranscriptionResult {
     var transcriptFile: String?
     var srtFile: String?
     var transcriptJSONFile: String?
+    var structuredTranscriptJSONFile: String?
+    var structuredTranscriptTextFile: String?
     var micASRJSONFile: String?
     var systemASRJSONFile: String?
     var systemDiarizationJSONFile: String?
@@ -56,11 +57,19 @@ struct TranscriptionResult {
     var degradedReasons: [PipelineDegradationReason]
     var state: TranscriptPipelineState
     var summary: String
+    var audioProvenance: TranscriptionAudioProvenance?
+}
+
+enum SystemTranscriptionMode: Sendable {
+    case diarizationChunked
+    case legacyFullFileDebug
 }
 
 struct TranscriptionPipeline {
+    let mode: SystemTranscriptionMode
     let audioInputAdapter: any AudioInputAdapter
-    let speakerMappingService: SystemSpeakerMappingService
+    let alignmentService: SystemTranscriptAlignmentService
+    let systemChunkTranscriptBuilder: SystemChunkTranscriptBuilder
     let mergeService: TranscriptMergeService
     let renderService: TranscriptRenderService
 
@@ -68,13 +77,17 @@ struct TranscriptionPipeline {
     private let decoder: JSONDecoder
 
     init(
+        mode: SystemTranscriptionMode = .diarizationChunked,
         audioInputAdapter: any AudioInputAdapter = PassthroughAudioInputAdapter(),
-        speakerMappingService: SystemSpeakerMappingService = SystemSpeakerMappingService(),
+        alignmentService: SystemTranscriptAlignmentService = SystemTranscriptAlignmentService(),
+        systemChunkTranscriptBuilder: SystemChunkTranscriptBuilder = SystemChunkTranscriptBuilder(),
         mergeService: TranscriptMergeService = TranscriptMergeService(),
         renderService: TranscriptRenderService = TranscriptRenderService()
     ) {
+        self.mode = mode
         self.audioInputAdapter = audioInputAdapter
-        self.speakerMappingService = speakerMappingService
+        self.alignmentService = alignmentService
+        self.systemChunkTranscriptBuilder = systemChunkTranscriptBuilder
         self.mergeService = mergeService
         self.renderService = renderService
 
@@ -97,19 +110,24 @@ struct TranscriptionPipeline {
     ) async throws -> TranscriptionResult {
         await onStateChange?(.queued)
 
-        let micInput = try prepareInput(
-            fileName: recording.assets.microphoneFile,
+        let micInput = try preparePreferredLiveCaptureInput(
+            recording: recording,
             channel: .mic,
             in: sessionDirectory
         )
-        let systemInput = try prepareInput(
-            fileName: recording.assets.systemAudioFile,
+        let systemInput = try preparePreferredLiveCaptureInput(
+            recording: recording,
             channel: .system,
             in: sessionDirectory
         )
         let importedInput = try prepareImportedInput(
             fileName: recording.assets.importedAudioFile,
             in: sessionDirectory
+        )
+        let audioProvenance = resolveAudioProvenance(
+            recording: recording,
+            micInput: micInput,
+            systemInput: systemInput
         )
 
         guard micInput != nil || systemInput != nil || importedInput != nil else {
@@ -122,14 +140,10 @@ struct TranscriptionPipeline {
         }
 
         let asrEngine = try engineFactory.makeASREngine(for: runtimeProfile)
-        let asrConfiguration = ASREngineConfiguration(
-            modelURL: asrModelURL
-        )
+        let asrConfiguration = ASREngineConfiguration(modelURL: asrModelURL)
 
         let micASRFile = "mic.asr.json"
         let systemASRFile = "system.asr.json"
-        let micASRModelFile = "mic.asr.model.txt"
-        let systemASRModelFile = "system.asr.model.txt"
         let diarizationFile = "system.diarization.json"
         let transcriptJSONFile = "transcript.json"
         let transcriptTXTFile = "transcript.txt"
@@ -137,107 +151,76 @@ struct TranscriptionPipeline {
 
         var degradedReasons: [PipelineDegradationReason] = []
 
-        await onStateChange?(.transcribingMic)
-        let micASROutcome = await loadOrRunASR(
-            asrEngine: asrEngine,
-            existingFile: micASRFile,
-            modelFingerprintFile: micASRModelFile,
-            channel: .mic,
-            preferredAudioURL: micInput?.url ?? importedInput?.url,
-            sessionID: recording.id,
-            sessionDirectory: sessionDirectory,
-            configuration: asrConfiguration
-        )
-
-        await onStateChange?(.transcribingSystem)
-        let systemASROutcome = await loadOrRunASR(
-            asrEngine: asrEngine,
-            existingFile: systemASRFile,
-            modelFingerprintFile: systemASRModelFile,
-            channel: .system,
-            preferredAudioURL: systemInput?.url,
-            sessionID: recording.id,
-            sessionDirectory: sessionDirectory,
-            configuration: asrConfiguration
-        )
-
+        let micAudioURL = micInput?.url ?? importedInput?.url
         let micDoc: ASRDocument?
-        let systemDoc: ASRDocument?
-
-        switch (micASROutcome, systemASROutcome) {
-        case let (.success(mic), .success(sys)):
-            micDoc = mic
-            systemDoc = sys
-            appendEmptyASRReason(for: mic, isMic: true, to: &degradedReasons)
-            appendEmptyASRReason(for: sys, isMic: false, to: &degradedReasons)
-
-        case let (.success(mic), .systemUnavailableRecovered(sys)):
-            guard let mic else {
-                throw TranscriptionPipelineError.inferenceFailed("System transcription recovered but microphone transcription unavailable.")
+        if let micAudioURL {
+            await onStateChange?(.transcribingMic)
+            let document = try await runMainPathASR(
+                asrEngine: asrEngine,
+                audioURL: micAudioURL,
+                channel: .mic,
+                sessionID: recording.id,
+                configuration: asrConfiguration
+            )
+            try writeJSON(document, to: sessionDirectory.appendingPathComponent(micASRFile))
+            if document.segments.isEmpty {
+                degradedReasons.append(.emptyMicASR)
             }
-            micDoc = mic
-            systemDoc = sys
-            degradedReasons.append(.systemASRFailedFallbackUsed)
-            appendEmptyASRReason(for: mic, isMic: true, to: &degradedReasons)
-            appendEmptyASRReason(for: sys, isMic: false, to: &degradedReasons)
-
-        case let (.success(mic), .failure(sysError)):
-            guard let mic else {
-                throw sysError
-            }
-            micDoc = mic
-            systemDoc = nil
-            degradedReasons.append(.systemASRFailedFallbackUsed)
-            appendEmptyASRReason(for: mic, isMic: true, to: &degradedReasons)
-
-        case let (.failure(micError), .success(sys)):
-            guard let sys else {
-                throw micError
-            }
+            micDoc = document
+        } else {
             micDoc = nil
-            systemDoc = sys
-            degradedReasons.append(.micASRFailedFallbackUsed)
-            appendEmptyASRReason(for: sys, isMic: false, to: &degradedReasons)
-
-        case let (.failure(micError), .failure(_)):
-            throw micError
-
-        case let (.failure(micError), .systemUnavailableRecovered(_)):
-            throw micError
-
-        case (.systemUnavailableRecovered, _):
-            throw TranscriptionPipelineError.inferenceFailed("Microphone ASR failed while loading.")
         }
 
-        let diarizationEngine: (any DiarizationEngine)?
-        let diarizationBackendError: String?
-        do {
-            diarizationEngine = try engineFactory.makeDiarizationEngine(for: runtimeProfile)
-            diarizationBackendError = nil
-        } catch {
-            diarizationEngine = nil
-            diarizationBackendError = error.localizedDescription
+        let diarizationOutcome: DiarizationLoadOutcome
+        if systemInput != nil {
+            await onStateChange?(.diarizingSystem)
+            diarizationOutcome = try await loadOrRunDiarization(
+                diarizationEngine: await resolveDiarizationEngine(
+                    engineFactory: engineFactory,
+                    runtimeProfile: runtimeProfile
+                ),
+                existingFile: diarizationFile,
+                systemAudioURL: systemInput?.url,
+                sessionID: recording.id,
+                sessionDirectory: sessionDirectory,
+                configuration: DiarizationEngineConfiguration(
+                    modelURL: runtimeProfile.modelArtifacts.diarizationModelURL
+                )
+            )
+            if diarizationOutcome.degradedReason != nil {
+                degradedReasons.append(.diarizationDegraded)
+            }
+        } else {
+            diarizationOutcome = DiarizationLoadOutcome(document: nil, degradedReason: nil, modelUsed: nil)
         }
 
-        await onStateChange?(.diarizingSystem)
-        let diarizationOutcome = try await loadOrRunDiarization(
-            diarizationEngine: diarizationEngine,
-            existingFile: diarizationFile,
-            systemAudioURL: systemInput?.url,
-            sessionID: recording.id,
+        let systemOutcome = try await processSystemAudio(
+            systemInput: systemInput,
+            recordingID: recording.id,
             sessionDirectory: sessionDirectory,
-            configuration: runtimeProfile.modelArtifacts.diarizationModelURL.map {
-                DiarizationEngineConfiguration(modelURL: $0)
-            },
-            backendUnavailableReason: diarizationBackendError
+            runtimeProfile: runtimeProfile,
+            engineFactory: engineFactory,
+            asrEngine: asrEngine,
+            asrConfiguration: asrConfiguration,
+            existingASRFile: systemASRFile,
+            diarizationOutcome: diarizationOutcome,
+            onStateChange: onStateChange,
+            allowMicOnlyDegradation: micDoc != nil
         )
-        let diarizationDoc = diarizationOutcome.document
+        if let degradationReason = systemOutcome.degradationReason {
+            degradedReasons.append(degradationReason)
+        }
+        if let systemDoc = systemOutcome.document, systemDoc.segments.isEmpty {
+            degradedReasons.append(.emptySystemASR)
+        }
 
         let micSegments = (micDoc?.segments ?? []).map {
             TranscriptSegment(
                 id: $0.id,
                 channel: .mic,
                 speaker: "You",
+                speakerRole: .me,
+                speakerId: "me",
                 startMs: $0.startMs,
                 endMs: $0.endMs,
                 text: $0.text,
@@ -248,10 +231,7 @@ struct TranscriptionPipeline {
             )
         }
 
-        let systemSegments = speakerMappingService.mapSystemSpeakers(
-            asrSegments: systemDoc?.segments ?? [],
-            diarization: diarizationDoc
-        )
+        let systemSegments = systemOutcome.transcriptSegments
 
         await onStateChange?(.merging)
         let mergedSegments = mergeService.merge(micSegments: micSegments, systemSegments: systemSegments)
@@ -259,12 +239,11 @@ struct TranscriptionPipeline {
             version: 1,
             sessionID: recording.id,
             createdAt: Date(),
-            channelsPresent: presentChannels(mic: micDoc, system: systemDoc),
+            channelsPresent: presentChannels(mic: micDoc, system: systemOutcome.document),
             diarizationApplied: diarizationOutcome.document != nil,
             mergePolicy: .deterministicStartEndChannelID,
             segments: mergedSegments
         )
-
         try writeJSON(transcriptDocument, to: sessionDirectory.appendingPathComponent(transcriptJSONFile))
 
         await onStateChange?(.renderingOutputs)
@@ -280,37 +259,73 @@ struct TranscriptionPipeline {
             encoding: .utf8
         )
 
-        let summary: String
-        if diarizationOutcome.degradedReason != nil {
-            degradedReasons.append(.diarizationDegraded)
-        }
-
-        if let degradedReason = diarizationOutcome.degradedReason, systemDoc != nil {
-            summary = "Transcript ready. System diarization degraded: \(degradedReason). Speaker labels fallback to Remote."
-        } else if !degradedReasons.isEmpty {
-            summary = "Transcript ready (degraded: \(degradedReasons.map(\.rawValue).joined(separator: ", ")))."
-        } else {
-            summary = "Transcript ready."
-        }
-
         await onStateChange?(.ready)
         return TranscriptionResult(
             transcriptFile: transcriptTXTFile,
             srtFile: transcriptSRTFile,
             transcriptJSONFile: transcriptJSONFile,
+            structuredTranscriptJSONFile: nil,
+            structuredTranscriptTextFile: nil,
             micASRJSONFile: micDoc != nil ? micASRFile : nil,
-            systemASRJSONFile: systemDoc != nil ? systemASRFile : nil,
+            systemASRJSONFile: systemOutcome.document != nil ? systemASRFile : nil,
             systemDiarizationJSONFile: diarizationOutcome.document != nil ? diarizationFile : nil,
             diarizationApplied: diarizationOutcome.document != nil,
             diarizationDegradedReason: diarizationOutcome.degradedReason,
             diarizationModelUsed: diarizationOutcome.modelUsed,
             degradedReasons: degradedReasons,
             state: .ready,
-            summary: summary
+            summary: makeReadySummary(
+                diarizationDegradedReason: diarizationOutcome.degradedReason,
+                degradedReasons: degradedReasons
+            ),
+            audioProvenance: audioProvenance
         )
     }
 
-    private func prepareInput(
+    private func preparePreferredLiveCaptureInput(
+        recording: RecordingSession,
+        channel: TranscriptChannel,
+        in sessionDirectory: URL
+    ) throws -> PreparedAudioInput? {
+        guard recording.source == .liveCapture else {
+            let fileName = channel == .mic ? recording.assets.microphoneFile : recording.assets.systemAudioFile
+            return try prepareInputCandidate(fileName: fileName, channel: channel, in: sessionDirectory)
+        }
+
+        for candidate in liveCaptureCandidates(for: channel, recording: recording) {
+            if let prepared = try prepareInputCandidate(fileName: candidate, channel: channel, in: sessionDirectory) {
+                return prepared
+            }
+        }
+        return nil
+    }
+
+    private func liveCaptureCandidates(
+        for channel: TranscriptChannel,
+        recording: RecordingSession
+    ) -> [String] {
+        let assetFileName = channel == .mic ? recording.assets.microphoneFile : recording.assets.systemAudioFile
+        let canonicalDurable = channel == .mic ? "mic.m4a" : "system.m4a"
+        let legacyRaw = channel == .mic ? "mic.raw.flac" : "system.raw.flac"
+        let canonicalRaw = channel == .mic ? "mic.raw.caf" : "system.raw.caf"
+
+        let orderedCandidates = [
+            canonicalRaw,
+            legacyRaw,
+            canonicalDurable,
+            assetFileName
+        ]
+
+        var unique: [String] = []
+        for candidate in orderedCandidates.compactMap({ $0 }) where candidate != "merged-call.m4a" {
+            if !unique.contains(candidate) {
+                unique.append(candidate)
+            }
+        }
+        return unique
+    }
+
+    private func prepareInputCandidate(
         fileName: String?,
         channel: TranscriptChannel,
         in sessionDirectory: URL
@@ -337,7 +352,410 @@ struct TranscriptionPipeline {
         )
     }
 
-    private func loadOrRunASR(
+    private func resolveAudioProvenance(
+        recording: RecordingSession,
+        micInput: PreparedAudioInput?,
+        systemInput: PreparedAudioInput?
+    ) -> TranscriptionAudioProvenance? {
+        guard recording.source == .liveCapture else {
+            return nil
+        }
+
+        let selectedFileNames = [micInput?.url.lastPathComponent, systemInput?.url.lastPathComponent].compactMap { $0 }
+        guard !selectedFileNames.isEmpty else {
+            return nil
+        }
+
+        if selectedFileNames.contains(where: isTemporaryFastPathFileName(_:)) {
+            return .cafPcmFastPath
+        }
+
+        if selectedFileNames.contains(where: isDurableSourceFileName(_:)) {
+            return .m4aRecovery
+        }
+
+        return nil
+    }
+
+    private func isTemporaryFastPathFileName(_ fileName: String) -> Bool {
+        fileName == "mic.raw.caf"
+            || fileName == "system.raw.caf"
+            || fileName.hasSuffix(".raw.flac")
+    }
+
+    private func isDurableSourceFileName(_ fileName: String) -> Bool {
+        fileName == "mic.m4a"
+            || fileName == "system.m4a"
+    }
+
+    private func runMainPathASR(
+        asrEngine: any ASREngine,
+        audioURL: URL,
+        channel: TranscriptChannel,
+        sessionID: UUID,
+        configuration: ASREngineConfiguration
+    ) async throws -> ASRDocument {
+        do {
+            return try await asrEngine.transcribe(
+                audioURL: audioURL,
+                channel: channel,
+                sessionID: sessionID,
+                configuration: configuration
+            )
+        } catch let error as ASREngineRuntimeError {
+            switch error {
+            case .modelMissing:
+                throw TranscriptionPipelineError.modelMissing
+            case .inferenceFailed(let message):
+                throw TranscriptionPipelineError.inferenceFailed(message)
+            case .unsupportedFormat:
+                throw TranscriptionPipelineError.unsupportedFormat
+            case .outputParseFailed:
+                throw TranscriptionPipelineError.outputParseFailed
+            case .cancelled:
+                throw TranscriptionPipelineError.cancelled
+            }
+        }
+    }
+
+    private func resolveDiarizationEngine(
+        engineFactory: any InferenceEngineFactory,
+        runtimeProfile: InferenceRuntimeProfile
+    ) async -> (engine: (any DiarizationEngine)?, backendUnavailableReason: String?) {
+        do {
+            let engine = try await MainActor.run {
+                try engineFactory.makeDiarizationEngine(for: runtimeProfile)
+            }
+            return (engine, nil)
+        } catch {
+            return (nil, error.localizedDescription)
+        }
+    }
+
+    private func resolveSystemChunkEngine(
+        engineFactory: any InferenceEngineFactory,
+        runtimeProfile: InferenceRuntimeProfile
+    ) -> (engine: (any SystemChunkTranscriptionEngine)?, backendUnavailableReason: String?) {
+        do {
+            let engine = try engineFactory.makeSystemChunkTranscriptionEngine(for: runtimeProfile)
+            return (engine, nil)
+        } catch {
+            return (nil, error.localizedDescription)
+        }
+    }
+
+    private func processSystemAudio(
+        systemInput: PreparedAudioInput?,
+        recordingID: UUID,
+        sessionDirectory: URL,
+        runtimeProfile: InferenceRuntimeProfile,
+        engineFactory: any InferenceEngineFactory,
+        asrEngine: any ASREngine,
+        asrConfiguration: ASREngineConfiguration,
+        existingASRFile: String,
+        diarizationOutcome: DiarizationLoadOutcome,
+        onStateChange: (@MainActor (TranscriptPipelineState) -> Void)?,
+        allowMicOnlyDegradation: Bool
+    ) async throws -> SystemTranscriptionOutcome {
+        guard let systemAudioURL = systemInput?.url else {
+            return SystemTranscriptionOutcome(document: nil, transcriptSegments: [], degradationReason: nil)
+        }
+
+        await onStateChange?(.transcribingSystem)
+
+        switch mode {
+        case .legacyFullFileDebug:
+            return try await processLegacySystemAudio(
+                systemAudioURL: systemAudioURL,
+                sessionID: recordingID,
+                sessionDirectory: sessionDirectory,
+                asrEngine: asrEngine,
+                asrConfiguration: asrConfiguration,
+                existingASRFile: existingASRFile,
+                diarization: diarizationOutcome.document,
+                allowMicOnlyDegradation: allowMicOnlyDegradation
+            )
+        case .diarizationChunked:
+            return try await processChunkedSystemAudio(
+                systemAudioURL: systemAudioURL,
+                sessionID: recordingID,
+                sessionDirectory: sessionDirectory,
+                runtimeProfile: runtimeProfile,
+                engineFactory: engineFactory,
+                asrConfiguration: asrConfiguration,
+                existingASRFile: existingASRFile,
+                diarizationOutcome: diarizationOutcome,
+                allowMicOnlyDegradation: allowMicOnlyDegradation
+            )
+        }
+    }
+
+    private func processLegacySystemAudio(
+        systemAudioURL: URL,
+        sessionID: UUID,
+        sessionDirectory: URL,
+        asrEngine: any ASREngine,
+        asrConfiguration: ASREngineConfiguration,
+        existingASRFile: String,
+        diarization: DiarizationDocument?,
+        allowMicOnlyDegradation: Bool
+    ) async throws -> SystemTranscriptionOutcome {
+        do {
+            let document = try await runMainPathASR(
+                asrEngine: asrEngine,
+                audioURL: systemAudioURL,
+                channel: .system,
+                sessionID: sessionID,
+                configuration: asrConfiguration
+            )
+            try writeJSON(document, to: sessionDirectory.appendingPathComponent(existingASRFile))
+            return SystemTranscriptionOutcome(
+                document: document,
+                transcriptSegments: alignmentService.align(asrSegments: document.segments, diarization: diarization),
+                degradationReason: nil
+            )
+        } catch {
+            guard allowMicOnlyDegradation else {
+                throw error
+            }
+            return SystemTranscriptionOutcome(
+                document: nil,
+                transcriptSegments: [],
+                degradationReason: .systemASRFailedFallbackUsed
+            )
+        }
+    }
+
+    private func processChunkedSystemAudio(
+        systemAudioURL: URL,
+        sessionID: UUID,
+        sessionDirectory: URL,
+        runtimeProfile: InferenceRuntimeProfile,
+        engineFactory: any InferenceEngineFactory,
+        asrConfiguration: ASREngineConfiguration,
+        existingASRFile: String,
+        diarizationOutcome: DiarizationLoadOutcome,
+        allowMicOnlyDegradation: Bool
+    ) async throws -> SystemTranscriptionOutcome {
+        guard let diarization = diarizationOutcome.document else {
+            if allowMicOnlyDegradation {
+                return SystemTranscriptionOutcome(document: nil, transcriptSegments: [], degradationReason: nil)
+            }
+            throw TranscriptionPipelineError.inferenceFailed(
+                diarizationOutcome.degradedReason ?? "system diarization is required for chunked system transcription"
+            )
+        }
+
+        guard !diarization.segments.isEmpty else {
+            if allowMicOnlyDegradation {
+                return SystemTranscriptionOutcome(document: nil, transcriptSegments: [], degradationReason: .emptySystemASR)
+            }
+            throw TranscriptionPipelineError.inferenceFailed("system diarization produced no segments")
+        }
+
+        let chunkEngineOutcome = resolveSystemChunkEngine(
+            engineFactory: engineFactory,
+            runtimeProfile: runtimeProfile
+        )
+        guard let chunkEngine = chunkEngineOutcome.engine else {
+            if allowMicOnlyDegradation {
+                return SystemTranscriptionOutcome(
+                    document: nil,
+                    transcriptSegments: [],
+                    degradationReason: .systemASRFailedFallbackUsed
+                )
+            }
+            throw TranscriptionPipelineError.inferenceFailed(
+                chunkEngineOutcome.backendUnavailableReason ?? "system chunk transcription backend unavailable"
+            )
+        }
+
+        do {
+            let chunkDocument = try await chunkEngine.transcribeSystemChunks(
+                systemAudioURL: systemAudioURL,
+                diarization: diarization,
+                sessionID: sessionID,
+                configuration: asrConfiguration
+            )
+            let asrDocument = ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: .system,
+                createdAt: chunkDocument.createdAt,
+                segments: chunkDocument.segments.map {
+                    ASRSegment(
+                        id: $0.id,
+                        startMs: $0.startMs,
+                        endMs: $0.endMs,
+                        text: $0.text,
+                        confidence: $0.confidence,
+                        language: $0.language,
+                        words: $0.words
+                    )
+                }
+            )
+            try writeJSON(asrDocument, to: sessionDirectory.appendingPathComponent(existingASRFile))
+            return SystemTranscriptionOutcome(
+                document: asrDocument,
+                transcriptSegments: systemChunkTranscriptBuilder.build(from: chunkDocument),
+                degradationReason: nil
+            )
+        } catch let error as ASREngineRuntimeError {
+            guard allowMicOnlyDegradation else {
+                switch error {
+                case .modelMissing:
+                    throw TranscriptionPipelineError.modelMissing
+                case .inferenceFailed(let message):
+                    throw TranscriptionPipelineError.inferenceFailed(message)
+                case .unsupportedFormat:
+                    throw TranscriptionPipelineError.unsupportedFormat
+                case .outputParseFailed:
+                    throw TranscriptionPipelineError.outputParseFailed
+                case .cancelled:
+                    throw TranscriptionPipelineError.cancelled
+                }
+            }
+            return SystemTranscriptionOutcome(
+                document: nil,
+                transcriptSegments: [],
+                degradationReason: .systemASRFailedFallbackUsed
+            )
+        } catch let error as TranscriptionPipelineError {
+            guard allowMicOnlyDegradation else {
+                throw error
+            }
+            return SystemTranscriptionOutcome(
+                document: nil,
+                transcriptSegments: [],
+                degradationReason: .systemASRFailedFallbackUsed
+            )
+        } catch {
+            guard allowMicOnlyDegradation else {
+                throw error
+            }
+            return SystemTranscriptionOutcome(
+                document: nil,
+                transcriptSegments: [],
+                degradationReason: .systemASRFailedFallbackUsed
+            )
+        }
+    }
+
+    private func loadOrRunDiarization(
+        diarizationEngine: (engine: (any DiarizationEngine)?, backendUnavailableReason: String?),
+        existingFile: String,
+        systemAudioURL: URL?,
+        sessionID: UUID,
+        sessionDirectory: URL,
+        configuration: DiarizationEngineConfiguration
+    ) async throws -> DiarizationLoadOutcome {
+        let destination = sessionDirectory.appendingPathComponent(existingFile)
+        let modelUsed = configuration.modelURL?.lastPathComponent ?? "sdk-managed"
+
+        if let existing: DiarizationDocument = try readJSONIfExists(from: destination) {
+            return DiarizationLoadOutcome(document: existing, degradedReason: nil, modelUsed: modelUsed)
+        }
+
+        if let backendUnavailableReason = diarizationEngine.backendUnavailableReason {
+            return DiarizationLoadOutcome(
+                document: nil,
+                degradedReason: "diarization backend unavailable (\(backendUnavailableReason))",
+                modelUsed: modelUsed
+            )
+        }
+
+        guard let systemAudioURL else {
+            return DiarizationLoadOutcome(document: nil, degradedReason: nil, modelUsed: nil)
+        }
+
+        guard ["system.raw.caf", "system.raw.flac", "system.m4a"].contains(systemAudioURL.lastPathComponent) else {
+            return DiarizationLoadOutcome(document: nil, degradedReason: "unsupported system audio source", modelUsed: nil)
+        }
+
+        guard let engine = diarizationEngine.engine else {
+            return DiarizationLoadOutcome(document: nil, degradedReason: "diarization backend unavailable", modelUsed: nil)
+        }
+
+        do {
+            let document = try await engine.diarize(
+                systemAudioURL: systemAudioURL,
+                sessionID: sessionID,
+                configuration: configuration
+            )
+            try writeJSON(document, to: destination)
+            return DiarizationLoadOutcome(document: document, degradedReason: nil, modelUsed: modelUsed)
+        } catch let error as DiarizationRuntimeError {
+            return DiarizationLoadOutcome(
+                document: nil,
+                degradedReason: error.errorDescription ?? "runtime error",
+                modelUsed: modelUsed
+            )
+        } catch {
+            return DiarizationLoadOutcome(
+                document: nil,
+                degradedReason: error.localizedDescription,
+                modelUsed: modelUsed
+            )
+        }
+    }
+
+    private struct DiarizationLoadOutcome {
+        var document: DiarizationDocument?
+        var degradedReason: String?
+        var modelUsed: String?
+    }
+
+    private struct SystemTranscriptionOutcome {
+        var document: ASRDocument?
+        var transcriptSegments: [TranscriptSegment]
+        var degradationReason: PipelineDegradationReason?
+    }
+
+    private func makeReadySummary(
+        diarizationDegradedReason: String?,
+        degradedReasons: [PipelineDegradationReason]
+    ) -> String {
+        if let diarizationDegradedReason {
+            return "Transcript ready. System diarization degraded: \(diarizationDegradedReason)."
+        }
+        if !degradedReasons.isEmpty {
+            return "Transcript ready (degraded: \(degradedReasons.map(\.rawValue).joined(separator: ", ")))."
+        }
+        return "Transcript ready."
+    }
+
+    private func presentChannels(mic: ASRDocument?, system: ASRDocument?) -> [TranscriptChannel] {
+        var channels: [TranscriptChannel] = []
+        if mic != nil { channels.append(.mic) }
+        if system != nil { channels.append(.system) }
+        return channels
+    }
+
+    private func writeJSON<T: Encodable>(_ value: T, to url: URL) throws {
+        let data = try encoder.encode(value)
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func readJSONIfExists<T: Decodable>(from url: URL) throws -> T? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+
+        let data = try Data(contentsOf: url)
+        return try decoder.decode(T.self, from: data)
+    }
+
+    // Legacy compatibility/debug path. Keep isolated and out of the default flow.
+    private var legacyCompatPath: LegacyCompatPath {
+        LegacyCompatPath(encoder: encoder, decoder: decoder)
+    }
+}
+
+private struct LegacyCompatPath {
+    let encoder: JSONEncoder
+    let decoder: JSONDecoder
+
+    func loadOrRunASR(
         asrEngine: any ASREngine,
         existingFile: String,
         modelFingerprintFile: String,
@@ -372,13 +790,13 @@ struct TranscriptionPipeline {
             if channel == .system {
                 let isZeroByte = try isZeroByteAudioFile(preferredAudioURL)
                 if isZeroByte {
-                return attemptSystemRecovery(
-                    sessionID: sessionID,
-                    channel: channel,
-                    destination: destination,
-                    modelFingerprintURL: fingerprintURL,
-                    currentFingerprint: currentFingerprint
-                )
+                    return attemptSystemRecovery(
+                        sessionID: sessionID,
+                        channel: channel,
+                        destination: destination,
+                        modelFingerprintURL: fingerprintURL,
+                        currentFingerprint: currentFingerprint
+                    )
                 }
             }
 
@@ -418,12 +836,6 @@ struct TranscriptionPipeline {
             }
         } catch {
             return .failure(error)
-        }
-    }
-
-    private func appendEmptyASRReason(for document: ASRDocument?, isMic: Bool, to reasons: inout [PipelineDegradationReason]) {
-        if document?.segments.isEmpty == true {
-            reasons.append(isMic ? .emptyMicASR : .emptySystemASR)
         }
     }
 
@@ -478,89 +890,6 @@ struct TranscriptionPipeline {
         }
     }
 
-    private func loadOrRunDiarization(
-        diarizationEngine: (any DiarizationEngine)?,
-        existingFile: String,
-        systemAudioURL: URL?,
-        sessionID: UUID,
-        sessionDirectory: URL,
-        configuration: DiarizationEngineConfiguration?,
-        backendUnavailableReason: String?
-    ) async throws -> DiarizationLoadOutcome {
-        let destination = sessionDirectory.appendingPathComponent(existingFile)
-
-        if let existing: DiarizationDocument = try readJSONIfExists(from: destination) {
-            return DiarizationLoadOutcome(
-                document: existing,
-                degradedReason: nil,
-                modelUsed: configuration?.modelURL.lastPathComponent
-            )
-        }
-
-        if let backendUnavailableReason {
-            return DiarizationLoadOutcome(
-                document: nil,
-                degradedReason: "diarization backend unavailable (\(backendUnavailableReason))",
-                modelUsed: configuration?.modelURL.lastPathComponent
-            )
-        }
-
-        guard let systemAudioURL else {
-            return DiarizationLoadOutcome(document: nil, degradedReason: "system audio track missing", modelUsed: nil)
-        }
-
-        guard ["system.raw.caf", "system.raw.flac"].contains(systemAudioURL.lastPathComponent) else {
-            return DiarizationLoadOutcome(document: nil, degradedReason: "unsupported system audio source", modelUsed: nil)
-        }
-
-        guard let configuration else {
-            return DiarizationLoadOutcome(document: nil, degradedReason: "diarization model not selected", modelUsed: nil)
-        }
-
-        guard let diarizationEngine else {
-            return DiarizationLoadOutcome(document: nil, degradedReason: "diarization backend unavailable", modelUsed: nil)
-        }
-
-        do {
-            let document = try await diarizationEngine.diarize(
-                systemAudioURL: systemAudioURL,
-                sessionID: sessionID,
-                configuration: configuration
-            )
-            try writeJSON(document, to: destination)
-            return DiarizationLoadOutcome(
-                document: document,
-                degradedReason: nil,
-                modelUsed: configuration.modelURL.lastPathComponent
-            )
-        } catch let error as DiarizationRuntimeError {
-            return DiarizationLoadOutcome(
-                document: nil,
-                degradedReason: error.errorDescription ?? "runtime error",
-                modelUsed: configuration.modelURL.lastPathComponent
-            )
-        } catch {
-            return DiarizationLoadOutcome(
-                document: nil,
-                degradedReason: error.localizedDescription,
-                modelUsed: configuration.modelURL.lastPathComponent
-            )
-        }
-    }
-
-    private struct DiarizationLoadOutcome {
-        var document: DiarizationDocument?
-        var degradedReason: String?
-        var modelUsed: String?
-    }
-
-    private func presentChannels(mic: ASRDocument?, system: ASRDocument?) -> [TranscriptChannel] {
-        var channels: [TranscriptChannel] = []
-        if mic != nil { channels.append(.mic) }
-        if system != nil { channels.append(.system) }
-        return channels
-    }
-
     private func writeJSON<T: Encodable>(_ value: T, to url: URL) throws {
         let data = try encoder.encode(value)
         try data.write(to: url, options: .atomic)
@@ -583,20 +912,12 @@ struct TranscriptionPipeline {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func isSystemAudioUnavailableError(_ message: String) -> Bool {
+    private func isRecoverableSystemInferenceFailure(_ message: String) -> Bool {
         let normalized = message.lowercased()
         return normalized.contains("failed to read the frames of the audio data")
             || normalized.contains("failed to read audio file")
             || normalized.contains("invalid argument")
-    }
-
-    private func isRecoverableSystemInferenceFailure(_ message: String) -> Bool {
-        if isSystemAudioUnavailableError(message) {
-            return true
-        }
-        return message
-            .lowercased()
-            .contains("input audio format is not supported")
+            || normalized.contains("input audio format is not supported")
     }
 
     private func isZeroByteAudioFile(_ url: URL) throws -> Bool {

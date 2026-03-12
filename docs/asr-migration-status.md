@@ -15,6 +15,6 @@ Completed:
 Known limitations:
 - Long recordings are still decoded into a single in-memory buffer before ASR
 - No streaming transcription yet
-- No forced mono/resample step before FluidAudio unless later required
+- Session audio is currently normalized to mono at the backend-local FluidAudio prep boundary; diarization resamples to 16 kHz only where the FluidAudio diarization runtime requires it
 
 Next work should be feature/stability work, not backend migration cleanup.

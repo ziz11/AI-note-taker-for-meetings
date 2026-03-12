@@ -3,6 +3,13 @@ import Foundation
 import ApplicationServices
 import ScreenCaptureKit
 
+private enum LiveCaptureArtifactNames {
+    static let microphoneTemporary = "mic.raw.caf"
+    static let systemTemporary = "system.raw.caf"
+    static let microphoneDurable = "mic.m4a"
+    static let systemDurable = "system.m4a"
+}
+
 struct CaptureArtifacts {
     var microphoneFile: String?
     var systemAudioFile: String?
@@ -256,6 +263,7 @@ enum PCMWriterError: Error {
 actor PCMTrackWriter {
     static let canonicalSampleRate: Double = 48_000
     static let canonicalChannels: AVAudioChannelCount = 1
+    static let durableAACBitRate = 96_000
 
     let kind: TrackKind
     let fileName: String
@@ -291,21 +299,9 @@ actor PCMTrackWriter {
         self.fileURL = fileURL
         self.outputFormat = canonical
 
-        let fileSettings: [String: Any]
-        if fileURL.pathExtension.lowercased() == "flac" {
-            fileSettings = [
-                AVFormatIDKey: kAudioFormatFLAC,
-                AVSampleRateKey: Self.canonicalSampleRate,
-                AVNumberOfChannelsKey: Int(Self.canonicalChannels),
-                AVLinearPCMBitDepthKey: 24
-            ]
-        } else {
-            fileSettings = canonical.settings
-        }
-
         self.audioFile = try AVAudioFile(
             forWriting: fileURL,
-            settings: fileSettings,
+            settings: Self.fileSettings(for: fileURL),
             commonFormat: .pcmFormatFloat32,
             interleaved: false
         )
@@ -313,22 +309,53 @@ actor PCMTrackWriter {
         self.diagnostics = diagnostics
     }
 
+    static func fileSettings(for fileURL: URL) -> [String: Any] {
+        switch fileURL.pathExtension.lowercased() {
+        case "flac":
+            [
+                AVFormatIDKey: kAudioFormatFLAC,
+                AVSampleRateKey: Self.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(Self.canonicalChannels),
+                AVLinearPCMBitDepthKey: 24
+            ]
+        case "m4a":
+            [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: Self.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(Self.canonicalChannels),
+                AVEncoderBitRateKey: Self.durableAACBitRate,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            ]
+        default:
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: Self.canonicalSampleRate,
+                channels: Self.canonicalChannels,
+                interleaved: false
+            )?.settings ?? [:]
+        }
+    }
+
     func append(sampleBuffer: CMSampleBuffer) throws {
         guard CMSampleBufferDataIsReady(sampleBuffer) else {
             throw PCMWriterError.invalidSampleBuffer
         }
 
+        let inputBuffer = try Self.makePCMBuffer(from: sampleBuffer)
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        if pts.isValid {
-            let seconds = pts.seconds
+        try append(pcmBuffer: inputBuffer, presentationTime: pts.isValid ? pts : nil)
+    }
+
+    func append(pcmBuffer: AVAudioPCMBuffer, presentationTime: CMTime? = nil) throws {
+        if let presentationTime, presentationTime.isValid {
+            let seconds = presentationTime.seconds
             if firstPTS == nil {
                 firstPTS = seconds
             }
             lastPTS = seconds
         }
 
-        let inputBuffer = try Self.makePCMBuffer(from: sampleBuffer)
-        let renderedBuffer = try convertIfNeeded(inputBuffer)
+        let renderedBuffer = try convertIfNeeded(pcmBuffer)
         guard renderedBuffer.frameLength > 0 else { return }
 
         try stage(renderedBuffer)
@@ -504,6 +531,35 @@ actor PCMTrackWriter {
     }
 }
 
+actor MirroredTrackWriter {
+    private let temporary: PCMTrackWriter
+    private let durable: PCMTrackWriter?
+
+    init(temporary: PCMTrackWriter, durable: PCMTrackWriter?) {
+        self.temporary = temporary
+        self.durable = durable
+    }
+
+    func append(sampleBuffer: CMSampleBuffer) async throws {
+        try await temporary.append(sampleBuffer: sampleBuffer)
+        try await durable?.append(sampleBuffer: sampleBuffer)
+    }
+
+    func append(pcmBuffer: AVAudioPCMBuffer, presentationTime: CMTime? = nil) async throws {
+        try await temporary.append(pcmBuffer: pcmBuffer, presentationTime: presentationTime)
+        try await durable?.append(pcmBuffer: pcmBuffer, presentationTime: presentationTime)
+    }
+
+    func finalize() async -> [TrackRuntimeStats] {
+        var stats: [TrackRuntimeStats] = []
+        stats.append(await temporary.finalize())
+        if let durable {
+            stats.append(await durable.finalize())
+        }
+        return stats
+    }
+}
+
 final class FallbackMicrophoneRecorder: NSObject, AVAudioRecorderDelegate {
     private var recorder: AVAudioRecorder?
     private var finishContinuation: CheckedContinuation<Void, Error>?
@@ -671,8 +727,8 @@ final class AudioCaptureService: AudioCaptureEngine {
     private var activeSessionDirectory: URL?
     private var activeSessionID: UUID?
 
-    private var microphoneWriter: PCMTrackWriter?
-    private var systemWriter: PCMTrackWriter?
+    private var microphoneWriter: MirroredTrackWriter?
+    private var systemWriter: MirroredTrackWriter?
 
     private var microphoneLevelValue: Double = 0
     private var systemLevelValue: Double = 0
@@ -693,19 +749,18 @@ final class AudioCaptureService: AudioCaptureEngine {
 
         let sessionID = UUID(uuidString: sessionDirectory.lastPathComponent) ?? UUID()
 
-        let microphoneFileName = "mic.raw.flac"
-        let systemFileName = "system.raw.flac"
-
-        let microphoneURL = sessionDirectory.appendingPathComponent(microphoneFileName)
-        let systemURL = sessionDirectory.appendingPathComponent(systemFileName)
+        let microphoneTemporaryURL = sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneTemporary)
+        let systemTemporaryURL = sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemTemporary)
+        let microphoneDurableURL = sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable)
+        let systemDurableURL = sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable)
 
         do {
             try await metadataStore.createSession(id: sessionID, in: sessionDirectory)
             var streamStartError: Error?
             var systemCaptureAttempted = false
             var didStartStreamCapture = false
-            var micWriter: PCMTrackWriter?
-            var sysWriter: PCMTrackWriter?
+            var micWriter: MirroredTrackWriter?
+            var sysWriter: MirroredTrackWriter?
 
             var hasSystemCapturePermission = screenCaptureService.hasSystemRecordingPermission()
             if !hasSystemCapturePermission {
@@ -713,8 +768,30 @@ final class AudioCaptureService: AudioCaptureEngine {
             }
 
             if hasSystemCapturePermission {
-                let streamMicWriter = try PCMTrackWriter(kind: .microphone, fileName: microphoneFileName, fileURL: microphoneURL)
-                let streamSysWriter = try PCMTrackWriter(kind: .system, fileName: systemFileName, fileURL: systemURL)
+                let streamMicWriter = try MirroredTrackWriter(
+                    temporary: PCMTrackWriter(
+                        kind: .microphone,
+                        fileName: LiveCaptureArtifactNames.microphoneTemporary,
+                        fileURL: microphoneTemporaryURL
+                    ),
+                    durable: PCMTrackWriter(
+                        kind: .microphone,
+                        fileName: LiveCaptureArtifactNames.microphoneDurable,
+                        fileURL: microphoneDurableURL
+                    )
+                )
+                let streamSysWriter = try MirroredTrackWriter(
+                    temporary: PCMTrackWriter(
+                        kind: .system,
+                        fileName: LiveCaptureArtifactNames.systemTemporary,
+                        fileURL: systemTemporaryURL
+                    ),
+                    durable: PCMTrackWriter(
+                        kind: .system,
+                        fileName: LiveCaptureArtifactNames.systemDurable,
+                        fileURL: systemDurableURL
+                    )
+                )
                 micWriter = streamMicWriter
                 sysWriter = streamSysWriter
                 systemCaptureAttempted = true
@@ -761,7 +838,7 @@ final class AudioCaptureService: AudioCaptureEngine {
                 try? await screenCaptureService.stopCapture()
                 micWriter = nil
                 sysWriter = nil
-                try fallbackMicrophoneRecorder.startRecording(to: microphoneURL)
+                try fallbackMicrophoneRecorder.startRecording(to: microphoneTemporaryURL)
                 if let streamStartError {
                     try await metadataStore.appendNote(
                         "ScreenCaptureKit start failed (\(streamStartError.localizedDescription)). Falling back to mic-only capture.",
@@ -779,17 +856,17 @@ final class AudioCaptureService: AudioCaptureEngine {
             self.systemWriter = didStartStreamCapture ? sysWriter : nil
             self.activeSessionDirectory = sessionDirectory
             self.activeSessionID = sessionID
-            self.microphoneFileName = microphoneFileName
-            self.systemAudioFileName = didStartStreamCapture ? systemFileName : nil
+            self.microphoneFileName = LiveCaptureArtifactNames.microphoneDurable
+            self.systemAudioFileName = didStartStreamCapture ? LiveCaptureArtifactNames.systemDurable : nil
             self.isRunning = true
 
             return CaptureArtifacts(
-                microphoneFile: microphoneFileName,
-                systemAudioFile: didStartStreamCapture ? systemFileName : nil,
+                microphoneFile: LiveCaptureArtifactNames.microphoneDurable,
+                systemAudioFile: didStartStreamCapture ? LiveCaptureArtifactNames.systemDurable : nil,
                 mergedCallFile: nil,
                 connectorNotesFile: "capture-session.json",
                 note: streamStartError == nil
-                    ? "Recording microphone and system audio to canonical raw tracks."
+                    ? "Recording microphone and system audio to temporary CAF and durable M4A tracks."
                     : "Recording microphone only. System capture permissions are unavailable."
             )
         } catch {
@@ -860,14 +937,25 @@ final class AudioCaptureService: AudioCaptureEngine {
         }
         try? await fallbackMicrophoneRecorder.stopRecording()
 
-        if let microphoneWriter {
-            let micStats = await microphoneWriter.finalize()
+        if let microphoneWriter,
+           let micStats = await microphoneWriter.finalize().first {
             try await metadataStore.updateTrack(micStats, in: sessionDirectory)
         }
 
-        if let systemWriter {
-            let systemStats = await systemWriter.finalize()
+        if let systemWriter,
+           let systemStats = await systemWriter.finalize().first {
             try await metadataStore.updateTrack(systemStats, in: sessionDirectory)
+        }
+
+        try? await exportDurableTrackIfNeeded(
+            from: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneTemporary),
+            to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable)
+        )
+        if systemAudioFileName != nil {
+            try? await exportDurableTrackIfNeeded(
+                from: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemTemporary),
+                to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable)
+            )
         }
 
         try await metadataStore.updateStatus(.readyForMix, in: sessionDirectory)
@@ -890,6 +978,22 @@ final class AudioCaptureService: AudioCaptureEngine {
             connectorNotesFile: "capture-session.json",
             note: "Raw tracks finalized. Offline merge is running in background."
         )
+    }
+
+    private func exportDurableTrackIfNeeded(from sourceURL: URL, to destinationURL: URL) async throws {
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            return
+        }
+        guard !FileManager.default.fileExists(atPath: destinationURL.path) else {
+            return
+        }
+
+        let asset = AVURLAsset(url: sourceURL)
+        guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw AudioCaptureError.mixdownFailed
+        }
+
+        try await exportSession.export(to: destinationURL, as: .m4a)
     }
 
     func currentMicrophoneLevel() -> Double {

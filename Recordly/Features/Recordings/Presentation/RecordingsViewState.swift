@@ -1,7 +1,12 @@
 import Foundation
 
+enum RecordingsAlertPrimaryAction: Equatable {
+    case openModels
+}
+
 struct RecordingsAlertState: Equatable {
     var message: String
+    var primaryAction: RecordingsAlertPrimaryAction?
 }
 
 enum RecordingProcessingKind: String, Equatable, Hashable {
@@ -50,6 +55,7 @@ struct RecordingRuntimeState: Equatable {
     var summarizationProgress: Double?
     var summarizationStageLabel: String?
     var processingJobs: [RecordingProcessingJob] = []
+    var isTranscriptionQueuePaused = false
     var isCaptureTransitionInFlight = false
 
     var activeProcessingCount: Int {
@@ -82,6 +88,8 @@ struct RecordingsViewState: Equatable {
     var searchQuery = ""
     var selectedModelProfile: ModelProfile = .balanced
     var activeEngineName: String
+    var pendingRecoveryTranscriptionCount = 0
+    var isRecoveryPromptVisible = false
     var storageLocationPath = ""
     var runtime = RecordingRuntimeState()
     var alert: RecordingsAlertState?

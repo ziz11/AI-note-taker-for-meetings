@@ -1,42 +1,138 @@
 import XCTest
 @testable import Recordly
 
-final class SystemSpeakerMappingServiceTests: XCTestCase {
-    func testMappingUsesMaxOverlap() {
-        let service = SystemSpeakerMappingService(overlapThresholdRatio: 0.2)
+final class SystemTranscriptAlignmentServiceTests: XCTestCase {
+    func testAlignmentUsesBestOverlapAndAssignsStableRemoteSpeakerIDs() {
+        let service = SystemTranscriptAlignmentService(overlapThresholdRatio: 0.2)
 
-        let systemASR = [
-            ASRSegment(id: "seg-1", startMs: 1000, endMs: 2000, text: "hello", confidence: nil, language: nil, words: nil)
-        ]
-        let diarization = DiarizationDocument(
-            version: 1,
-            sessionID: UUID(),
-            createdAt: Date(),
-            segments: [
-                DiarizationSegment(id: "d1", speaker: "Speaker 1", startMs: 900, endMs: 2100, confidence: 0.9)
-            ]
+        let aligned = service.align(
+            asrSegments: [
+                ASRSegment(id: "seg-1", startMs: 0, endMs: 1000, text: "first", confidence: nil, language: nil, words: nil),
+                ASRSegment(id: "seg-2", startMs: 1100, endMs: 2100, text: "second", confidence: nil, language: nil, words: nil),
+            ],
+            diarization: DiarizationDocument(
+                version: 1,
+                sessionID: UUID(),
+                createdAt: Date(),
+                segments: [
+                    DiarizationSegment(id: "d1", speaker: "fluid-b", startMs: 1100, endMs: 2100, confidence: 0.92),
+                    DiarizationSegment(id: "d2", speaker: "fluid-a", startMs: 0, endMs: 1000, confidence: 0.94),
+                ]
+            )
         )
 
-        let mapped = service.mapSystemSpeakers(asrSegments: systemASR, diarization: diarization)
-        XCTAssertEqual(mapped.first?.speaker, "Speaker 1")
+        XCTAssertEqual(aligned.map(\.speakerRole), [.remote, .remote])
+        XCTAssertEqual(aligned.map(\.speakerId), ["remote_1", "remote_2"])
+        XCTAssertEqual(aligned.map(\.speaker), ["Speaker 1", "Speaker 2"])
     }
 
-    func testLowOverlapGetsUnknownSpeaker() {
-        let service = SystemSpeakerMappingService(overlapThresholdRatio: 0.8)
+    func testAlignmentCollapsesOverlappingDiarizationToSingleBestSpeaker() {
+        let service = SystemTranscriptAlignmentService(overlapThresholdRatio: 0.2)
 
-        let systemASR = [
-            ASRSegment(id: "seg-1", startMs: 1000, endMs: 2000, text: "hello", confidence: nil, language: nil, words: nil)
-        ]
-        let diarization = DiarizationDocument(
+        let aligned = service.align(
+            asrSegments: [
+                ASRSegment(id: "seg-1", startMs: 1000, endMs: 2000, text: "hello", confidence: nil, language: nil, words: nil)
+            ],
+            diarization: DiarizationDocument(
+                version: 1,
+                sessionID: UUID(),
+                createdAt: Date(),
+                segments: [
+                    DiarizationSegment(id: "d1", speaker: "speaker-a", startMs: 900, endMs: 2100, confidence: 0.9),
+                    DiarizationSegment(id: "d2", speaker: "speaker-b", startMs: 1400, endMs: 1700, confidence: 0.95),
+                ]
+            )
+        )
+
+        XCTAssertEqual(aligned.count, 1)
+        XCTAssertEqual(aligned[0].speaker, "Speaker 1")
+        XCTAssertEqual(aligned[0].speakerRole, .remote)
+        XCTAssertEqual(aligned[0].speakerId, "remote_1")
+    }
+
+    func testLowOverlapFallsBackToRemoteUnknownSpeakerRole() {
+        let service = SystemTranscriptAlignmentService(overlapThresholdRatio: 0.8)
+
+        let aligned = service.align(
+            asrSegments: [
+                ASRSegment(id: "seg-1", startMs: 1000, endMs: 2000, text: "hello", confidence: nil, language: nil, words: nil)
+            ],
+            diarization: DiarizationDocument(
+                version: 1,
+                sessionID: UUID(),
+                createdAt: Date(),
+                segments: [
+                    DiarizationSegment(id: "d1", speaker: "Speaker 1", startMs: 1900, endMs: 2000, confidence: 0.9)
+                ]
+            )
+        )
+
+        XCTAssertEqual(aligned.first?.speaker, "Remote")
+        XCTAssertEqual(aligned.first?.speakerRole, .unknown)
+        XCTAssertNil(aligned.first?.speakerId)
+    }
+
+    func testMissingDiarizationMarksSpeakerAsUnknown() {
+        let service = SystemTranscriptAlignmentService()
+
+        let aligned = service.align(
+            asrSegments: [
+                ASRSegment(id: "seg-1", startMs: 0, endMs: 1000, text: "hello", confidence: nil, language: nil, words: nil)
+            ],
+            diarization: nil
+        )
+
+        XCTAssertEqual(aligned.first?.speaker, "Remote")
+        XCTAssertEqual(aligned.first?.speakerRole, .unknown)
+        XCTAssertNil(aligned.first?.speakerId)
+    }
+
+    func testChunkTranscriptBuilderNormalizesSpeakerLabelsByFirstEncounterOrder() {
+        let builder = SystemChunkTranscriptBuilder()
+
+        let result = builder.build(from: SystemChunkTranscriptionDocument(
             version: 1,
             sessionID: UUID(),
             createdAt: Date(),
             segments: [
-                DiarizationSegment(id: "d1", speaker: "Speaker 1", startMs: 1900, endMs: 2000, confidence: 0.9)
+                SystemChunkTranscriptSegment(
+                    id: "seg-1",
+                    speakerKey: "fluid-b",
+                    startMs: 1000,
+                    endMs: 1500,
+                    text: "first",
+                    confidence: nil,
+                    language: "ru",
+                    speakerConfidence: 0.9,
+                    words: nil
+                ),
+                SystemChunkTranscriptSegment(
+                    id: "seg-2",
+                    speakerKey: "fluid-a",
+                    startMs: 1600,
+                    endMs: 2100,
+                    text: "second",
+                    confidence: nil,
+                    language: "ru",
+                    speakerConfidence: 0.8,
+                    words: nil
+                ),
+                SystemChunkTranscriptSegment(
+                    id: "seg-3",
+                    speakerKey: "fluid-b",
+                    startMs: 2200,
+                    endMs: 2600,
+                    text: "third",
+                    confidence: nil,
+                    language: "ru",
+                    speakerConfidence: 0.9,
+                    words: nil
+                )
             ]
-        )
+        ))
 
-        let mapped = service.mapSystemSpeakers(asrSegments: systemASR, diarization: diarization)
-        XCTAssertEqual(mapped.first?.speaker, "Unknown Speaker")
+        XCTAssertEqual(result.map(\.speaker), ["SPEAKER_01", "SPEAKER_02", "SPEAKER_01"])
+        XCTAssertEqual(result.map(\.speakerId), ["remote_1", "remote_2", "remote_1"])
+        XCTAssertEqual(result.map(\.speakerRole), [.remote, .remote, .remote])
     }
 }
