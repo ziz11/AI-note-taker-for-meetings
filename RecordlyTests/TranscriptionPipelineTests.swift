@@ -528,6 +528,17 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(decoded.assets.transcriptionAudioProvenance, .m4aRecovery)
     }
 
+    func testPCMTrackWriterUsesAACSettingsForDurableM4A() throws {
+        let settings = PCMTrackWriter.fileSettings(
+            for: URL(filePath: "/tmp/mic.m4a")
+        )
+
+        XCTAssertEqual(settings[AVFormatIDKey] as? UInt32, kAudioFormatMPEG4AAC)
+        XCTAssertEqual(settings[AVSampleRateKey] as? Double, PCMTrackWriter.canonicalSampleRate)
+        XCTAssertEqual(settings[AVNumberOfChannelsKey] as? Int, Int(PCMTrackWriter.canonicalChannels))
+        XCTAssertEqual(settings[AVEncoderBitRateKey] as? Int, 96_000)
+    }
+
     func testMirroredTrackWriterCreatesTemporaryCAFAndDurableM4A() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -263,6 +263,7 @@ enum PCMWriterError: Error {
 actor PCMTrackWriter {
     static let canonicalSampleRate: Double = 48_000
     static let canonicalChannels: AVAudioChannelCount = 1
+    static let durableAACBitRate = 96_000
 
     let kind: TrackKind
     let fileName: String
@@ -298,26 +299,41 @@ actor PCMTrackWriter {
         self.fileURL = fileURL
         self.outputFormat = canonical
 
-        let fileSettings: [String: Any]
-        if fileURL.pathExtension.lowercased() == "flac" {
-            fileSettings = [
-                AVFormatIDKey: kAudioFormatFLAC,
-                AVSampleRateKey: Self.canonicalSampleRate,
-                AVNumberOfChannelsKey: Int(Self.canonicalChannels),
-                AVLinearPCMBitDepthKey: 24
-            ]
-        } else {
-            fileSettings = canonical.settings
-        }
-
         self.audioFile = try AVAudioFile(
             forWriting: fileURL,
-            settings: fileSettings,
+            settings: Self.fileSettings(for: fileURL),
             commonFormat: .pcmFormatFloat32,
             interleaved: false
         )
         self.fallback = fallback
         self.diagnostics = diagnostics
+    }
+
+    static func fileSettings(for fileURL: URL) -> [String: Any] {
+        switch fileURL.pathExtension.lowercased() {
+        case "flac":
+            [
+                AVFormatIDKey: kAudioFormatFLAC,
+                AVSampleRateKey: Self.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(Self.canonicalChannels),
+                AVLinearPCMBitDepthKey: 24
+            ]
+        case "m4a":
+            [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: Self.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(Self.canonicalChannels),
+                AVEncoderBitRateKey: Self.durableAACBitRate,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            ]
+        default:
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: Self.canonicalSampleRate,
+                channels: Self.canonicalChannels,
+                interleaved: false
+            )?.settings ?? [:]
+        }
     }
 
     func append(sampleBuffer: CMSampleBuffer) throws {
