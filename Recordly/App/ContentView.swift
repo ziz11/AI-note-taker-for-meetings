@@ -81,11 +81,32 @@ struct ContentView: View {
         }
         .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 420)
         .alert("Action Failed", isPresented: errorBinding) {
+            if let primaryAction = store.viewState.alert?.primaryAction {
+                switch primaryAction {
+                case .openModels:
+                    Button("Open Models") {
+                        store.openModelsFromAlert()
+                    }
+                }
+            }
             Button("OK", role: .cancel) {
                 store.dismissError()
             }
         } message: {
             Text(store.viewState.alert?.message ?? "")
+        }
+        .alert(
+            "Resume pending transcriptions?",
+            isPresented: recoveryPromptBinding
+        ) {
+            Button("Resume") {
+                store.acknowledgeRecoveryPrompt(shouldResume: true)
+            }
+            Button("Later", role: .cancel) {
+                store.acknowledgeRecoveryPrompt(shouldResume: false)
+            }
+        } message: {
+            Text("Found \(store.pendingRecoveryTranscriptionCount) recordings with unfinished transcriptions from the previous session. Resume them now?")
         }
         .sheet(isPresented: onboardingBinding) {
             ModelOnboardingView(
@@ -115,6 +136,17 @@ struct ContentView: View {
             set: { newValue in
                 if !newValue {
                     store.modelOnboardingCoordinator.dismiss()
+                }
+            }
+        )
+    }
+
+    private var recoveryPromptBinding: Binding<Bool> {
+        Binding(
+            get: { store.shouldPresentRecoveryPrompt },
+            set: { newValue in
+                if !newValue {
+                    store.acknowledgeRecoveryPrompt(shouldResume: false)
                 }
             }
         )
