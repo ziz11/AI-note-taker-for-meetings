@@ -32,6 +32,49 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 ## Prerequisites
 
 - **llama.cpp CLI binary** (for LLM summarization): `main` or `llama-cli` on `PATH` (for example from `brew install llama.cpp`). Without it, summarization falls back to template output.
+- **Developer ID Application certificate** (for outside-App-Store distribution): installed in Keychain Access on the build Mac.
+
+## Distribution build
+
+To produce a signed distribution build for direct installation outside the Mac App Store:
+
+```bash
+cd /Users/nacnac/Documents/Other_Interner/Recordly
+TEAM_ID=YOURTEAMID \
+SIGNING_IDENTITY="Developer ID Application: Your Name (YOURTEAMID)" \
+./scripts/build-distribution-app.sh
+```
+
+Outputs:
+
+- Signed app bundle: `build/export/Recordly.app`
+- Zip archive for sharing: `build/dist/Recordly.zip`
+
+Optional environment variables:
+
+- `PROJECT_PATH`
+- `SCHEME`
+- `CONFIGURATION`
+- `ARCHIVE_PATH`
+- `EXPORT_PATH`
+- `OUTPUT_DIR`
+- `EXPORT_OPTIONS_PLIST`
+
+## Unsigned local build
+
+If you do not have an Apple Developer team or signing certificate yet, build an unsigned app for local/manual testing:
+
+```bash
+cd /Users/nacnac/Documents/Other_Interner/Recordly
+./scripts/build-unsigned-app.sh
+```
+
+Outputs:
+
+- Unsigned app bundle: `build/unsigned/export/Recordly.app`
+- Zip archive: `build/dist-unsigned/Recordly-unsigned.zip`
+
+This is suitable for local testing and manual transfer, but Gatekeeper may block it on other Macs because it is not signed or notarized.
 
 ## Local models setup
 

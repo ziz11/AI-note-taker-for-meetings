@@ -1162,7 +1162,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         XCTAssertNil(summaryEngine.capturedSRTText)
     }
 
-    func testCompleteCaptureWithTranscriptionUnavailablePrecheckKeepsSessionFailed() async throws {
+    func testCompleteCaptureWithDiarizationUnavailablePrecheckKeepsSessionReady() async throws {
         let recordingID = UUID()
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
@@ -1229,26 +1229,23 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             runTranscription: true
         )
 
-        XCTAssertNil(result.transcriptionResult)
-        XCTAssertEqual(result.recording.transcriptState, .failed)
-        XCTAssertEqual(result.recording.lifecycleState, .failed)
-        XCTAssertTrue(result.recording.notes.hasPrefix("Transcript failed:"))
-
-        guard let workflowError = result.processingError as? RecordingWorkflowError else {
-            return XCTFail("Expected recording workflow error.")
-        }
-        guard case let .transcriptionUnavailable(.unavailable(reason)) = workflowError else {
-            return XCTFail("Expected transcriptionUnavailable reason.")
-        }
+        let transcriptionResult = try XCTUnwrap(result.transcriptionResult)
+        XCTAssertEqual(result.recording.transcriptState, .ready)
+        XCTAssertEqual(result.recording.lifecycleState, .ready)
+        XCTAssertNil(result.processingError)
+        XCTAssertEqual(transcriptionResult.state, .ready)
         XCTAssertEqual(
-            reason,
-            "System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
+            result.recording.notes,
+            "Transcript ready (degraded: emptyMicASR, emptySystemASR)."
         )
 
         let persisted = try XCTUnwrap(repository.recordings.first(where: { $0.id == recordingID }))
-        XCTAssertEqual(persisted.transcriptState, .failed)
-        XCTAssertEqual(persisted.lifecycleState, .failed)
-        XCTAssertTrue(persisted.notes.hasPrefix("Transcript failed:"))
+        XCTAssertEqual(persisted.transcriptState, .ready)
+        XCTAssertEqual(persisted.lifecycleState, .ready)
+        XCTAssertEqual(
+            persisted.notes,
+            "Transcript ready (degraded: emptyMicASR, emptySystemASR)."
+        )
     }
 
     func testRecoverPendingMergesPreservesTranscriptionFailureNote() async throws {
@@ -1312,7 +1309,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         XCTAssertEqual(restored.notes, failureReason)
     }
 
-    func testWorkflowDefaultChunkedTranscriptionFailsFastWhenDiarizationPackageMissing() async throws {
+    func testWorkflowDefaultChunkedTranscriptionDegradesWhenDiarizationPackageMissing() async throws {
         let recordingID = UUID()
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
@@ -1363,22 +1360,16 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             repository: repository
         )
 
-        await XCTAssertThrowsErrorAsync(try await workflow.transcribe(recording: recording)) { error in
-            guard case let RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason)) = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertEqual(
-                reason,
-                "System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
-            )
-        }
+        let updated = try await workflow.transcribe(recording: recording)
 
         let savedRecording = try XCTUnwrap(repository.recordings.first(where: { $0.id == recordingID }))
-        XCTAssertEqual(savedRecording.transcriptState, .failed)
-        XCTAssertEqual(savedRecording.lifecycleState, .failed)
+        XCTAssertEqual(updated.transcriptState, .ready)
+        XCTAssertEqual(updated.lifecycleState, .ready)
+        XCTAssertEqual(savedRecording.transcriptState, .ready)
+        XCTAssertEqual(savedRecording.lifecycleState, .ready)
         XCTAssertEqual(
             savedRecording.notes,
-            "Transcript failed: System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
+            "Transcript ready (degraded: emptyMicASR, emptySystemASR)."
         )
     }
 

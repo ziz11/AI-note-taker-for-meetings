@@ -6,6 +6,8 @@ final class FluidAudioDiarizationModelProviderTests: XCTestCase {
     func testResolveBeforeDownloadThrowsNoModelProvisioned() {
         let provider = FluidAudioDiarizationModelProvider(managerFactory: {
             StubOfflineDiarizationManager()
+        }, hasInstalledModelOnDisk: {
+            false
         })
 
         XCTAssertEqual(provider.state, .needsDownload)
@@ -20,6 +22,8 @@ final class FluidAudioDiarizationModelProviderTests: XCTestCase {
             let manager = StubOfflineDiarizationManager()
             createdManagers.append(manager)
             return manager
+        }, hasInstalledModelOnDisk: {
+            false
         })
 
         await provider.downloadDefaultModel()
@@ -42,6 +46,9 @@ final class FluidAudioDiarizationModelProviderTests: XCTestCase {
             managerFactory: {
                 XCTFail("managerFactory should not be called when provider is already ready")
                 return StubOfflineDiarizationManager()
+            },
+            hasInstalledModelOnDisk: {
+                false
             }
         )
 
@@ -57,6 +64,8 @@ final class FluidAudioDiarizationModelProviderTests: XCTestCase {
     func testDownloadFailureSetsFailedStateAndResolvePropagatesFailure() async {
         let provider = FluidAudioDiarizationModelProvider(managerFactory: {
             StubOfflineDiarizationManager(prepareError: TestError.prepareFailed)
+        }, hasInstalledModelOnDisk: {
+            false
         })
 
         await provider.downloadDefaultModel()
@@ -71,6 +80,17 @@ final class FluidAudioDiarizationModelProviderTests: XCTestCase {
                 .downloadFailed(message: TestError.prepareFailed.localizedDescription)
             )
         }
+    }
+
+    func testRefreshStateCanUseInstalledModelDetectorWithoutPreparingManager() {
+        let provider = FluidAudioDiarizationModelProvider(managerFactory: {
+            XCTFail("managerFactory should not be called when checking installed state")
+            return StubOfflineDiarizationManager()
+        }, hasInstalledModelOnDisk: {
+            true
+        })
+
+        XCTAssertEqual(provider.state, .ready)
     }
 }
 

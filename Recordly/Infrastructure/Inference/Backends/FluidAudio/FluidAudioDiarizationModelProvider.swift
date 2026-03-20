@@ -77,21 +77,32 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
     private var cachedManager: (any OfflineDiarizationManaging)?
     private let managerFactory: () -> any OfflineDiarizationManaging
     private let fileManager: FileManager
+    private let installedModelChecker: () -> Bool
 
-    init(managerFactory: @escaping () -> any OfflineDiarizationManaging = makeDefaultFluidAudioDiarizationManager) {
+    init(
+        managerFactory: @escaping () -> any OfflineDiarizationManaging = makeDefaultFluidAudioDiarizationManager,
+        hasInstalledModelOnDisk: (() -> Bool)? = nil
+    ) {
         self.managerFactory = managerFactory
         self.fileManager = .default
+        self.installedModelChecker = hasInstalledModelOnDisk ?? {
+            Self.hasInstalledModelOnDisk(fileManager: .default)
+        }
         refreshState()
     }
 
     /// Test/manual override: inject a pre-prepared manager.
     init(
         preparedManager: any OfflineDiarizationManaging,
-        managerFactory: @escaping () -> any OfflineDiarizationManaging = makeDefaultFluidAudioDiarizationManager
+        managerFactory: @escaping () -> any OfflineDiarizationManaging = makeDefaultFluidAudioDiarizationManager,
+        hasInstalledModelOnDisk: (() -> Bool)? = nil
     ) {
         self.cachedManager = preparedManager
         self.managerFactory = managerFactory
         self.fileManager = .default
+        self.installedModelChecker = hasInstalledModelOnDisk ?? {
+            Self.hasInstalledModelOnDisk(fileManager: .default)
+        }
         self.state = .ready
     }
 
@@ -120,7 +131,7 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
     }
 
     func resolveForRuntime() throws -> any OfflineDiarizationManaging {
-        guard cachedManager != nil || hasInstalledModelOnDisk() else {
+        guard cachedManager != nil || installedModelChecker() else {
             switch state {
             case .ready, .needsDownload:
                 throw FluidAudioModelProvisioningError.noModelProvisioned
@@ -150,7 +161,7 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
     }
 
     private func currentState() -> FluidAudioModelProvisioningState {
-        if cachedManager != nil || hasInstalledModelOnDisk() {
+        if cachedManager != nil || installedModelChecker() {
             return .ready
         }
 
@@ -161,7 +172,7 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
         return .needsDownload
     }
 
-    private func hasInstalledModelOnDisk() -> Bool {
+    private static func hasInstalledModelOnDisk(fileManager: FileManager) -> Bool {
         guard let modelsRoot = AppPaths.fluidAudioSDKModelsDirectory() else {
             return false
         }
