@@ -174,7 +174,8 @@ struct StructuredTranscriptExportService {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter(isAlphabeticToken)
 
-        guard alphabeticTokens.count >= lexicalWords * 2 else {
+        let syllabifiedTokenThreshold = Int(ceil(Double(lexicalWords) * 1.5))
+        guard alphabeticTokens.count >= syllabifiedTokenThreshold else {
             return true
         }
 

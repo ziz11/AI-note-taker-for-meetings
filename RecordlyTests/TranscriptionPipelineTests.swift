@@ -926,38 +926,73 @@ final class TranscriptionPipelineTests: XCTestCase {
             version: 1,
             sessionID: sessionID,
             createdAt: Date(),
-            channelsPresent: [.mic],
-            diarizationApplied: false,
+            channelsPresent: [.system],
+            diarizationApplied: true,
             mergePolicy: .deterministicStartEndChannelID,
             segments: [
                 TranscriptSegment(
-                    id: "mic-ru-1",
-                    channel: .mic,
-                    speaker: "You",
-                    speakerRole: .me,
-                    speakerId: "me",
-                    startMs: 133_000,
-                    endMs: 135_000,
-                    text: "Технологии обанкротили всех нас.",
+                    id: "system-ru-1",
+                    channel: .system,
+                    speaker: "Speaker 1",
+                    speakerRole: .remote,
+                    speakerId: "remote_1",
+                    startMs: 3_035_229,
+                    endMs: 3_045_389,
+                    text: "Ну, типа, вначале сказал про это, что типа эти муж тогда что делают с улучшением качества бы. Это как будто против того, что он выделок пойдет",
                     confidence: 0.95,
                     language: "ru",
-                    speakerConfidence: nil,
+                    speakerConfidence: 0.8,
                     words: [
-                        ASRWord(word: "Те", startMs: 133_000, endMs: 133_120, confidence: 0.9),
-                        ASRWord(word: "х", startMs: 133_130, endMs: 133_160, confidence: 0.9),
-                        ASRWord(word: "но", startMs: 133_170, endMs: 133_260, confidence: 0.9),
-                        ASRWord(word: "ло", startMs: 133_270, endMs: 133_360, confidence: 0.9),
-                        ASRWord(word: "ги", startMs: 133_370, endMs: 133_460, confidence: 0.9),
-                        ASRWord(word: "и", startMs: 133_470, endMs: 133_520, confidence: 0.9),
-                        ASRWord(word: "об", startMs: 133_560, endMs: 133_650, confidence: 0.9),
-                        ASRWord(word: "ан", startMs: 133_660, endMs: 133_750, confidence: 0.9),
-                        ASRWord(word: "к", startMs: 133_760, endMs: 133_790, confidence: 0.9),
-                        ASRWord(word: "ро", startMs: 133_800, endMs: 133_890, confidence: 0.9),
-                        ASRWord(word: "ти", startMs: 133_900, endMs: 133_990, confidence: 0.9),
-                        ASRWord(word: "ли", startMs: 134_000, endMs: 134_090, confidence: 0.9),
-                        ASRWord(word: "все", startMs: 134_130, endMs: 134_260, confidence: 0.9),
-                        ASRWord(word: "х", startMs: 134_270, endMs: 134_300, confidence: 0.9),
-                        ASRWord(word: "нас.", startMs: 134_340, endMs: 135_000, confidence: 0.9)
+                        ASRWord(word: "Ну", startMs: 3_035_229, endMs: 3_035_349, confidence: 0.9),
+                        ASRWord(word: "ти", startMs: 3_035_349, endMs: 3_035_469, confidence: 0.9),
+                        ASRWord(word: "па", startMs: 3_035_469, endMs: 3_035_589, confidence: 0.9),
+                        ASRWord(word: "в", startMs: 3_035_589, endMs: 3_035_649, confidence: 0.9),
+                        ASRWord(word: "на", startMs: 3_035_649, endMs: 3_035_769, confidence: 0.9),
+                        ASRWord(word: "ча", startMs: 3_035_769, endMs: 3_035_889, confidence: 0.9),
+                        ASRWord(word: "ле", startMs: 3_035_889, endMs: 3_036_009, confidence: 0.9),
+                        ASRWord(word: "сказа", startMs: 3_036_009, endMs: 3_036_249, confidence: 0.9),
+                        ASRWord(word: "л", startMs: 3_036_249, endMs: 3_036_309, confidence: 0.9),
+                        ASRWord(word: "про", startMs: 3_036_309, endMs: 3_036_429, confidence: 0.9),
+                        ASRWord(word: "это", startMs: 3_036_429, endMs: 3_036_609, confidence: 0.9),
+                        ASRWord(word: "что", startMs: 3_036_609, endMs: 3_036_729, confidence: 0.9),
+                        ASRWord(word: "ти", startMs: 3_036_729, endMs: 3_036_849, confidence: 0.9),
+                        ASRWord(word: "па", startMs: 3_036_849, endMs: 3_036_969, confidence: 0.9),
+                        ASRWord(word: "эти", startMs: 3_036_969, endMs: 3_037_149, confidence: 0.9),
+                        ASRWord(word: "му", startMs: 3_037_149, endMs: 3_037_269, confidence: 0.9),
+                        ASRWord(word: "ж", startMs: 3_037_269, endMs: 3_037_329, confidence: 0.9),
+                        ASRWord(word: "то", startMs: 3_037_329, endMs: 3_037_449, confidence: 0.9),
+                        ASRWord(word: "гда", startMs: 3_037_449, endMs: 3_037_629, confidence: 0.9),
+                        ASRWord(word: "что", startMs: 3_037_629, endMs: 3_037_749, confidence: 0.9),
+                        ASRWord(word: "дела", startMs: 3_037_749, endMs: 3_037_989, confidence: 0.9),
+                        ASRWord(word: "ют", startMs: 3_037_989, endMs: 3_038_109, confidence: 0.9),
+                        ASRWord(word: "с", startMs: 3_038_109, endMs: 3_038_169, confidence: 0.9),
+                        ASRWord(word: "у", startMs: 3_038_169, endMs: 3_038_229, confidence: 0.9),
+                        ASRWord(word: "лу", startMs: 3_038_229, endMs: 3_038_349, confidence: 0.9),
+                        ASRWord(word: "ч", startMs: 3_038_349, endMs: 3_038_409, confidence: 0.9),
+                        ASRWord(word: "шение", startMs: 3_038_409, endMs: 3_038_709, confidence: 0.9),
+                        ASRWord(word: "м", startMs: 3_038_709, endMs: 3_038_769, confidence: 0.9),
+                        ASRWord(word: "ка", startMs: 3_038_769, endMs: 3_038_889, confidence: 0.9),
+                        ASRWord(word: "че", startMs: 3_038_889, endMs: 3_039_009, confidence: 0.9),
+                        ASRWord(word: "ства", startMs: 3_039_009, endMs: 3_039_249, confidence: 0.9),
+                        ASRWord(word: "бы", startMs: 3_039_249, endMs: 3_039_369, confidence: 0.9),
+                        ASRWord(word: "Это", startMs: 3_039_369, endMs: 3_039_549, confidence: 0.9),
+                        ASRWord(word: "как", startMs: 3_039_549, endMs: 3_039_729, confidence: 0.9),
+                        ASRWord(word: "бу", startMs: 3_039_729, endMs: 3_039_849, confidence: 0.9),
+                        ASRWord(word: "д", startMs: 3_039_849, endMs: 3_039_909, confidence: 0.9),
+                        ASRWord(word: "то", startMs: 3_039_909, endMs: 3_040_029, confidence: 0.9),
+                        ASRWord(word: "про", startMs: 3_040_029, endMs: 3_040_149, confidence: 0.9),
+                        ASRWord(word: "тив", startMs: 3_040_149, endMs: 3_040_329, confidence: 0.9),
+                        ASRWord(word: "того", startMs: 3_040_329, endMs: 3_040_569, confidence: 0.9),
+                        ASRWord(word: "что", startMs: 3_040_569, endMs: 3_040_689, confidence: 0.9),
+                        ASRWord(word: "он", startMs: 3_040_689, endMs: 3_040_809, confidence: 0.9),
+                        ASRWord(word: "вы", startMs: 3_040_809, endMs: 3_040_929, confidence: 0.9),
+                        ASRWord(word: "де", startMs: 3_040_929, endMs: 3_041_049, confidence: 0.9),
+                        ASRWord(word: "ло", startMs: 3_041_049, endMs: 3_041_169, confidence: 0.9),
+                        ASRWord(word: "к", startMs: 3_041_169, endMs: 3_041_229, confidence: 0.9),
+                        ASRWord(word: "по", startMs: 3_041_229, endMs: 3_041_349, confidence: 0.9),
+                        ASRWord(word: "й", startMs: 3_041_349, endMs: 3_041_409, confidence: 0.9),
+                        ASRWord(word: "де", startMs: 3_041_409, endMs: 3_041_529, confidence: 0.9),
+                        ASRWord(word: "т", startMs: 3_041_529, endMs: 3_041_589, confidence: 0.9)
                     ]
                 )
             ]
@@ -968,15 +1003,15 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(
             rendered.transcriptText,
             """
-            [02:13 - 02:15] [You] Технологии обанкротили всех нас.
+            [50:35 - 50:45] [Speaker 1] Ну, типа, вначале сказал про это, что типа эти муж тогда что делают с улучшением качества бы. Это как будто против того, что он выделок пойдет
             """
         )
         XCTAssertEqual(
             rendered.srtText,
             """
             1
-            00:02:13,000 --> 00:02:15,000
-            [You] Технологии обанкротили всех нас.
+            00:50:35,229 --> 00:50:45,389
+            [Speaker 1] Ну, типа, вначале сказал про это, что типа эти муж тогда что делают с улучшением качества бы. Это как будто против того, что он выделок пойдет
             """
         )
     }

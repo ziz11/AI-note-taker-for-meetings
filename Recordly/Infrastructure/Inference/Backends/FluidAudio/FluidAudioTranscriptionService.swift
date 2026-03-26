@@ -130,6 +130,7 @@ protocol FluidAudioTranscriptionServicing {
 }
 
 struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
+    private let fullInputWindowDurationMs = 30_000
     private let transcriber: FluidAudioTranscribing
     private let vadService: any FluidAudioVoiceActivityDetecting
 
@@ -177,6 +178,44 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
         modelDirectoryURL: URL,
         channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput {
+        if preparedAudio.durationMs > fullInputWindowDurationMs,
+           let fallbackWindows = makeFallbackWindows(durationMs: preparedAudio.durationMs),
+           !fallbackWindows.isEmpty {
+            var mergedSegments: [FluidAudioSegment] = []
+            var resolvedLanguage: String?
+
+            for (index, region) in fallbackWindows.enumerated() {
+                let buffer = try preparedAudio.makePCMBuffer(for: region)
+                guard buffer.frameLength > 0 else {
+                    continue
+                }
+
+                let output = try await transcriber.transcribe(
+                    audioBuffer: buffer,
+                    modelDirectoryURL: modelDirectoryURL,
+                    channel: channel
+                )
+                resolvedLanguage = resolvedLanguage ?? output.language
+
+                for segment in output.segments {
+                    mergedSegments.append(
+                        FluidAudioSegment(
+                            id: "seg-\(index + 1)-\(segment.id)",
+                            startMs: segment.startMs + region.startMs,
+                            endMs: segment.endMs + region.startMs,
+                            text: segment.text,
+                            confidence: segment.confidence,
+                            words: offset(words: segment.words, by: region.startMs)
+                        )
+                    )
+                }
+            }
+
+            if !mergedSegments.isEmpty {
+                return FluidAudioRunnerOutput(language: resolvedLanguage, segments: mergedSegments)
+            }
+        }
+
         let buffer = try preparedAudio.makePCMBuffer()
         return try await transcriber.transcribe(
             audioBuffer: buffer,
@@ -248,6 +287,22 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
         }
 
         return normalized.isEmpty ? nil : normalized
+    }
+
+    private func makeFallbackWindows(durationMs: Int) -> [FluidAudioSpeechRegion]? {
+        guard durationMs > fullInputWindowDurationMs else { return nil }
+
+        var windows: [FluidAudioSpeechRegion] = []
+        var cursor = 0
+
+        while cursor < durationMs {
+            let nextEnd = min(cursor + fullInputWindowDurationMs, durationMs)
+            guard nextEnd > cursor else { break }
+            windows.append(FluidAudioSpeechRegion(startMs: cursor, endMs: nextEnd))
+            cursor = nextEnd
+        }
+
+        return windows.isEmpty ? nil : windows
     }
 
     private func offset(words: [ASRWord]?, by offsetMs: Int) -> [ASRWord]? {

@@ -343,19 +343,39 @@ final class FluidAudioASREngineTests: XCTestCase {
     }
 
     func testEngineFallsBackToFullInputWhenVADReturnsNoUsableRegions() async throws {
-        let audioURL = try createAudioFile(named: "input.caf", sampleRate: 16_000, channels: 1, frameCount: 16_000)
-        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-vad-fallback")
-        let transcriber = RecordingFluidAudioTranscriber(
-            output: FluidAudioRunnerOutput(
-                language: "en",
+        let audioURL = tempDirectory.appendingPathComponent("long-input.caf")
+        FileManager.default.createFile(atPath: audioURL.path, contents: Data("audio".utf8))
+        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-windowed-fallback")
+        let transcriber = SequencedFluidAudioTranscriber(outputs: [
+            FluidAudioRunnerOutput(
+                language: "ru",
                 segments: [
-                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1000, text: "fallback", confidence: 0.9, words: nil)
+                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_200, text: "chunk-1", confidence: 0.9, words: nil)
+                ]
+            ),
+            FluidAudioRunnerOutput(
+                language: "ru",
+                segments: [
+                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_400, text: "chunk-2", confidence: 0.9, words: nil)
+                ]
+            ),
+            FluidAudioRunnerOutput(
+                language: "ru",
+                segments: [
+                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_600, text: "chunk-3", confidence: 0.9, words: nil)
                 ]
             )
-        )
+        ])
         let engine = FluidAudioASREngine(
             transcriber: transcriber,
-            sessionAudioLoader: FluidAudioSessionAudioLoader(),
+            sessionAudioLoader: StubFluidAudioSessionAudioLoader(
+                preparedAudio: PreparedSessionAudio(
+                    samples: Array(repeating: 0.1, count: 1_440_000),
+                    sampleRate: 16_000,
+                    durationMs: 90_000,
+                    sourceURL: audioURL
+                )
+            ),
             vadService: StubFluidAudioVADService(result: [])
         )
 
@@ -366,9 +386,11 @@ final class FluidAudioASREngineTests: XCTestCase {
             configuration: ASREngineConfiguration(modelURL: modelDirectory)
         )
 
-        XCTAssertEqual(document.segments.map(\.text), ["fallback"])
-        XCTAssertEqual(transcriber.callCount, 1)
-        XCTAssertGreaterThan(transcriber.lastBufferFrameLength, 0)
+        XCTAssertGreaterThan(document.segments.count, 1)
+        XCTAssertGreaterThan(transcriber.callCount, 1)
+        XCTAssertEqual(document.segments.first?.text, "chunk-1")
+        XCTAssertNotEqual(document.segments.last?.text, "chunk-1")
+        XCTAssertTrue(document.segments.dropFirst().allSatisfy { $0.startMs > 0 })
     }
 
     private func createFluidModelDirectory(named name: String) throws -> URL {
@@ -542,5 +564,34 @@ private struct StubFluidAudioVADService: FluidAudioVoiceActivityDetecting {
 
     func detectSpeechRegions(in audio: PreparedSessionAudio) async -> [FluidAudioSpeechRegion]? {
         result
+    }
+}
+
+private struct StubFluidAudioSessionAudioLoader: FluidAudioSessionAudioLoading {
+    let preparedAudio: PreparedSessionAudio
+
+    func loadAudio(from audioURL: URL) throws -> PreparedSessionAudio {
+        preparedAudio
+    }
+}
+
+private final class SequencedFluidAudioTranscriber: FluidAudioTranscribing, @unchecked Sendable {
+    private var outputs: [FluidAudioRunnerOutput]
+    private(set) var callCount: Int = 0
+
+    init(outputs: [FluidAudioRunnerOutput]) {
+        self.outputs = outputs
+    }
+
+    func transcribe(
+        audioBuffer: AVAudioPCMBuffer,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput {
+        callCount += 1
+        guard !outputs.isEmpty else {
+            return FluidAudioRunnerOutput(language: nil, segments: [])
+        }
+        return outputs.removeFirst()
     }
 }
