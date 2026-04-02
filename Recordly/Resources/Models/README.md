@@ -1,8 +1,9 @@
 Place local model artifacts here only if you intentionally want to bundle them with the app.
 
 Examples:
-- ggml-medium.bin
-- ggml-large-v3-turbo-q5_0.bin
+- summarization-compact-v1.bin
+- summarization-compact-v1.gguf
+- diarization-enhanced-v1/
 
 Current development flow for Recordly does not read models from this folder.
 

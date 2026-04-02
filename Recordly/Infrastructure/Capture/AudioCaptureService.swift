@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 import ApplicationServices
@@ -77,6 +78,73 @@ enum RecordingSessionStatus: String, Codable {
 enum TrackKind: String, Codable {
     case microphone
     case system
+}
+
+struct ScreenCapturePermissionCoordinator {
+    static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+
+    private let hasPermission: () -> Bool
+    private let requestPermission: () -> Bool
+    private let openSettings: () -> Void
+    private let relaunchAppAtURL: (URL) -> Void
+    private let bundleURLProvider: () -> URL
+
+    init(
+        hasPermission: @escaping () -> Bool = {
+            CGPreflightScreenCaptureAccess()
+        },
+        requestPermission: @escaping () -> Bool = {
+            CGRequestScreenCaptureAccess()
+        },
+        openSettings: @escaping () -> Void = {
+            guard let settingsURL = ScreenCapturePermissionCoordinator.settingsURL else {
+                return
+            }
+            NSWorkspace.shared.open(settingsURL)
+        },
+        relaunchCurrentApp: @escaping (URL) -> Void = { bundleURL in
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.createsNewApplicationInstance = true
+
+            NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { _, error in
+                guard error == nil else {
+                    return
+                }
+                NSApp.terminate(nil)
+            }
+        },
+        bundleURLProvider: @escaping () -> URL = {
+            Bundle.main.bundleURL
+        }
+    ) {
+        self.hasPermission = hasPermission
+        self.requestPermission = requestPermission
+        self.openSettings = openSettings
+        self.relaunchAppAtURL = relaunchCurrentApp
+        self.bundleURLProvider = bundleURLProvider
+    }
+
+    func hasSystemRecordingPermission() -> Bool {
+        hasPermission()
+    }
+
+    func openSystemRecordingSettings() {
+        openSettings()
+    }
+
+    @discardableResult
+    func requestSystemRecordingPermission() -> Bool {
+        let granted = requestPermission()
+        if !granted {
+            openSettings()
+        }
+        return granted
+    }
+
+    func relaunchCurrentApp() {
+        relaunchAppAtURL(bundleURLProvider())
+    }
 }
 
 enum MergeMode: String, Codable {
@@ -659,14 +727,6 @@ final class ScreenCaptureAudioService: NSObject {
     private let sampleQueue = DispatchQueue(label: "Recordly.ScreenCaptureSamples", qos: .userInitiated)
     private(set) var microphoneViaStreamEnabled = false
 
-    func hasSystemRecordingPermission() -> Bool {
-        CGPreflightScreenCaptureAccess()
-    }
-
-    func requestSystemRecordingPermission() -> Bool {
-        CGRequestScreenCaptureAccess()
-    }
-
     func startCapture(
         onSystemSample: @escaping (CMSampleBuffer) -> Void,
         onMicrophoneSample: @escaping (CMSampleBuffer) -> Void
@@ -719,6 +779,7 @@ final class AudioCaptureService: AudioCaptureEngine {
     private let metadataStore = SessionMetadataStore()
     private lazy var mergeService = SessionMergeService(metadataStore: metadataStore)
     private let screenCaptureService = ScreenCaptureAudioService()
+    private let screenCapturePermissionCoordinator = ScreenCapturePermissionCoordinator()
     private let fallbackMicrophoneRecorder = FallbackMicrophoneRecorder()
 
     private var isRunning = false
@@ -762,10 +823,10 @@ final class AudioCaptureService: AudioCaptureEngine {
             var micWriter: MirroredTrackWriter?
             var sysWriter: MirroredTrackWriter?
 
-            var hasSystemCapturePermission = screenCaptureService.hasSystemRecordingPermission()
-            if !hasSystemCapturePermission {
-                hasSystemCapturePermission = screenCaptureService.requestSystemRecordingPermission()
-            }
+            // Avoid CGRequestScreenCaptureAccess() here. When multiple dev copies share one
+            // bundle identifier, the system-managed "quit and reopen" flow can relaunch a
+            // different registered copy instead of the one the user started.
+            let hasSystemCapturePermission = screenCapturePermissionCoordinator.hasSystemRecordingPermission()
 
             if hasSystemCapturePermission {
                 let streamMicWriter = try MirroredTrackWriter(

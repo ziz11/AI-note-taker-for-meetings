@@ -22,10 +22,11 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 
 ## Reliability behavior
 
-- Default system-path transcription currently requires the FluidAudio diarization package. If it is missing, auto-transcription can fail immediately before pipeline work starts.
-- Degraded diarization behavior is still available in legacy/debug-oriented paths, but it is not the default system-path behavior.
+- If the FluidAudio diarization package is missing, transcription can still run, but remote speaker labeling degrades.
 - Summarization falls back to template summary if LLM path fails.
 - ASR failure is a hard failure for transcription.
+- Long full-input FluidAudio runs are windowed inside the backend module when VAD produces no usable regions, so mic ASR is no longer persisted as one session-wide segment.
+- Transcript rendering falls back to segment text when backend token timings look syllabified or subword-like.
 - Persisted transcript/srt/json artifacts and recovery flow remain unchanged.
 - Transcription/summarization flows are recoverable.
 
@@ -125,6 +126,7 @@ Legacy diarization `.bin` selections are not auto-migrated and degrade cleanly.
 
 ## Documentation
 
+- `docs/README.md` — index of current reference docs vs historical notes
 - `ARCHITECTURE.md` — file tree, inference architecture, orchestration boundaries
 - `AGENTS.md` — agent rules, ownership boundaries, change routing, extension checklists
 - `docs/model-integration.md` — model resolution, local model policy, runtime selection details

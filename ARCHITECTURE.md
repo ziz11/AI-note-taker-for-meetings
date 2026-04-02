@@ -122,9 +122,11 @@ Current ASR path:
 - runtime selector resolves the FluidAudio ASR model via `FluidAudioASRModelProvider`
 - factory routes `.asr -> .fluidAudio`
 - `FluidAudioASREngine` orchestrates backend-local audio loading + transcription services and produces ASR documents
+- `FluidAudioTranscriptionService` prefers VAD speech regions and falls back to backend-local fixed windows for long full-input runs
 - default diarization routing is `.diarization -> .fluidAudio`
 - `FluidAudioDiarizationEngine` loads session audio through the same backend-local prep path and returns existing diarization documents
 - transcript merge/render stages persist transcript JSON/TXT/SRT without changing session storage contracts
+- `TranscriptRenderService` falls back to segment text when backend token timings look subword-like rather than lexical words
 
 Fallback ownership:
 
