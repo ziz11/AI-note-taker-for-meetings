@@ -68,6 +68,7 @@ enum SystemTranscriptionMode: Sendable {
 struct TranscriptionPipeline {
     let mode: SystemTranscriptionMode
     let audioInputAdapter: any AudioInputAdapter
+    let audioInputValidator: any AudioInputValidating
     let alignmentService: SystemTranscriptAlignmentService
     let systemChunkTranscriptBuilder: SystemChunkTranscriptBuilder
     let mergeService: TranscriptMergeService
@@ -79,6 +80,7 @@ struct TranscriptionPipeline {
     init(
         mode: SystemTranscriptionMode = .diarizationChunked,
         audioInputAdapter: any AudioInputAdapter = PassthroughAudioInputAdapter(),
+        audioInputValidator: any AudioInputValidating = AVFoundationAudioInputValidator(),
         alignmentService: SystemTranscriptAlignmentService = SystemTranscriptAlignmentService(),
         systemChunkTranscriptBuilder: SystemChunkTranscriptBuilder = SystemChunkTranscriptBuilder(),
         mergeService: TranscriptMergeService = TranscriptMergeService(),
@@ -86,6 +88,7 @@ struct TranscriptionPipeline {
     ) {
         self.mode = mode
         self.audioInputAdapter = audioInputAdapter
+        self.audioInputValidator = audioInputValidator
         self.alignmentService = alignmentService
         self.systemChunkTranscriptBuilder = systemChunkTranscriptBuilder
         self.mergeService = mergeService
@@ -293,7 +296,11 @@ struct TranscriptionPipeline {
         }
 
         for candidate in liveCaptureCandidates(for: channel, recording: recording) {
-            if let prepared = try prepareInputCandidate(fileName: candidate, channel: channel, in: sessionDirectory) {
+            if let prepared = try prepareValidatedLiveCaptureCandidate(
+                fileName: candidate,
+                channel: channel,
+                in: sessionDirectory
+            ) {
                 return prepared
             }
         }
@@ -337,6 +344,34 @@ struct TranscriptionPipeline {
             .sessionAsset(fileName: fileName, channel: channel),
             in: sessionDirectory
         )
+    }
+
+    private func prepareValidatedLiveCaptureCandidate(
+        fileName: String?,
+        channel: TranscriptChannel,
+        in sessionDirectory: URL
+    ) throws -> PreparedAudioInput? {
+        guard let prepared = try prepareInputCandidate(
+            fileName: fileName,
+            channel: channel,
+            in: sessionDirectory
+        ) else {
+            return nil
+        }
+
+        guard requiresLiveCaptureValidation(fileName: prepared.url.lastPathComponent) else {
+            return prepared
+        }
+
+        guard audioInputValidator.isUsable(prepared) else {
+            return nil
+        }
+
+        return prepared
+    }
+
+    private func requiresLiveCaptureValidation(fileName: String) -> Bool {
+        fileName == "mic.raw.caf" || fileName == "system.raw.caf"
     }
 
     private func prepareImportedInput(

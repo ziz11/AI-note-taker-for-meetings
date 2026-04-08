@@ -685,6 +685,148 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(repository.recordings.first?.transcriptState, .failed)
     }
 
+    @MainActor
+    func testManualRetranscriptionAfterTemporaryCleanupUsesDurableM4AFiles() async throws {
+        let sessionID = UUID()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try writeAudioFile(
+            named: "mic.m4a",
+            in: directory,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels
+        )
+        try writeAudioFile(
+            named: "system.m4a",
+            in: directory,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels
+        )
+
+        let asrModelURL = directory.appendingPathComponent("asr.bin")
+        let diarizationModelURL = directory.appendingPathComponent("diarization.bin")
+        try Data("asr".utf8).write(to: asrModelURL)
+        try Data("diarization".utf8).write(to: diarizationModelURL)
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "cleanup-retranscribe",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .idle,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a"
+            )
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recording.id: directory]
+        )
+        let asrEngine = DecodingRecordingASREngine()
+        let systemChunkEngine = DecodingSystemChunkEngine()
+        let controller = RecordingWorkflowController(
+            audioCaptureEngine: UnusedAudioCaptureEngine(),
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: WorkflowRuntimeProfileSelector(
+                transcriptionProfile: makeRuntimeProfile(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: diarizationModelURL
+                )
+            ),
+            inferenceEngineFactory: StaticInferenceEngineFactory(
+                asrEngine: asrEngine,
+                diarizationEngine: SimpleDiarizationEngine(),
+                systemChunkEngine: systemChunkEngine
+            ),
+            repository: repository
+        )
+
+        let updated = try await controller.transcribe(recording: recording)
+
+        XCTAssertEqual(asrEngine.recordedAudioFileNames, ["mic.m4a"])
+        XCTAssertEqual(systemChunkEngine.recordedAudioFileNames, ["system.m4a"])
+        XCTAssertEqual(updated.assets.transcriptionAudioProvenance, .m4aRecovery)
+        XCTAssertEqual(updated.transcriptState, .ready)
+    }
+
+    @MainActor
+    func testManualRetranscriptionSkipsUnreadableTemporaryCAFAndFallsBackToDurableM4A() async throws {
+        let sessionID = UUID()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try Data("corrupt".utf8).write(to: directory.appendingPathComponent("mic.raw.caf"))
+        try Data("corrupt".utf8).write(to: directory.appendingPathComponent("system.raw.caf"))
+        try writeAudioFile(
+            named: "mic.m4a",
+            in: directory,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels
+        )
+        try writeAudioFile(
+            named: "system.m4a",
+            in: directory,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels
+        )
+
+        let asrModelURL = directory.appendingPathComponent("asr.bin")
+        let diarizationModelURL = directory.appendingPathComponent("diarization.bin")
+        try Data("asr".utf8).write(to: asrModelURL)
+        try Data("diarization".utf8).write(to: diarizationModelURL)
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "caf-fallback",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .idle,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a"
+            )
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recording.id: directory]
+        )
+        let asrEngine = DecodingRecordingASREngine()
+        let systemChunkEngine = DecodingSystemChunkEngine()
+        let controller = RecordingWorkflowController(
+            audioCaptureEngine: UnusedAudioCaptureEngine(),
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: WorkflowRuntimeProfileSelector(
+                transcriptionProfile: makeRuntimeProfile(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: diarizationModelURL
+                )
+            ),
+            inferenceEngineFactory: StaticInferenceEngineFactory(
+                asrEngine: asrEngine,
+                diarizationEngine: SimpleDiarizationEngine(),
+                systemChunkEngine: systemChunkEngine
+            ),
+            repository: repository
+        )
+
+        let updated = try await controller.transcribe(recording: recording)
+
+        XCTAssertEqual(asrEngine.recordedAudioFileNames, ["mic.m4a"])
+        XCTAssertEqual(systemChunkEngine.recordedAudioFileNames, ["system.m4a"])
+        XCTAssertEqual(updated.assets.transcriptionAudioProvenance, .m4aRecovery)
+        XCTAssertEqual(updated.transcriptState, .ready)
+    }
+
     func testMicOnlyInputProducesTranscriptWithoutSystemArtifacts() async throws {
         let pipeline = TranscriptionPipeline()
         let factory = StaticInferenceEngineFactory(
@@ -1218,10 +1360,20 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
 
         for (name, contents) in files {
-            FileManager.default.createFile(
-                atPath: temp.appendingPathComponent(name).path,
-                contents: Data(contents.utf8)
-            )
+            let fileURL = temp.appendingPathComponent(name)
+            if name.hasSuffix(".raw.caf") || name.hasSuffix(".m4a") {
+                try writeAudioFile(
+                    named: name,
+                    in: temp,
+                    sampleRate: PCMTrackWriter.canonicalSampleRate,
+                    channels: PCMTrackWriter.canonicalChannels
+                )
+            } else {
+                FileManager.default.createFile(
+                    atPath: fileURL.path,
+                    contents: Data(contents.utf8)
+                )
+            }
         }
 
         let asrModelURL = temp.appendingPathComponent("asr.bin")
@@ -1296,6 +1448,40 @@ final class TranscriptionPipelineTests: XCTestCase {
         }
 
         return buffer
+    }
+
+    private func writeAudioFile(
+        named fileName: String,
+        in directory: URL,
+        sampleRate: Double,
+        channels: AVAudioChannelCount,
+        frameCount: AVAudioFrameCount = 48_000
+    ) throws {
+        let url = directory.appendingPathComponent(fileName)
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: sampleRate,
+                channels: channels,
+                interleaved: false
+            )
+        )
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount))
+        buffer.frameLength = frameCount
+
+        if let channel = buffer.floatChannelData?[0] {
+            for index in 0 ..< Int(frameCount) {
+                channel[index] = sin(Float(index) * 0.01)
+            }
+        }
+
+        let audioFile = try AVAudioFile(
+            forWriting: url,
+            settings: PCMTrackWriter.fileSettings(for: url),
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        try audioFile.write(from: buffer)
     }
 
     private struct ClosureASREngine: ASREngine {
@@ -1449,6 +1635,40 @@ final class TranscriptionPipelineTests: XCTestCase {
         }
     }
 
+    private final class DecodingRecordingASREngine: ASREngine, @unchecked Sendable {
+        private let loader = FluidAudioSessionAudioLoader()
+        private(set) var recordedAudioFileNames: [String] = []
+
+        var displayName: String { "decoding-recording-asr" }
+
+        func transcribe(
+            audioURL: URL,
+            channel: TranscriptChannel,
+            sessionID: UUID,
+            configuration: ASREngineConfiguration
+        ) async throws -> ASRDocument {
+            _ = try loader.loadAudio(from: audioURL)
+            recordedAudioFileNames.append(audioURL.lastPathComponent)
+            return ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: [
+                    ASRSegment(
+                        id: "\(channel.rawValue)-1",
+                        startMs: 0,
+                        endMs: 1_000,
+                        text: channel.rawValue,
+                        confidence: nil,
+                        language: "en",
+                        words: nil
+                    )
+                ]
+            )
+        }
+    }
+
     private struct StubSystemChunkTranscriptionEngine: SystemChunkTranscriptionEngine {
         let handler: @Sendable (UUID) throws -> SystemChunkTranscriptionDocument
 
@@ -1459,6 +1679,39 @@ final class TranscriptionPipelineTests: XCTestCase {
             configuration: ASREngineConfiguration
         ) async throws -> SystemChunkTranscriptionDocument {
             try handler(sessionID)
+        }
+    }
+
+    private final class DecodingSystemChunkEngine: SystemChunkTranscriptionEngine, @unchecked Sendable {
+        private let loader = FluidAudioSessionAudioLoader()
+        private(set) var recordedAudioFileNames: [String] = []
+
+        func transcribeSystemChunks(
+            systemAudioURL: URL,
+            diarization: DiarizationDocument,
+            sessionID: UUID,
+            configuration: ASREngineConfiguration
+        ) async throws -> SystemChunkTranscriptionDocument {
+            _ = try loader.loadAudio(from: systemAudioURL)
+            recordedAudioFileNames.append(systemAudioURL.lastPathComponent)
+            return SystemChunkTranscriptionDocument(
+                version: 1,
+                sessionID: sessionID,
+                createdAt: Date(),
+                segments: [
+                    SystemChunkTranscriptSegment(
+                        id: "system-1",
+                        speakerKey: diarization.segments.first?.speaker ?? "speaker-a",
+                        startMs: 0,
+                        endMs: 1_000,
+                        text: "system",
+                        confidence: nil,
+                        language: "en",
+                        speakerConfidence: diarization.segments.first?.confidence,
+                        words: nil
+                    )
+                ]
+            )
         }
     }
 
