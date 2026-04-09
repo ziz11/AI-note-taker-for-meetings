@@ -91,6 +91,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 ZIP_PATH="$OUTPUT_DIR/$SCHEME.zip"
 rm -f "$ZIP_PATH"
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+rm -rf "$ARCHIVE_PATH"
 
 echo "Archive: $ARCHIVE_PATH"
 echo "App: $APP_PATH"

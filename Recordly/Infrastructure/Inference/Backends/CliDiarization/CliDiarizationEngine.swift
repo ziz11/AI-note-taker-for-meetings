@@ -7,6 +7,7 @@ enum DiarizationRuntimeError: LocalizedError, Equatable {
     case nonZeroExit(code: Int32, stderr: String?)
     case malformedOutput
     case emptySegments
+    case timedOut
     case cancelled
 
     var errorDescription: String? {
@@ -26,6 +27,8 @@ enum DiarizationRuntimeError: LocalizedError, Equatable {
             return "Diarization runner produced malformed output."
         case .emptySegments:
             return "Diarization runner returned empty segments."
+        case .timedOut:
+            return "Diarization timed out."
         case .cancelled:
             return "Diarization was cancelled."
         }

@@ -188,6 +188,35 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
 #endif
     }
 
+    func testFluidAudioDiarizationEngineTimesOutHungSDKCall() async throws {
+#if arch(arm64) && canImport(FluidAudio)
+        let systemAudioURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "system.raw.caf"
+        )
+        FileManager.default.createFile(atPath: systemAudioURL.path, contents: Data("caf".utf8))
+        defer { try? FileManager.default.removeItem(at: systemAudioURL) }
+
+        let engine = FluidAudioDiarizationEngine(
+            manager: HangingOfflineDiarizationManager(),
+            sessionAudioLoader: StubFluidAudioSessionAudioLoader(),
+            timeoutSeconds: 1
+        )
+
+        do {
+            _ = try await engine.diarize(
+                systemAudioURL: systemAudioURL,
+                sessionID: UUID(),
+                configuration: DiarizationEngineConfiguration(modelURL: nil)
+            )
+            XCTFail("Expected diarization timeout")
+        } catch {
+            XCTAssertEqual(error as? DiarizationRuntimeError, .timedOut)
+        }
+#else
+        throw XCTSkip("FluidAudio SDK diarization timeout coverage requires arm64 macOS.")
+#endif
+    }
+
     private final class StubFluidAudioDiarizationModelProvider: FluidAudioDiarizationModelProviding {
         let state: FluidAudioModelProvisioningState = .ready
 
@@ -220,6 +249,15 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         func process(audio: [Float]) async throws -> OfflineDiarizationResult {
             processedAudio.append(audio)
             return result
+        }
+    }
+
+    private final class HangingOfflineDiarizationManager: OfflineDiarizationManaging, @unchecked Sendable {
+        func prepareModels() async throws {}
+
+        func process(audio: [Float]) async throws -> OfflineDiarizationResult {
+            try await Task.sleep(nanoseconds: 10_000_000_000)
+            return OfflineDiarizationResult(segments: [])
         }
     }
     #endif

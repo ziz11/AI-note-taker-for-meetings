@@ -54,6 +54,7 @@ if [[ ! -d "$BUILT_APP" ]]; then
 fi
 
 cp -R "$BUILT_APP" "$APP_DIR/$SCHEME.app"
+rm -rf "$BUILD_ROOT/Build"
 
 ZIP_PATH="$OUTPUT_DIR/$SCHEME-unsigned.zip"
 rm -f "$ZIP_PATH"
