@@ -13,7 +13,6 @@ struct RecordingDetailView: View {
     @State private var draftTitle = ""
     @State private var isEditingTitle = false
     @State private var selectedTab: DetailContentTab = .summary
-    @State private var actionsPanelWidth: CGFloat = 0
     @State private var isMetadataExpanded = false
     @FocusState private var isTitleFieldFocused: Bool
 
@@ -236,7 +235,7 @@ struct RecordingDetailView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(AppTheme.secondaryText)
 
-            WrappingHStack(maxWidth: actionsPanelWidth, horizontalSpacing: 10, verticalSpacing: 10) {
+            WrappingHStack(horizontalSpacing: 10, verticalSpacing: 10) {
                 secondaryActionButton(
                     title: "Transcribe",
                     systemImage: "waveform.badge.magnifyingglass",
@@ -294,15 +293,6 @@ struct RecordingDetailView: View {
                 .menuStyle(.button)
                 .disabled(!hasTranscript && store.summaryText(for: recording) == nil)
             }
-            .background(
-                GeometryReader { proxy in
-                    Color.clear
-                        .onAppear { actionsPanelWidth = proxy.size.width }
-                        .onChange(of: proxy.size.width) { _, width in
-                            actionsPanelWidth = width
-                        }
-                }
-            )
         }
         .padding(isCompact ? 16 : 18)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -605,19 +595,25 @@ struct RecordingDetailView: View {
 }
 
 private struct WrappingHStack: Layout {
-    let maxWidth: CGFloat
     let horizontalSpacing: CGFloat
     let verticalSpacing: CGFloat
 
-    init(maxWidth: CGFloat, horizontalSpacing: CGFloat = 8, verticalSpacing: CGFloat = 8) {
-        self.maxWidth = maxWidth
+    init(horizontalSpacing: CGFloat = 8, verticalSpacing: CGFloat = 8) {
         self.horizontalSpacing = horizontalSpacing
         self.verticalSpacing = verticalSpacing
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrangeRows(in: proposal.width ?? maxWidth, subviews: subviews)
-        return CGSize(width: proposal.width ?? maxWidth, height: rows.totalHeight)
+        let availableWidth = proposal.width ?? .greatestFiniteMagnitude
+        let rows = arrangeRows(in: availableWidth, subviews: subviews)
+        let resolvedWidth = proposal.width ?? rows.items.reduce(CGFloat(0)) { partial, row in
+            let rowWidth = row.enumerated().reduce(CGFloat(0)) { width, item in
+                let spacing = item.offset == 0 ? CGFloat(0) : horizontalSpacing
+                return width + spacing + item.element.size.width
+            }
+            return max(partial, rowWidth)
+        }
+        return CGSize(width: resolvedWidth, height: rows.totalHeight)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
