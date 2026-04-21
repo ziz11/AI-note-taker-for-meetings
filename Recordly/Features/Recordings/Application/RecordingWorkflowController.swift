@@ -555,6 +555,9 @@ final class RecordingWorkflowController {
 
         do {
             let sessionDirectory = try repository.sessionDirectory(for: recording.id)
+            guard shouldCleanupTemporaryCaptureArtifacts(in: sessionDirectory) else {
+                return
+            }
             try cleanupTemporaryCaptureArtifacts(in: sessionDirectory)
         } catch {
             let warning = "Temporary audio cleanup failed: \(error.localizedDescription)"
@@ -563,6 +566,11 @@ final class RecordingWorkflowController {
             }
             try? repository.save(recording)
         }
+    }
+
+    private func shouldCleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) -> Bool {
+        let mergedM4AURL = sessionDirectory.appendingPathComponent("merged-call.m4a")
+        return FileManager.default.fileExists(atPath: mergedM4AURL.path)
     }
 
     private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) throws {

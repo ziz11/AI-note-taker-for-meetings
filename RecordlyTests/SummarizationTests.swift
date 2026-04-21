@@ -214,6 +214,10 @@ struct NoopDiarizationEngine: DiarizationEngine {
     }
 }
 
+private struct AcceptingAudioInputValidator: AudioInputValidating {
+    func isUsable(_ preparedInput: PreparedAudioInput) -> Bool { true }
+}
+
 @MainActor
 private struct StaticRuntimeProfileSelector: InferenceRuntimeProfileSelecting {
     let availability: TranscriptionAvailability
@@ -1307,6 +1311,132 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         )
         XCTAssertEqual(restored.assets.mergedCallFile, "merged-call.m4a")
         XCTAssertEqual(restored.notes, failureReason)
+    }
+
+    func testTranscribeKeepsCAFArtifactsWhenMergedM4AIsMissing() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let asrModelURL = try createFluidModelDirectory(named: "workflow-asr-keep-caf")
+        try Data("mic".utf8).write(to: sessionDirectory.appendingPathComponent("mic.raw.caf"))
+        try Data("system".utf8).write(to: sessionDirectory.appendingPathComponent("system.raw.caf"))
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Keep CAF",
+            createdAt: Date(),
+            duration: 4,
+            lifecycleState: .ready,
+            transcriptState: .idle,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.raw.caf",
+                systemAudioFile: "system.raw.caf"
+            )
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory]
+        )
+        let runtimeSelector = StaticRuntimeProfileSelector(
+            availability: .ready,
+            transcriptionProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: InferenceModelArtifacts(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: nil,
+                    summarizationModelURL: nil
+                ),
+                summarizationRuntimeSettings: .default
+            ),
+            summarizationProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: .empty,
+                summarizationRuntimeSettings: .default
+            )
+        )
+        let workflow = RecordingWorkflowController(
+            audioCaptureEngine: AudioCaptureService(),
+            transcriptionPipeline: TranscriptionPipeline(
+                audioInputValidator: AcceptingAudioInputValidator()
+            ),
+            runtimeProfileSelector: runtimeSelector,
+            inferenceEngineFactory: TestInferenceEngineFactory(
+                asrEngine: WorkflowASREngine(),
+                summarizationEngine: MockSummaryEngine()
+            ),
+            repository: repository
+        )
+
+        _ = try await workflow.transcribe(recording: recording)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("mic.raw.caf").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("system.raw.caf").path))
+    }
+
+    func testTranscribeRemovesCAFArtifactsAfterMergedM4AExists() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let asrModelURL = try createFluidModelDirectory(named: "workflow-asr-remove-caf")
+        try Data("mic".utf8).write(to: sessionDirectory.appendingPathComponent("mic.raw.caf"))
+        try Data("system".utf8).write(to: sessionDirectory.appendingPathComponent("system.raw.caf"))
+        try Data("merged".utf8).write(to: sessionDirectory.appendingPathComponent("merged-call.m4a"))
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Remove CAF",
+            createdAt: Date(),
+            duration: 4,
+            lifecycleState: .ready,
+            transcriptState: .idle,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.raw.caf",
+                systemAudioFile: "system.raw.caf",
+                mergedCallFile: "merged-call.m4a"
+            )
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory]
+        )
+        let runtimeSelector = StaticRuntimeProfileSelector(
+            availability: .ready,
+            transcriptionProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: InferenceModelArtifacts(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: nil,
+                    summarizationModelURL: nil
+                ),
+                summarizationRuntimeSettings: .default
+            ),
+            summarizationProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: .empty,
+                summarizationRuntimeSettings: .default
+            )
+        )
+        let workflow = RecordingWorkflowController(
+            audioCaptureEngine: AudioCaptureService(),
+            transcriptionPipeline: TranscriptionPipeline(
+                audioInputValidator: AcceptingAudioInputValidator()
+            ),
+            runtimeProfileSelector: runtimeSelector,
+            inferenceEngineFactory: TestInferenceEngineFactory(
+                asrEngine: WorkflowASREngine(),
+                summarizationEngine: MockSummaryEngine()
+            ),
+            repository: repository
+        )
+
+        _ = try await workflow.transcribe(recording: recording)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("mic.raw.caf").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("system.raw.caf").path))
     }
 
     func testWorkflowDefaultChunkedTranscriptionDegradesWhenDiarizationPackageMissing() async throws {
