@@ -86,8 +86,6 @@ struct ScreenCapturePermissionCoordinator {
     private let hasPermission: () -> Bool
     private let requestPermission: () -> Bool
     private let openSettings: () -> Void
-    private let relaunchAppAtURL: (URL) -> Void
-    private let bundleURLProvider: () -> URL
 
     init(
         hasPermission: @escaping () -> Bool = {
@@ -101,28 +99,11 @@ struct ScreenCapturePermissionCoordinator {
                 return
             }
             NSWorkspace.shared.open(settingsURL)
-        },
-        relaunchCurrentApp: @escaping (URL) -> Void = { bundleURL in
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
-            configuration.createsNewApplicationInstance = true
-
-            NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { _, error in
-                guard error == nil else {
-                    return
-                }
-                NSApp.terminate(nil)
-            }
-        },
-        bundleURLProvider: @escaping () -> URL = {
-            Bundle.main.bundleURL
         }
     ) {
         self.hasPermission = hasPermission
         self.requestPermission = requestPermission
         self.openSettings = openSettings
-        self.relaunchAppAtURL = relaunchCurrentApp
-        self.bundleURLProvider = bundleURLProvider
     }
 
     func hasSystemRecordingPermission() -> Bool {
@@ -140,10 +121,6 @@ struct ScreenCapturePermissionCoordinator {
             openSettings()
         }
         return granted
-    }
-
-    func relaunchCurrentApp() {
-        relaunchAppAtURL(bundleURLProvider())
     }
 }
 

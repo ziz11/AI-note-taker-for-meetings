@@ -241,7 +241,7 @@ struct RecordingSidebarView: View {
                     Text("System audio permission needed")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
-                    Text("Grant Screen Recording access, then relaunch this copy of Recordly.")
+                    Text("Grant Screen Recording access in System Settings, then return to Recordly.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(AppTheme.secondaryText)
                 }
@@ -252,12 +252,6 @@ struct RecordingSidebarView: View {
                     screenCapturePermissionCoordinator.requestSystemRecordingPermission()
                 }
                 .buttonStyle(.bordered)
-                .tint(AppTheme.accent)
-
-                Button("Relaunch") {
-                    screenCapturePermissionCoordinator.relaunchCurrentApp()
-                }
-                .buttonStyle(.borderedProminent)
                 .tint(AppTheme.accent)
             }
             .padding(14)

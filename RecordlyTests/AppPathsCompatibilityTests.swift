@@ -16,28 +16,10 @@ final class ScreenCapturePermissionCoordinatorTests: XCTestCase {
         let coordinator = ScreenCapturePermissionCoordinator(
             hasPermission: { true },
             requestPermission: { true },
-            openSettings: {},
-            relaunchCurrentApp: { _ in },
-            bundleURLProvider: { URL(fileURLWithPath: "/Applications/Recordly.app") }
+            openSettings: {}
         )
 
         XCTAssertTrue(coordinator.hasSystemRecordingPermission())
-    }
-
-    func testRelaunchCurrentAppUsesCurrentBundleURL() {
-        var relaunchedURL: URL?
-        let currentBundleURL = URL(fileURLWithPath: "/tmp/DerivedData/Build/Products/Debug/Recordly.app")
-        let coordinator = ScreenCapturePermissionCoordinator(
-            hasPermission: { false },
-            requestPermission: { false },
-            openSettings: {},
-            relaunchCurrentApp: { relaunchedURL = $0 },
-            bundleURLProvider: { currentBundleURL }
-        )
-
-        coordinator.relaunchCurrentApp()
-
-        XCTAssertEqual(relaunchedURL, currentBundleURL)
     }
 
     func testRequestSystemRecordingPermissionCallsSystemRequest() {
@@ -48,9 +30,7 @@ final class ScreenCapturePermissionCoordinatorTests: XCTestCase {
                 didRequestPermission = true
                 return true
             },
-            openSettings: {},
-            relaunchCurrentApp: { _ in },
-            bundleURLProvider: { URL(fileURLWithPath: "/Applications/Recordly.app") }
+            openSettings: {}
         )
 
         XCTAssertTrue(coordinator.requestSystemRecordingPermission())
