@@ -40,8 +40,8 @@ final class FluidAudioTranscriber: FluidAudioTranscribing {
     ) async throws -> FluidAudioRunnerOutput {
 #if arch(arm64) && canImport(FluidAudio)
         let manager = try await resolveManager(for: modelDirectoryURL)
-        let source = fluidSource(for: channel)
-        let rawResult = try await manager.transcribe(audioBuffer, source: source)
+        var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+        let rawResult = try await manager.transcribe(audioBuffer, decoderState: &decoderState)
         return mapResult(rawResult)
 #else
         throw ASREngineRuntimeError.inferenceFailed(
@@ -58,20 +58,10 @@ final class FluidAudioTranscriber: FluidAudioTranscribing {
         }
 
         let models = try await AsrModels.load(from: modelDirectoryURL, configuration: nil, version: .v3)
-        let manager = AsrManager(config: .default)
-        try await manager.initialize(models: models)
+        let manager = AsrManager(config: .default, models: models)
         cachedManager = manager
         cachedModelPath = modelPath
         return manager
-    }
-
-    private func fluidSource(for channel: TranscriptChannel) -> AudioSource {
-        switch channel {
-        case .system:
-            return .system
-        case .mic:
-            return .microphone
-        }
     }
 
     private func mapResult(_ result: ASRResult) -> FluidAudioRunnerOutput {
