@@ -382,7 +382,11 @@ final class SummaryPromptBuilderTests: XCTestCase {
         XCTAssertTrue(result.contains("Return structured markdown using the exact sections below."))
         XCTAssertTrue(result.contains("Answer in Russian by default."))
         XCTAssertTrue(result.contains("Rules:"))
-        XCTAssertTrue(result.contains("If a section has no items write: None"))
+        XCTAssertTrue(result.contains("Do not output any text before `## Call Summary` or after the `## Risks` section."))
+        XCTAssertTrue(result.contains("Output exactly these 5 sections in this exact order:"))
+        XCTAssertTrue(result.contains("Every section must be present even if there is no information."))
+        XCTAssertTrue(result.contains("Every bullet item must start with `- `"))
+        XCTAssertTrue(result.contains("If a section has no items, write exactly `- None` under that section."))
         XCTAssertTrue(result.contains("Return ONLY markdown."))
         XCTAssertTrue(result.contains("## Call Summary"))
         XCTAssertTrue(result.contains("## Topics"))
@@ -394,6 +398,33 @@ final class SummaryPromptBuilderTests: XCTestCase {
         XCTAssertTrue(result.contains("If the transcript is incomplete, summarize the available information."))
         XCTAssertTrue(result.contains("Transcript:"))
         XCTAssertTrue(result.contains("Write the summary now."))
+    }
+
+    func testPromptRequiresExactSectionOrderAndNoExtraText() {
+        let result = SummaryPromptBuilder.build(
+            transcript: "Sample transcript",
+            srtText: nil,
+            recordingTitle: "Meeting"
+        )
+
+        XCTAssertTrue(result.contains("Output exactly these 5 sections in this exact order:"))
+        XCTAssertTrue(result.contains("1. ## Call Summary"))
+        XCTAssertTrue(result.contains("2. ## Topics"))
+        XCTAssertTrue(result.contains("3. ## Decisions"))
+        XCTAssertTrue(result.contains("4. ## Action Items"))
+        XCTAssertTrue(result.contains("5. ## Risks"))
+        XCTAssertTrue(result.contains("Do not output any text before `## Call Summary` or after the `## Risks` section."))
+    }
+
+    func testPromptRequiresDashNoneFallbackForEmptySections() {
+        let result = SummaryPromptBuilder.build(
+            transcript: "Sample transcript",
+            srtText: nil,
+            recordingTitle: "Meeting"
+        )
+
+        XCTAssertTrue(result.contains("If a section has no items, write exactly `- None` under that section."))
+        XCTAssertFalse(result.contains("If a section has no items write: None"))
     }
 
     func testBuildWithSRT() {

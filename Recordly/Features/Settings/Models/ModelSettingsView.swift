@@ -223,6 +223,7 @@ struct ModelSettingsView: View {
                 .foregroundStyle(.primary)
 
             HStack(spacing: 8) {
+                folderButton(title: "Open ~/models Folder", url: viewModel.folderURL(for: .summarization, source: .homeModels))
                 folderButton(title: "Open Summaries Folder", url: viewModel.folderURL(for: .summarization, source: .userLocal))
                 folderButton(title: "Open Shared Folder", url: viewModel.folderURL(for: .summarization, source: .shared))
                 folderButton(title: "Open App Support Folder", url: viewModel.folderURL(for: .summarization, source: .appSupport))

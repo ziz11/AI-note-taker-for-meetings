@@ -193,8 +193,10 @@ final class ModelManager: ObservableObject {
             return discoveryPaths.sharedDirectory(kind)
         case .appSupport:
             return discoveryPaths.appSupportDirectory(kind)
+        case .homeModels:
+            return try? AppPaths.createUserModelsDirectory(kind: kind)
         case .userLocal:
-            return discoveryPaths.userDirectory(kind)
+            return discoveryPaths.userDirectory(kind) ?? discoveryPaths.appSupportDirectory(kind)
         case .projectLocal:
             return discoveryPaths.projectDirectories().first
         }
@@ -360,7 +362,7 @@ final class ModelManager: ObservableObject {
         guard let directory = discoveryPaths.userDirectory(kind) else {
             return []
         }
-        return loadDirectoryOptions(kind: kind, directory: directory, source: .userLocal, recursive: false)
+        return loadDirectoryOptions(kind: kind, directory: directory, source: .homeModels, recursive: false)
     }
 
     private func loadSharedOptions(kind: ModelKind) -> [LocalModelOption] {

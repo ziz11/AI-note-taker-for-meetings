@@ -16,6 +16,15 @@ enum SummaryPromptBuilder {
 
         Rules:
 
+        - Output exactly these 5 sections in this exact order:
+          1. ## Call Summary
+          2. ## Topics
+          3. ## Decisions
+          4. ## Action Items
+          5. ## Risks
+        - Do not output any text before `## Call Summary` or after the `## Risks` section.
+        - Every section must be present even if there is no information.
+        - Every bullet item must start with `- `
         - Use short bullet points
         - Each bullet must be one sentence
         - Do not repeat information
@@ -23,7 +32,7 @@ enum SummaryPromptBuilder {
         - Answer in Russian by default. Keep important English terms (product names, APIs) in original form.
         - Ignore obvious noise artifacts (e.g. [Motor], repeated broken fragments, ASR glitches) when possible.
         - For each topic include related agreements if present.
-        - If a section has no items write: None
+        - If a section has no items, write exactly `- None` under that section.
 
         Return ONLY markdown.
 
