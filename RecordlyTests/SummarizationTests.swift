@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import Recordly
 
@@ -1117,10 +1118,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
 
-        FileManager.default.createFile(
-            atPath: sessionDirectory.appendingPathComponent("mic.raw.caf").path,
-            contents: Data("mic".utf8)
-        )
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
 
         let asrModelURL = sessionDirectory.appendingPathComponent("asr.bin")
         let summarizationModelURL = try makeSummarizationModel(named: "workflow-chain.gguf")
@@ -1135,7 +1133,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             transcriptState: .queued,
             source: .liveCapture,
             notes: "Queued",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf")
+            assets: RecordingAssets(microphoneFile: "mic.m4a")
         )
         let repository = InMemoryRecordingsRepository(
             recordings: [recording],
@@ -1201,8 +1199,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let recordingID = UUID()
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
-        try Data("audio".utf8).write(to: sessionDirectory.appendingPathComponent("mic.raw.flac"))
-        try Data("audio".utf8).write(to: sessionDirectory.appendingPathComponent("system.raw.flac"))
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
+        try writeTestM4A(named: "system.m4a", in: sessionDirectory)
 
         let recording = RecordingSession(
             id: recordingID,
@@ -1214,8 +1212,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             source: .liveCapture,
             notes: "",
             assets: RecordingAssets(
-                microphoneFile: "mic.raw.flac",
-                systemAudioFile: "system.raw.flac"
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a"
             )
         )
 
@@ -1248,8 +1246,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let workflow = RecordingWorkflowController(
             audioCaptureEngine: StubAudioCaptureEngine(
                 artifacts: CaptureArtifacts(
-                    microphoneFile: "mic.raw.flac",
-                    systemAudioFile: "system.raw.flac"
+                    microphoneFile: "mic.m4a",
+                    systemAudioFile: "system.m4a"
                 )
             ),
             transcriptionPipeline: TranscriptionPipeline(),
@@ -1344,7 +1342,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         XCTAssertEqual(restored.notes, failureReason)
     }
 
-    func testTranscribeKeepsCAFArtifactsWhenMergedM4AIsMissing() async throws {
+    func testTranscribeDoesNotUseCAFArtifactsWhenM4AIsMissing() async throws {
         let recordingID = UUID()
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
@@ -1400,7 +1398,12 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             repository: repository
         )
 
-        _ = try await workflow.transcribe(recording: recording)
+        await XCTAssertThrowsErrorAsync(try await workflow.transcribe(recording: recording)) { error in
+            guard case TranscriptionPipelineError.missingInputAudio = error else {
+                XCTFail("Unexpected error: \(error)")
+                return
+            }
+        }
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("mic.raw.caf").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("system.raw.caf").path))
@@ -1413,6 +1416,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let asrModelURL = try createFluidModelDirectory(named: "workflow-asr-remove-caf")
         try Data("mic".utf8).write(to: sessionDirectory.appendingPathComponent("mic.raw.caf"))
         try Data("system".utf8).write(to: sessionDirectory.appendingPathComponent("system.raw.caf"))
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
+        try writeTestM4A(named: "system.m4a", in: sessionDirectory)
         try Data("merged".utf8).write(to: sessionDirectory.appendingPathComponent("merged-call.m4a"))
 
         let recording = RecordingSession(
@@ -1425,8 +1430,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             source: .liveCapture,
             notes: "",
             assets: RecordingAssets(
-                microphoneFile: "mic.raw.caf",
-                systemAudioFile: "system.raw.caf",
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a",
                 mergedCallFile: "merged-call.m4a"
             )
         )
@@ -1475,8 +1480,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         let asrModelURL = try createFluidModelDirectory(named: "workflow-asr-default-chunked")
-        try Data().write(to: sessionDirectory.appendingPathComponent("mic.raw.flac"))
-        try Data().write(to: sessionDirectory.appendingPathComponent("system.raw.flac"))
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
+        try writeTestM4A(named: "system.m4a", in: sessionDirectory)
 
         let recording = RecordingSession(
             id: recordingID,
@@ -1488,8 +1493,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             source: .liveCapture,
             notes: "",
             assets: RecordingAssets(
-                microphoneFile: "mic.raw.flac",
-                systemAudioFile: "system.raw.flac"
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a"
             )
         )
         let repository = InMemoryRecordingsRepository(
@@ -1539,8 +1544,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         let asrModelURL = try createFluidModelDirectory(named: "workflow-asr-legacy")
-        try Data().write(to: sessionDirectory.appendingPathComponent("mic.raw.flac"))
-        try Data().write(to: sessionDirectory.appendingPathComponent("system.raw.flac"))
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
+        try writeTestM4A(named: "system.m4a", in: sessionDirectory)
 
         let recording = RecordingSession(
             id: recordingID,
@@ -1552,8 +1557,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             source: .liveCapture,
             notes: "",
             assets: RecordingAssets(
-                microphoneFile: "mic.raw.flac",
-                systemAudioFile: "system.raw.flac"
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a"
             )
         )
         let repository = InMemoryRecordingsRepository(
@@ -1602,6 +1607,31 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let modelURL = modelsDirectory.appendingPathComponent(name, isDirectory: false)
         try Data("model".utf8).write(to: modelURL)
         return modelURL
+    }
+
+    private func writeTestM4A(named fileName: String, in directory: URL) throws {
+        let url = directory.appendingPathComponent(fileName)
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels,
+            interleaved: false
+        ))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800))
+        buffer.frameLength = 4_800
+        if let channel = buffer.floatChannelData?[0] {
+            for index in 0 ..< Int(buffer.frameLength) {
+                channel[index] = sin(Float(index) * 0.01)
+            }
+        }
+
+        let audioFile = try AVAudioFile(
+            forWriting: url,
+            settings: PCMTrackWriter.fileSettings(for: url),
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        try audioFile.write(from: buffer)
     }
 
     private func createFluidModelDirectory(named name: String) throws -> URL {

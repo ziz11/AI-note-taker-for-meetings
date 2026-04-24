@@ -30,7 +30,7 @@ struct FluidAudioDiarizationEngine: DiarizationEngine {
             throw DiarizationRuntimeError.invalidInput
         }
 
-        guard ["system.raw.caf", "system.raw.flac", "system.m4a"].contains(systemAudioURL.lastPathComponent) else {
+        guard systemAudioURL.lastPathComponent == "system.m4a" else {
             throw DiarizationRuntimeError.invalidInput
         }
 
@@ -90,7 +90,6 @@ struct FluidAudioDiarizationEngine: DiarizationEngine {
                         return
                     }
 
-                    processTask.cancel()
                     attempt.resume(with: .failure(DiarizationRuntimeError.timedOut))
                 }
 

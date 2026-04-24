@@ -170,6 +170,7 @@ final class RecordingWorkflowController {
         updatedRecording.assets.connectorNotesFile = captureArtifacts.connectorNotesFile ?? updatedRecording.assets.connectorNotesFile
         updatedRecording.notes = runTranscription ? "Audio saved. Preparing transcript." : "Audio saved."
         try repository.save(updatedRecording)
+        cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
 
         var transcriptionResult: TranscriptionResult?
         let processingError: Error?
@@ -268,6 +269,7 @@ final class RecordingWorkflowController {
         updatedRecording.transcriptState = .queued
         updatedRecording.notes = "Preparing transcript."
         try repository.save(updatedRecording)
+        cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
 
         do {
             let transcriptionResult = try await performTranscription(
@@ -570,14 +572,20 @@ final class RecordingWorkflowController {
 
     private func shouldCleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) -> Bool {
         let mergedM4AURL = sessionDirectory.appendingPathComponent("merged-call.m4a")
+        let micM4AURL = sessionDirectory.appendingPathComponent("mic.m4a")
+        let systemM4AURL = sessionDirectory.appendingPathComponent("system.m4a")
         return FileManager.default.fileExists(atPath: mergedM4AURL.path)
+            || FileManager.default.fileExists(atPath: micM4AURL.path)
+            || FileManager.default.fileExists(atPath: systemM4AURL.path)
     }
 
     private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) throws {
         let fileManager = FileManager.default
         for fileName in [
             "mic.raw.caf",
-            "system.raw.caf"
+            "system.raw.caf",
+            "mic.raw.flac",
+            "system.raw.flac"
         ] {
             let url = sessionDirectory.appendingPathComponent(fileName)
             guard fileManager.fileExists(atPath: url.path) else {

@@ -313,23 +313,23 @@ struct TranscriptionPipeline {
     ) -> [String] {
         let assetFileName = channel == .mic ? recording.assets.microphoneFile : recording.assets.systemAudioFile
         let canonicalDurable = channel == .mic ? "mic.m4a" : "system.m4a"
-        let legacyRaw = channel == .mic ? "mic.raw.flac" : "system.raw.flac"
-        let canonicalRaw = channel == .mic ? "mic.raw.caf" : "system.raw.caf"
 
         let orderedCandidates = [
-            canonicalRaw,
-            legacyRaw,
             canonicalDurable,
             assetFileName
         ]
 
         var unique: [String] = []
-        for candidate in orderedCandidates.compactMap({ $0 }) where candidate != "merged-call.m4a" {
+        for candidate in orderedCandidates.compactMap({ $0 }) where isLiveCaptureInferenceCandidate(candidate) {
             if !unique.contains(candidate) {
                 unique.append(candidate)
             }
         }
         return unique
+    }
+
+    private func isLiveCaptureInferenceCandidate(_ fileName: String) -> Bool {
+        fileName != "merged-call.m4a" && fileName.lowercased().hasSuffix(".m4a")
     }
 
     private func prepareInputCandidate(
@@ -703,7 +703,7 @@ struct TranscriptionPipeline {
             return DiarizationLoadOutcome(document: nil, degradedReason: nil, modelUsed: nil)
         }
 
-        guard ["system.raw.caf", "system.raw.flac", "system.m4a"].contains(systemAudioURL.lastPathComponent) else {
+        guard systemAudioURL.lastPathComponent == "system.m4a" else {
             return DiarizationLoadOutcome(document: nil, degradedReason: "unsupported system audio source", modelUsed: nil)
         }
 

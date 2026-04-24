@@ -224,7 +224,7 @@ struct CliDiarizationEngine: DiarizationEngine {
             throw DiarizationRuntimeError.cancelled
         }
 
-        guard let modelURL = configuration.modelURL else {
+        guard configuration.modelURL != nil else {
             throw DiarizationRuntimeError.modelMissing(URL(fileURLWithPath: "<no model URL>"))
         }
 
@@ -232,7 +232,7 @@ struct CliDiarizationEngine: DiarizationEngine {
             throw DiarizationRuntimeError.invalidInput
         }
 
-        guard ["system.raw.caf", "system.raw.flac", "system.m4a"].contains(systemAudioURL.lastPathComponent) else {
+        guard systemAudioURL.lastPathComponent == "system.m4a" else {
             throw DiarizationRuntimeError.invalidInput
         }
 
