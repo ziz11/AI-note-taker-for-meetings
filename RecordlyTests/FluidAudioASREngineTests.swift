@@ -189,6 +189,32 @@ final class FluidAudioASREngineTests: XCTestCase {
         XCTAssertEqual(transcriber.lastChannel, .mic)
     }
 
+    func testEngineDoesNotLoadFullAudioIntoMemoryForASR() async throws {
+        let audioURL = tempDirectory.appendingPathComponent("long-call.m4a")
+        try Data("not-decodable-audio".utf8).write(to: audioURL)
+        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-long")
+        let transcriber = RecordingFluidAudioFileTranscriber(
+            output: FluidAudioRunnerOutput(language: "ru", segments: [])
+        )
+        let engine = FluidAudioASREngine(transcriber: transcriber)
+
+        XCTAssertThrowsError(try FluidAudioInputPreparer().prepareInput(from: audioURL)) { error in
+            guard case ASREngineRuntimeError.unsupportedFormat(let failedURL) = error else {
+                return XCTFail("Expected unsupportedFormat from in-memory preparation, got \(error)")
+            }
+            XCTAssertEqual(failedURL, audioURL)
+        }
+
+        _ = try await engine.transcribe(
+            audioURL: audioURL,
+            channel: .system,
+            sessionID: UUID(),
+            configuration: ASREngineConfiguration(modelURL: modelDirectory)
+        )
+
+        XCTAssertEqual(transcriber.lastAudioURL, audioURL)
+    }
+
     func testEngineThrowsWhenAudioFileMissing() async throws {
         let audioURL = tempDirectory.appendingPathComponent("nonexistent.wav")
         let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-noaudio")
