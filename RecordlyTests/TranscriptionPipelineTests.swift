@@ -362,7 +362,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(asrEngine.recordedChannels, [.mic, .system])
         XCTAssertEqual(
             asrEngine.recordedAudioFileNames,
-            ["mic.raw.flac", "system.raw.flac"]
+            ["mic.m4a", "system.m4a"]
         )
 
         let doc = try decodeTranscriptDocument(in: fixture.directory)
@@ -371,7 +371,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(systemSegment.speakerId, "remote_1")
     }
 
-    func testLiveCaptureImmediatePathPrefersCAFSourceTracksOverDurableM4A() async throws {
+    func testLiveCaptureImmediatePathUsesDurableM4AEvenWhenCAFSourceTracksExist() async throws {
         let asrEngine = RecordingASREngine { channel, sessionID in
             ASRDocument(
                 version: 1,
@@ -410,7 +410,7 @@ final class TranscriptionPipelineTests: XCTestCase {
 
         XCTAssertEqual(
             asrEngine.recordedAudioFileNames,
-            ["mic.raw.caf", "system.raw.caf"]
+            ["mic.m4a", "system.m4a"]
         )
     }
 
@@ -495,7 +495,7 @@ final class TranscriptionPipelineTests: XCTestCase {
 
         XCTAssertEqual(
             asrEngine.recordedAudioFileNames,
-            ["mic.raw.caf", "system.raw.caf"]
+            ["mic.m4a", "system.m4a"]
         )
         XCTAssertFalse(asrEngine.recordedAudioFileNames.contains("merged-call.m4a"))
     }
@@ -569,7 +569,7 @@ final class TranscriptionPipelineTests: XCTestCase {
     }
 
     @MainActor
-    func testWorkflowRetainsTemporaryCAFDuringProcessingAndCleansThemAfterReady() async throws {
+    func testWorkflowCleansTemporaryCAFBeforeTranscriptionStarts() async throws {
         let asrEngine = RecordingASREngine { channel, sessionID in
             ASRDocument(
                 version: 1,
@@ -620,14 +620,14 @@ final class TranscriptionPipelineTests: XCTestCase {
         let updated = try await controller.transcribe(recording: fixture.recording) { state in
             guard state != .ready, state != .failed else { return }
             observedPreTerminalState = true
-            XCTAssertTrue(FileManager.default.fileExists(atPath: micRawURL.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: systemRawURL.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
         }
 
         XCTAssertTrue(observedPreTerminalState)
         XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
-        XCTAssertEqual(updated.assets.transcriptionAudioProvenance, .cafPcmFastPath)
+        XCTAssertEqual(updated.assets.transcriptionAudioProvenance, .m4aRecovery)
     }
 
     @MainActor
@@ -674,8 +674,8 @@ final class TranscriptionPipelineTests: XCTestCase {
             try await controller.transcribe(recording: fixture.recording) { state in
                 guard state != .ready, state != .failed else { return }
                 observedPreTerminalState = true
-                XCTAssertTrue(FileManager.default.fileExists(atPath: micRawURL.path))
-                XCTAssertTrue(FileManager.default.fileExists(atPath: systemRawURL.path))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
             }
         )
 
@@ -1272,7 +1272,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         )
 
         let sessionID = UUID()
-        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.raw.caf")
+        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.m4a")
         FileManager.default.createFile(atPath: audioURL.path, contents: Data())
 
         let missingModelURL = FileManager.default.temporaryDirectory.appendingPathComponent("missing-model.bin")
@@ -1300,7 +1300,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         )
 
         let sessionID = UUID()
-        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.raw.caf")
+        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.m4a")
         FileManager.default.createFile(atPath: audioURL.path, contents: Data())
 
         await XCTAssertThrowsErrorAsync(try await service.diarize(
@@ -1321,10 +1321,20 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
 
         if includeMic {
-            FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.flac").path, contents: Data("mic".utf8))
+            try writeAudioFile(
+                named: "mic.m4a",
+                in: temp,
+                sampleRate: PCMTrackWriter.canonicalSampleRate,
+                channels: PCMTrackWriter.canonicalChannels
+            )
         }
         if includeSystem {
-            FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.flac").path, contents: Data("system".utf8))
+            try writeAudioFile(
+                named: "system.m4a",
+                in: temp,
+                sampleRate: PCMTrackWriter.canonicalSampleRate,
+                channels: PCMTrackWriter.canonicalChannels
+            )
         }
 
         let asrModelURL = temp.appendingPathComponent("asr.bin")
@@ -1342,8 +1352,8 @@ final class TranscriptionPipelineTests: XCTestCase {
             source: .liveCapture,
             notes: "",
             assets: RecordingAssets(
-                microphoneFile: includeMic ? "mic.raw.flac" : nil,
-                systemAudioFile: includeSystem ? "system.raw.flac" : nil
+                microphoneFile: includeMic ? "mic.m4a" : nil,
+                systemAudioFile: includeSystem ? "system.m4a" : nil
             )
         )
 
