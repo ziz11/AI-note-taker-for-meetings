@@ -38,9 +38,6 @@ struct FluidAudioASREngine: ASREngine {
     let displayName: String = "FluidAudio"
 
     private let transcriber: FluidAudioTranscribing
-    private let inputPreparer: FluidAudioInputPreparing
-    private let sessionAudioLoader: FluidAudioSessionAudioLoading
-    private let transcriptionService: FluidAudioTranscriptionServicing
     private let fileManager: FileManager
 
     init(
@@ -52,13 +49,6 @@ struct FluidAudioASREngine: ASREngine {
         fileManager: FileManager = .default
     ) {
         self.transcriber = transcriber
-        self.inputPreparer = inputPreparer
-        let resolvedLoader = sessionAudioLoader ?? FluidAudioSessionAudioLoader(inputPreparer: inputPreparer)
-        self.sessionAudioLoader = resolvedLoader
-        self.transcriptionService = transcriptionService ?? FluidAudioTranscriptionService(
-            transcriber: transcriber,
-            vadService: vadService ?? FluidAudioVADService()
-        )
         self.fileManager = fileManager
     }
 
@@ -87,9 +77,8 @@ struct FluidAudioASREngine: ASREngine {
 
         try FluidAudioModelValidator.validateModelDirectory(configuration.modelURL, fileManager: fileManager)
 
-        let preparedAudio = try sessionAudioLoader.loadAudio(from: audioURL)
-        let output = try await transcriptionService.transcribe(
-            preparedAudio: preparedAudio,
+        let output = try await transcriber.transcribe(
+            audioURL: audioURL,
             modelDirectoryURL: configuration.modelURL,
             channel: channel
         )

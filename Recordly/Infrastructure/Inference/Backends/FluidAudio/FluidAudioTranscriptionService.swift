@@ -21,7 +21,7 @@ struct FluidAudioSegment {
 
 protocol FluidAudioTranscribing {
     func transcribe(
-        audioBuffer: AVAudioPCMBuffer,
+        audioURL: URL,
         modelDirectoryURL: URL,
         channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput
@@ -34,14 +34,14 @@ final class FluidAudioTranscriber: FluidAudioTranscribing {
 #endif
 
     func transcribe(
-        audioBuffer: AVAudioPCMBuffer,
+        audioURL: URL,
         modelDirectoryURL: URL,
         channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput {
 #if arch(arm64) && canImport(FluidAudio)
         let manager = try await resolveManager(for: modelDirectoryURL)
         var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
-        let rawResult = try await manager.transcribe(audioBuffer, decoderState: &decoderState)
+        let rawResult = try await manager.transcribe(audioURL, decoderState: &decoderState)
         return mapResult(rawResult)
 #else
         throw ASREngineRuntimeError.inferenceFailed(
@@ -175,13 +175,9 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
             var resolvedLanguage: String?
 
             for (index, region) in fallbackWindows.enumerated() {
-                let buffer = try preparedAudio.makePCMBuffer(for: region)
-                guard buffer.frameLength > 0 else {
-                    continue
-                }
-
-                let output = try await transcriber.transcribe(
-                    audioBuffer: buffer,
+                let output = try await transcribeRegion(
+                    preparedAudio,
+                    region: region,
                     modelDirectoryURL: modelDirectoryURL,
                     channel: channel
                 )
@@ -206,9 +202,8 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
             }
         }
 
-        let buffer = try preparedAudio.makePCMBuffer()
         return try await transcriber.transcribe(
-            audioBuffer: buffer,
+            audioURL: preparedAudio.sourceURL,
             modelDirectoryURL: modelDirectoryURL,
             channel: channel
         )
@@ -224,13 +219,9 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
         var resolvedLanguage: String?
 
         for (index, region) in regions.enumerated() {
-            let buffer = try preparedAudio.makePCMBuffer(for: region)
-            guard buffer.frameLength > 0 else {
-                continue
-            }
-
-            let output = try await transcriber.transcribe(
-                audioBuffer: buffer,
+            let output = try await transcribeRegion(
+                preparedAudio,
+                region: region,
                 modelDirectoryURL: modelDirectoryURL,
                 channel: channel
             )
@@ -259,6 +250,38 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
         }
 
         return FluidAudioRunnerOutput(language: resolvedLanguage, segments: mergedSegments)
+    }
+
+    private func transcribeRegion(
+        _ preparedAudio: PreparedSessionAudio,
+        region: FluidAudioSpeechRegion,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput {
+        let audioURL = try makeTemporaryAudioFile(from: preparedAudio, region: region)
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        return try await transcriber.transcribe(
+            audioURL: audioURL,
+            modelDirectoryURL: modelDirectoryURL,
+            channel: channel
+        )
+    }
+
+    private func makeTemporaryAudioFile(
+        from preparedAudio: PreparedSessionAudio,
+        region: FluidAudioSpeechRegion
+    ) throws -> URL {
+        let buffer = try preparedAudio.makePCMBuffer(for: region)
+        guard buffer.frameLength > 0 else {
+            throw ASREngineRuntimeError.unsupportedFormat(preparedAudio.sourceURL)
+        }
+
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Recordly-FluidAudio-\(UUID().uuidString)", isDirectory: false)
+            .appendingPathExtension("caf")
+        let audioFile = try AVAudioFile(forWriting: fileURL, settings: buffer.format.settings)
+        try audioFile.write(from: buffer)
+        return fileURL
     }
 
     private func normalize(
