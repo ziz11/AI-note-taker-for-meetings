@@ -1201,6 +1201,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
         try writeTestM4A(named: "system.m4a", in: sessionDirectory)
+        try writeTestM4A(named: "merged-call.m4a", in: sessionDirectory)
 
         let recording = RecordingSession(
             id: recordingID,
@@ -1213,7 +1214,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             notes: "",
             assets: RecordingAssets(
                 microphoneFile: "mic.m4a",
-                systemAudioFile: "system.m4a"
+                systemAudioFile: "system.m4a",
+                mergedCallFile: "merged-call.m4a"
             )
         )
 
@@ -1247,7 +1249,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             audioCaptureEngine: StubAudioCaptureEngine(
                 artifacts: CaptureArtifacts(
                     microphoneFile: "mic.m4a",
-                    systemAudioFile: "system.m4a"
+                    systemAudioFile: "system.m4a",
+                    mergedCallFile: "merged-call.m4a"
                 )
             ),
             transcriptionPipeline: TranscriptionPipeline(),

@@ -396,7 +396,8 @@ final class TranscriptionPipelineTests: XCTestCase {
                 "mic.raw.caf": "mic-caf",
                 "system.raw.caf": "system-caf",
                 "mic.m4a": "mic-m4a",
-                "system.m4a": "system-m4a"
+                "system.m4a": "system-m4a",
+                "merged-call.m4a": "merged"
             ]
         )
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -588,7 +589,8 @@ final class TranscriptionPipelineTests: XCTestCase {
                 "mic.raw.caf": "mic-caf",
                 "system.raw.caf": "system-caf",
                 "mic.m4a": "mic-m4a",
-                "system.m4a": "system-m4a"
+                "system.m4a": "system-m4a",
+                "merged-call.m4a": "merged"
             ]
         )
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -631,6 +633,70 @@ final class TranscriptionPipelineTests: XCTestCase {
     }
 
     @MainActor
+    func testCompleteCaptureRequiresMergedM4ABeforeTranscriptionStarts() async throws {
+        let asrEngine = RecordingASREngine { channel, sessionID in
+            ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: [
+                    ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1_000, text: channel.rawValue, confidence: nil, language: "en", words: nil)
+                ]
+            )
+        }
+        let fixture = try makeLiveCaptureSelectionFixture(
+            microphoneAsset: "mic.m4a",
+            systemAsset: "system.m4a",
+            files: [
+                "mic.m4a": "mic-m4a",
+                "system.m4a": "system-m4a"
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let repository = InMemoryRecordingsRepository(
+            recordings: [fixture.recording],
+            sessionDirectories: [fixture.recording.id: fixture.directory]
+        )
+        let controller = RecordingWorkflowController(
+            audioCaptureEngine: CompletingAudioCaptureEngine(
+                artifacts: CaptureArtifacts(
+                    microphoneFile: "mic.m4a",
+                    systemAudioFile: "system.m4a",
+                    mergedCallFile: nil,
+                    connectorNotesFile: "capture-session.json",
+                    note: "Raw tracks finalized."
+                )
+            ),
+            transcriptionPipeline: TranscriptionPipeline(mode: .legacyFullFileDebug),
+            runtimeProfileSelector: WorkflowRuntimeProfileSelector(
+                transcriptionProfile: makeRuntimeProfile(
+                    asrModelURL: fixture.asrModelURL,
+                    diarizationModelURL: fixture.diarizationModelURL
+                )
+            ),
+            inferenceEngineFactory: StaticInferenceEngineFactory(
+                asrEngine: asrEngine,
+                diarizationEngine: SimpleDiarizationEngine()
+            ),
+            repository: repository
+        )
+
+        let result = try await controller.completeCapture(
+            for: fixture.recording,
+            duration: 10,
+            runTranscription: true
+        )
+
+        XCTAssertTrue(asrEngine.recordedAudioFileNames.isEmpty)
+        XCTAssertEqual(result.recording.lifecycleState, .failed)
+        XCTAssertEqual(result.recording.transcriptState, .failed)
+        XCTAssertNotNil(result.processingError)
+        XCTAssertNil(result.recording.assets.mergedCallFile)
+    }
+
+    @MainActor
     func testWorkflowCleansTemporaryCAFAfterFailedTranscription() async throws {
         let fixture = try makeLiveCaptureSelectionFixture(
             microphoneAsset: "mic.m4a",
@@ -639,7 +705,8 @@ final class TranscriptionPipelineTests: XCTestCase {
                 "mic.raw.caf": "mic-caf",
                 "system.raw.caf": "system-caf",
                 "mic.m4a": "mic-m4a",
-                "system.m4a": "system-m4a"
+                "system.m4a": "system-m4a",
+                "merged-call.m4a": "merged"
             ]
         )
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -1615,6 +1682,29 @@ final class TranscriptionPipelineTests: XCTestCase {
         func stopCapture() async throws -> CaptureArtifacts {
             XCTFail("stopCapture should not be called in transcription cleanup tests")
             return CaptureArtifacts()
+        }
+
+        func currentMicrophoneLevel() -> Double { 0 }
+        func currentSystemAudioLevel() -> Double { 0 }
+        func recoverPendingSessions(in recordingsDirectory: URL) async {}
+    }
+
+    @MainActor
+    private final class CompletingAudioCaptureEngine: AudioCaptureEngine {
+        var systemAudioStatusLabel: String { "Captured" }
+        private let artifacts: CaptureArtifacts
+
+        init(artifacts: CaptureArtifacts) {
+            self.artifacts = artifacts
+        }
+
+        func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            XCTFail("startCapture should not be called when completing capture")
+            return CaptureArtifacts()
+        }
+
+        func stopCapture() async throws -> CaptureArtifacts {
+            artifacts
         }
 
         func currentMicrophoneLevel() -> Double { 0 }

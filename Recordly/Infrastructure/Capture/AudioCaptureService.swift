@@ -998,23 +998,14 @@ final class AudioCaptureService: AudioCaptureEngine {
 
         try await metadataStore.updateStatus(.readyForMix, in: sessionDirectory)
 
-        let mergeService = self.mergeService
-        let metadataStore = self.metadataStore
-        Task.detached(priority: .utility) {
-            do {
-                _ = try await mergeService.mergeSession(in: sessionDirectory, exportM4A: true)
-            } catch {
-                try? await metadataStore.updateStatus(.mixError, in: sessionDirectory)
-                try? await metadataStore.appendNote("Background merge failed: \(error.localizedDescription)", in: sessionDirectory)
-            }
-        }
+        let mergeResult = try await mergeService.mergeSession(in: sessionDirectory, exportM4A: true)
 
         return CaptureArtifacts(
             microphoneFile: microphoneFileName,
             systemAudioFile: systemAudioFileName,
-            mergedCallFile: nil,
+            mergedCallFile: mergeResult.mergedM4AFileName,
             connectorNotesFile: "capture-session.json",
-            note: "Raw tracks finalized. Offline merge is running in background."
+            note: mergeResult.note
         )
     }
 
