@@ -202,8 +202,8 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
             }
         }
 
-        return try await transcriber.transcribe(
-            audioURL: preparedAudio.sourceURL,
+        return try await transcribePreparedAudio(
+            preparedAudio,
             modelDirectoryURL: modelDirectoryURL,
             channel: channel
         )
@@ -267,11 +267,37 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
         )
     }
 
+    private func transcribePreparedAudio(
+        _ preparedAudio: PreparedSessionAudio,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput {
+        let audioURL = try makeTemporaryAudioFile(from: preparedAudio)
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        return try await transcriber.transcribe(
+            audioURL: audioURL,
+            modelDirectoryURL: modelDirectoryURL,
+            channel: channel
+        )
+    }
+
     private func makeTemporaryAudioFile(
         from preparedAudio: PreparedSessionAudio,
         region: FluidAudioSpeechRegion
     ) throws -> URL {
         let buffer = try preparedAudio.makePCMBuffer(for: region)
+        return try makeTemporaryAudioFile(from: preparedAudio, buffer: buffer)
+    }
+
+    private func makeTemporaryAudioFile(from preparedAudio: PreparedSessionAudio) throws -> URL {
+        let buffer = try preparedAudio.makePCMBuffer()
+        return try makeTemporaryAudioFile(from: preparedAudio, buffer: buffer)
+    }
+
+    private func makeTemporaryAudioFile(
+        from preparedAudio: PreparedSessionAudio,
+        buffer: AVAudioPCMBuffer
+    ) throws -> URL {
         guard buffer.frameLength > 0 else {
             throw ASREngineRuntimeError.unsupportedFormat(preparedAudio.sourceURL)
         }

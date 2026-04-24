@@ -42,10 +42,6 @@ struct FluidAudioASREngine: ASREngine {
 
     init(
         transcriber: FluidAudioTranscribing = FluidAudioTranscriber(),
-        inputPreparer: FluidAudioInputPreparing = FluidAudioInputPreparer(),
-        sessionAudioLoader: (any FluidAudioSessionAudioLoading)? = nil,
-        vadService: (any FluidAudioVoiceActivityDetecting)? = nil,
-        transcriptionService: (any FluidAudioTranscriptionServicing)? = nil,
         fileManager: FileManager = .default
     ) {
         self.transcriber = transcriber
