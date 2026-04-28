@@ -362,7 +362,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(asrEngine.recordedChannels, [.mic, .system])
         XCTAssertEqual(
             asrEngine.recordedAudioFileNames,
-            ["mic.raw.flac", "system.raw.flac"]
+            ["mic.m4a", "system.m4a"]
         )
 
         let doc = try decodeTranscriptDocument(in: fixture.directory)
@@ -371,7 +371,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(systemSegment.speakerId, "remote_1")
     }
 
-    func testLiveCaptureImmediatePathPrefersCAFSourceTracksOverDurableM4A() async throws {
+    func testLiveCaptureImmediatePathUsesDurableM4AEvenWhenCAFSourceTracksExist() async throws {
         let asrEngine = RecordingASREngine { channel, sessionID in
             ASRDocument(
                 version: 1,
@@ -396,7 +396,8 @@ final class TranscriptionPipelineTests: XCTestCase {
                 "mic.raw.caf": "mic-caf",
                 "system.raw.caf": "system-caf",
                 "mic.m4a": "mic-m4a",
-                "system.m4a": "system-m4a"
+                "system.m4a": "system-m4a",
+                "merged-call.m4a": "merged"
             ]
         )
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -410,7 +411,7 @@ final class TranscriptionPipelineTests: XCTestCase {
 
         XCTAssertEqual(
             asrEngine.recordedAudioFileNames,
-            ["mic.raw.caf", "system.raw.caf"]
+            ["mic.m4a", "system.m4a"]
         )
     }
 
@@ -495,7 +496,7 @@ final class TranscriptionPipelineTests: XCTestCase {
 
         XCTAssertEqual(
             asrEngine.recordedAudioFileNames,
-            ["mic.raw.caf", "system.raw.caf"]
+            ["mic.m4a", "system.m4a"]
         )
         XCTAssertFalse(asrEngine.recordedAudioFileNames.contains("merged-call.m4a"))
     }
@@ -569,7 +570,7 @@ final class TranscriptionPipelineTests: XCTestCase {
     }
 
     @MainActor
-    func testWorkflowRetainsTemporaryCAFDuringProcessingAndCleansThemAfterReady() async throws {
+    func testWorkflowCleansTemporaryCAFBeforeTranscriptionStarts() async throws {
         let asrEngine = RecordingASREngine { channel, sessionID in
             ASRDocument(
                 version: 1,
@@ -588,7 +589,8 @@ final class TranscriptionPipelineTests: XCTestCase {
                 "mic.raw.caf": "mic-caf",
                 "system.raw.caf": "system-caf",
                 "mic.m4a": "mic-m4a",
-                "system.m4a": "system-m4a"
+                "system.m4a": "system-m4a",
+                "merged-call.m4a": "merged"
             ]
         )
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -620,14 +622,78 @@ final class TranscriptionPipelineTests: XCTestCase {
         let updated = try await controller.transcribe(recording: fixture.recording) { state in
             guard state != .ready, state != .failed else { return }
             observedPreTerminalState = true
-            XCTAssertTrue(FileManager.default.fileExists(atPath: micRawURL.path))
-            XCTAssertTrue(FileManager.default.fileExists(atPath: systemRawURL.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
         }
 
         XCTAssertTrue(observedPreTerminalState)
         XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
-        XCTAssertEqual(updated.assets.transcriptionAudioProvenance, .cafPcmFastPath)
+        XCTAssertEqual(updated.assets.transcriptionAudioProvenance, .m4aRecovery)
+    }
+
+    @MainActor
+    func testCompleteCaptureRequiresMergedM4ABeforeTranscriptionStarts() async throws {
+        let asrEngine = RecordingASREngine { channel, sessionID in
+            ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: [
+                    ASRSegment(id: "\(channel.rawValue)-1", startMs: 0, endMs: 1_000, text: channel.rawValue, confidence: nil, language: "en", words: nil)
+                ]
+            )
+        }
+        let fixture = try makeLiveCaptureSelectionFixture(
+            microphoneAsset: "mic.m4a",
+            systemAsset: "system.m4a",
+            files: [
+                "mic.m4a": "mic-m4a",
+                "system.m4a": "system-m4a"
+            ]
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let repository = InMemoryRecordingsRepository(
+            recordings: [fixture.recording],
+            sessionDirectories: [fixture.recording.id: fixture.directory]
+        )
+        let controller = RecordingWorkflowController(
+            audioCaptureEngine: CompletingAudioCaptureEngine(
+                artifacts: CaptureArtifacts(
+                    microphoneFile: "mic.m4a",
+                    systemAudioFile: "system.m4a",
+                    mergedCallFile: nil,
+                    connectorNotesFile: "capture-session.json",
+                    note: "Raw tracks finalized."
+                )
+            ),
+            transcriptionPipeline: TranscriptionPipeline(mode: .legacyFullFileDebug),
+            runtimeProfileSelector: WorkflowRuntimeProfileSelector(
+                transcriptionProfile: makeRuntimeProfile(
+                    asrModelURL: fixture.asrModelURL,
+                    diarizationModelURL: fixture.diarizationModelURL
+                )
+            ),
+            inferenceEngineFactory: StaticInferenceEngineFactory(
+                asrEngine: asrEngine,
+                diarizationEngine: SimpleDiarizationEngine()
+            ),
+            repository: repository
+        )
+
+        let result = try await controller.completeCapture(
+            for: fixture.recording,
+            duration: 10,
+            runTranscription: true
+        )
+
+        XCTAssertTrue(asrEngine.recordedAudioFileNames.isEmpty)
+        XCTAssertEqual(result.recording.lifecycleState, .failed)
+        XCTAssertEqual(result.recording.transcriptState, .failed)
+        XCTAssertNotNil(result.processingError)
+        XCTAssertNil(result.recording.assets.mergedCallFile)
     }
 
     @MainActor
@@ -639,7 +705,8 @@ final class TranscriptionPipelineTests: XCTestCase {
                 "mic.raw.caf": "mic-caf",
                 "system.raw.caf": "system-caf",
                 "mic.m4a": "mic-m4a",
-                "system.m4a": "system-m4a"
+                "system.m4a": "system-m4a",
+                "merged-call.m4a": "merged"
             ]
         )
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -674,8 +741,8 @@ final class TranscriptionPipelineTests: XCTestCase {
             try await controller.transcribe(recording: fixture.recording) { state in
                 guard state != .ready, state != .failed else { return }
                 observedPreTerminalState = true
-                XCTAssertTrue(FileManager.default.fileExists(atPath: micRawURL.path))
-                XCTAssertTrue(FileManager.default.fileExists(atPath: systemRawURL.path))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
             }
         )
 
@@ -683,6 +750,148 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
         XCTAssertEqual(repository.recordings.first?.transcriptState, .failed)
+    }
+
+    @MainActor
+    func testManualRetranscriptionAfterTemporaryCleanupUsesDurableM4AFiles() async throws {
+        let sessionID = UUID()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try writeAudioFile(
+            named: "mic.m4a",
+            in: directory,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels
+        )
+        try writeAudioFile(
+            named: "system.m4a",
+            in: directory,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels
+        )
+
+        let asrModelURL = directory.appendingPathComponent("asr.bin")
+        let diarizationModelURL = directory.appendingPathComponent("diarization.bin")
+        try Data("asr".utf8).write(to: asrModelURL)
+        try Data("diarization".utf8).write(to: diarizationModelURL)
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "cleanup-retranscribe",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .idle,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a"
+            )
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recording.id: directory]
+        )
+        let asrEngine = DecodingRecordingASREngine()
+        let systemChunkEngine = DecodingSystemChunkEngine()
+        let controller = RecordingWorkflowController(
+            audioCaptureEngine: UnusedAudioCaptureEngine(),
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: WorkflowRuntimeProfileSelector(
+                transcriptionProfile: makeRuntimeProfile(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: diarizationModelURL
+                )
+            ),
+            inferenceEngineFactory: StaticInferenceEngineFactory(
+                asrEngine: asrEngine,
+                diarizationEngine: SimpleDiarizationEngine(),
+                systemChunkEngine: systemChunkEngine
+            ),
+            repository: repository
+        )
+
+        let updated = try await controller.transcribe(recording: recording)
+
+        XCTAssertEqual(asrEngine.recordedAudioFileNames, ["mic.m4a"])
+        XCTAssertEqual(systemChunkEngine.recordedAudioFileNames, ["system.m4a"])
+        XCTAssertEqual(updated.assets.transcriptionAudioProvenance, .m4aRecovery)
+        XCTAssertEqual(updated.transcriptState, .ready)
+    }
+
+    @MainActor
+    func testManualRetranscriptionSkipsUnreadableTemporaryCAFAndFallsBackToDurableM4A() async throws {
+        let sessionID = UUID()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try Data("corrupt".utf8).write(to: directory.appendingPathComponent("mic.raw.caf"))
+        try Data("corrupt".utf8).write(to: directory.appendingPathComponent("system.raw.caf"))
+        try writeAudioFile(
+            named: "mic.m4a",
+            in: directory,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels
+        )
+        try writeAudioFile(
+            named: "system.m4a",
+            in: directory,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels
+        )
+
+        let asrModelURL = directory.appendingPathComponent("asr.bin")
+        let diarizationModelURL = directory.appendingPathComponent("diarization.bin")
+        try Data("asr".utf8).write(to: asrModelURL)
+        try Data("diarization".utf8).write(to: diarizationModelURL)
+
+        let recording = RecordingSession(
+            id: sessionID,
+            title: "caf-fallback",
+            createdAt: Date(),
+            duration: 10,
+            lifecycleState: .ready,
+            transcriptState: .idle,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a"
+            )
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recording.id: directory]
+        )
+        let asrEngine = DecodingRecordingASREngine()
+        let systemChunkEngine = DecodingSystemChunkEngine()
+        let controller = RecordingWorkflowController(
+            audioCaptureEngine: UnusedAudioCaptureEngine(),
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: WorkflowRuntimeProfileSelector(
+                transcriptionProfile: makeRuntimeProfile(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: diarizationModelURL
+                )
+            ),
+            inferenceEngineFactory: StaticInferenceEngineFactory(
+                asrEngine: asrEngine,
+                diarizationEngine: SimpleDiarizationEngine(),
+                systemChunkEngine: systemChunkEngine
+            ),
+            repository: repository
+        )
+
+        let updated = try await controller.transcribe(recording: recording)
+
+        XCTAssertEqual(asrEngine.recordedAudioFileNames, ["mic.m4a"])
+        XCTAssertEqual(systemChunkEngine.recordedAudioFileNames, ["system.m4a"])
+        XCTAssertEqual(updated.assets.transcriptionAudioProvenance, .m4aRecovery)
+        XCTAssertEqual(updated.transcriptState, .ready)
     }
 
     func testMicOnlyInputProducesTranscriptWithoutSystemArtifacts() async throws {
@@ -926,38 +1135,73 @@ final class TranscriptionPipelineTests: XCTestCase {
             version: 1,
             sessionID: sessionID,
             createdAt: Date(),
-            channelsPresent: [.mic],
-            diarizationApplied: false,
+            channelsPresent: [.system],
+            diarizationApplied: true,
             mergePolicy: .deterministicStartEndChannelID,
             segments: [
                 TranscriptSegment(
-                    id: "mic-ru-1",
-                    channel: .mic,
-                    speaker: "You",
-                    speakerRole: .me,
-                    speakerId: "me",
-                    startMs: 133_000,
-                    endMs: 135_000,
-                    text: "Технологии обанкротили всех нас.",
+                    id: "system-ru-1",
+                    channel: .system,
+                    speaker: "Speaker 1",
+                    speakerRole: .remote,
+                    speakerId: "remote_1",
+                    startMs: 3_035_229,
+                    endMs: 3_045_389,
+                    text: "Ну, типа, вначале сказал про это, что типа эти муж тогда что делают с улучшением качества бы. Это как будто против того, что он выделок пойдет",
                     confidence: 0.95,
                     language: "ru",
-                    speakerConfidence: nil,
+                    speakerConfidence: 0.8,
                     words: [
-                        ASRWord(word: "Те", startMs: 133_000, endMs: 133_120, confidence: 0.9),
-                        ASRWord(word: "х", startMs: 133_130, endMs: 133_160, confidence: 0.9),
-                        ASRWord(word: "но", startMs: 133_170, endMs: 133_260, confidence: 0.9),
-                        ASRWord(word: "ло", startMs: 133_270, endMs: 133_360, confidence: 0.9),
-                        ASRWord(word: "ги", startMs: 133_370, endMs: 133_460, confidence: 0.9),
-                        ASRWord(word: "и", startMs: 133_470, endMs: 133_520, confidence: 0.9),
-                        ASRWord(word: "об", startMs: 133_560, endMs: 133_650, confidence: 0.9),
-                        ASRWord(word: "ан", startMs: 133_660, endMs: 133_750, confidence: 0.9),
-                        ASRWord(word: "к", startMs: 133_760, endMs: 133_790, confidence: 0.9),
-                        ASRWord(word: "ро", startMs: 133_800, endMs: 133_890, confidence: 0.9),
-                        ASRWord(word: "ти", startMs: 133_900, endMs: 133_990, confidence: 0.9),
-                        ASRWord(word: "ли", startMs: 134_000, endMs: 134_090, confidence: 0.9),
-                        ASRWord(word: "все", startMs: 134_130, endMs: 134_260, confidence: 0.9),
-                        ASRWord(word: "х", startMs: 134_270, endMs: 134_300, confidence: 0.9),
-                        ASRWord(word: "нас.", startMs: 134_340, endMs: 135_000, confidence: 0.9)
+                        ASRWord(word: "Ну", startMs: 3_035_229, endMs: 3_035_349, confidence: 0.9),
+                        ASRWord(word: "ти", startMs: 3_035_349, endMs: 3_035_469, confidence: 0.9),
+                        ASRWord(word: "па", startMs: 3_035_469, endMs: 3_035_589, confidence: 0.9),
+                        ASRWord(word: "в", startMs: 3_035_589, endMs: 3_035_649, confidence: 0.9),
+                        ASRWord(word: "на", startMs: 3_035_649, endMs: 3_035_769, confidence: 0.9),
+                        ASRWord(word: "ча", startMs: 3_035_769, endMs: 3_035_889, confidence: 0.9),
+                        ASRWord(word: "ле", startMs: 3_035_889, endMs: 3_036_009, confidence: 0.9),
+                        ASRWord(word: "сказа", startMs: 3_036_009, endMs: 3_036_249, confidence: 0.9),
+                        ASRWord(word: "л", startMs: 3_036_249, endMs: 3_036_309, confidence: 0.9),
+                        ASRWord(word: "про", startMs: 3_036_309, endMs: 3_036_429, confidence: 0.9),
+                        ASRWord(word: "это", startMs: 3_036_429, endMs: 3_036_609, confidence: 0.9),
+                        ASRWord(word: "что", startMs: 3_036_609, endMs: 3_036_729, confidence: 0.9),
+                        ASRWord(word: "ти", startMs: 3_036_729, endMs: 3_036_849, confidence: 0.9),
+                        ASRWord(word: "па", startMs: 3_036_849, endMs: 3_036_969, confidence: 0.9),
+                        ASRWord(word: "эти", startMs: 3_036_969, endMs: 3_037_149, confidence: 0.9),
+                        ASRWord(word: "му", startMs: 3_037_149, endMs: 3_037_269, confidence: 0.9),
+                        ASRWord(word: "ж", startMs: 3_037_269, endMs: 3_037_329, confidence: 0.9),
+                        ASRWord(word: "то", startMs: 3_037_329, endMs: 3_037_449, confidence: 0.9),
+                        ASRWord(word: "гда", startMs: 3_037_449, endMs: 3_037_629, confidence: 0.9),
+                        ASRWord(word: "что", startMs: 3_037_629, endMs: 3_037_749, confidence: 0.9),
+                        ASRWord(word: "дела", startMs: 3_037_749, endMs: 3_037_989, confidence: 0.9),
+                        ASRWord(word: "ют", startMs: 3_037_989, endMs: 3_038_109, confidence: 0.9),
+                        ASRWord(word: "с", startMs: 3_038_109, endMs: 3_038_169, confidence: 0.9),
+                        ASRWord(word: "у", startMs: 3_038_169, endMs: 3_038_229, confidence: 0.9),
+                        ASRWord(word: "лу", startMs: 3_038_229, endMs: 3_038_349, confidence: 0.9),
+                        ASRWord(word: "ч", startMs: 3_038_349, endMs: 3_038_409, confidence: 0.9),
+                        ASRWord(word: "шение", startMs: 3_038_409, endMs: 3_038_709, confidence: 0.9),
+                        ASRWord(word: "м", startMs: 3_038_709, endMs: 3_038_769, confidence: 0.9),
+                        ASRWord(word: "ка", startMs: 3_038_769, endMs: 3_038_889, confidence: 0.9),
+                        ASRWord(word: "че", startMs: 3_038_889, endMs: 3_039_009, confidence: 0.9),
+                        ASRWord(word: "ства", startMs: 3_039_009, endMs: 3_039_249, confidence: 0.9),
+                        ASRWord(word: "бы", startMs: 3_039_249, endMs: 3_039_369, confidence: 0.9),
+                        ASRWord(word: "Это", startMs: 3_039_369, endMs: 3_039_549, confidence: 0.9),
+                        ASRWord(word: "как", startMs: 3_039_549, endMs: 3_039_729, confidence: 0.9),
+                        ASRWord(word: "бу", startMs: 3_039_729, endMs: 3_039_849, confidence: 0.9),
+                        ASRWord(word: "д", startMs: 3_039_849, endMs: 3_039_909, confidence: 0.9),
+                        ASRWord(word: "то", startMs: 3_039_909, endMs: 3_040_029, confidence: 0.9),
+                        ASRWord(word: "про", startMs: 3_040_029, endMs: 3_040_149, confidence: 0.9),
+                        ASRWord(word: "тив", startMs: 3_040_149, endMs: 3_040_329, confidence: 0.9),
+                        ASRWord(word: "того", startMs: 3_040_329, endMs: 3_040_569, confidence: 0.9),
+                        ASRWord(word: "что", startMs: 3_040_569, endMs: 3_040_689, confidence: 0.9),
+                        ASRWord(word: "он", startMs: 3_040_689, endMs: 3_040_809, confidence: 0.9),
+                        ASRWord(word: "вы", startMs: 3_040_809, endMs: 3_040_929, confidence: 0.9),
+                        ASRWord(word: "де", startMs: 3_040_929, endMs: 3_041_049, confidence: 0.9),
+                        ASRWord(word: "ло", startMs: 3_041_049, endMs: 3_041_169, confidence: 0.9),
+                        ASRWord(word: "к", startMs: 3_041_169, endMs: 3_041_229, confidence: 0.9),
+                        ASRWord(word: "по", startMs: 3_041_229, endMs: 3_041_349, confidence: 0.9),
+                        ASRWord(word: "й", startMs: 3_041_349, endMs: 3_041_409, confidence: 0.9),
+                        ASRWord(word: "де", startMs: 3_041_409, endMs: 3_041_529, confidence: 0.9),
+                        ASRWord(word: "т", startMs: 3_041_529, endMs: 3_041_589, confidence: 0.9)
                     ]
                 )
             ]
@@ -968,15 +1212,20 @@ final class TranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(
             rendered.transcriptText,
             """
-            [02:13 - 02:15] [You] Технологии обанкротили всех нас.
+            [50:35 - 50:40] [Speaker 1] Ну, типа, вначале сказал про это, что типа эти муж тогда что делают с улучшением качества бы.
+            [50:40 - 50:45] [Speaker 1] Это как будто против того, что он выделок пойдет
             """
         )
         XCTAssertEqual(
             rendered.srtText,
             """
             1
-            00:02:13,000 --> 00:02:15,000
-            [You] Технологии обанкротили всех нас.
+            00:50:35,229 --> 00:50:40,309
+            [Speaker 1] Ну, типа, вначале сказал про это, что типа эти муж тогда что делают с улучшением качества бы.
+
+            2
+            00:50:40,309 --> 00:50:45,389
+            [Speaker 1] Это как будто против того, что он выделок пойдет
             """
         )
     }
@@ -1095,7 +1344,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         )
 
         let sessionID = UUID()
-        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.raw.caf")
+        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.m4a")
         FileManager.default.createFile(atPath: audioURL.path, contents: Data())
 
         let missingModelURL = FileManager.default.temporaryDirectory.appendingPathComponent("missing-model.bin")
@@ -1123,7 +1372,7 @@ final class TranscriptionPipelineTests: XCTestCase {
         )
 
         let sessionID = UUID()
-        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.raw.caf")
+        let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent("system.m4a")
         FileManager.default.createFile(atPath: audioURL.path, contents: Data())
 
         await XCTAssertThrowsErrorAsync(try await service.diarize(
@@ -1144,10 +1393,20 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
 
         if includeMic {
-            FileManager.default.createFile(atPath: temp.appendingPathComponent("mic.raw.flac").path, contents: Data("mic".utf8))
+            try writeAudioFile(
+                named: "mic.m4a",
+                in: temp,
+                sampleRate: PCMTrackWriter.canonicalSampleRate,
+                channels: PCMTrackWriter.canonicalChannels
+            )
         }
         if includeSystem {
-            FileManager.default.createFile(atPath: temp.appendingPathComponent("system.raw.flac").path, contents: Data("system".utf8))
+            try writeAudioFile(
+                named: "system.m4a",
+                in: temp,
+                sampleRate: PCMTrackWriter.canonicalSampleRate,
+                channels: PCMTrackWriter.canonicalChannels
+            )
         }
 
         let asrModelURL = temp.appendingPathComponent("asr.bin")
@@ -1165,8 +1424,8 @@ final class TranscriptionPipelineTests: XCTestCase {
             source: .liveCapture,
             notes: "",
             assets: RecordingAssets(
-                microphoneFile: includeMic ? "mic.raw.flac" : nil,
-                systemAudioFile: includeSystem ? "system.raw.flac" : nil
+                microphoneFile: includeMic ? "mic.m4a" : nil,
+                systemAudioFile: includeSystem ? "system.m4a" : nil
             )
         )
 
@@ -1183,10 +1442,20 @@ final class TranscriptionPipelineTests: XCTestCase {
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
 
         for (name, contents) in files {
-            FileManager.default.createFile(
-                atPath: temp.appendingPathComponent(name).path,
-                contents: Data(contents.utf8)
-            )
+            let fileURL = temp.appendingPathComponent(name)
+            if name.hasSuffix(".raw.caf") || name.hasSuffix(".m4a") {
+                try writeAudioFile(
+                    named: name,
+                    in: temp,
+                    sampleRate: PCMTrackWriter.canonicalSampleRate,
+                    channels: PCMTrackWriter.canonicalChannels
+                )
+            } else {
+                FileManager.default.createFile(
+                    atPath: fileURL.path,
+                    contents: Data(contents.utf8)
+                )
+            }
         }
 
         let asrModelURL = temp.appendingPathComponent("asr.bin")
@@ -1261,6 +1530,40 @@ final class TranscriptionPipelineTests: XCTestCase {
         }
 
         return buffer
+    }
+
+    private func writeAudioFile(
+        named fileName: String,
+        in directory: URL,
+        sampleRate: Double,
+        channels: AVAudioChannelCount,
+        frameCount: AVAudioFrameCount = 48_000
+    ) throws {
+        let url = directory.appendingPathComponent(fileName)
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: sampleRate,
+                channels: channels,
+                interleaved: false
+            )
+        )
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount))
+        buffer.frameLength = frameCount
+
+        if let channel = buffer.floatChannelData?[0] {
+            for index in 0 ..< Int(frameCount) {
+                channel[index] = sin(Float(index) * 0.01)
+            }
+        }
+
+        let audioFile = try AVAudioFile(
+            forWriting: url,
+            settings: PCMTrackWriter.fileSettings(for: url),
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        try audioFile.write(from: buffer)
     }
 
     private struct ClosureASREngine: ASREngine {
@@ -1391,6 +1694,29 @@ final class TranscriptionPipelineTests: XCTestCase {
         func recoverPendingSessions(in recordingsDirectory: URL) async {}
     }
 
+    @MainActor
+    private final class CompletingAudioCaptureEngine: AudioCaptureEngine {
+        var systemAudioStatusLabel: String { "Captured" }
+        private let artifacts: CaptureArtifacts
+
+        init(artifacts: CaptureArtifacts) {
+            self.artifacts = artifacts
+        }
+
+        func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            XCTFail("startCapture should not be called when completing capture")
+            return CaptureArtifacts()
+        }
+
+        func stopCapture() async throws -> CaptureArtifacts {
+            artifacts
+        }
+
+        func currentMicrophoneLevel() -> Double { 0 }
+        func currentSystemAudioLevel() -> Double { 0 }
+        func recoverPendingSessions(in recordingsDirectory: URL) async {}
+    }
+
     private final class RecordingASREngine: ASREngine, @unchecked Sendable {
         let handler: @Sendable (TranscriptChannel, UUID) throws -> ASRDocument
         private(set) var recordedChannels: [TranscriptChannel] = []
@@ -1414,6 +1740,40 @@ final class TranscriptionPipelineTests: XCTestCase {
         }
     }
 
+    private final class DecodingRecordingASREngine: ASREngine, @unchecked Sendable {
+        private let loader = FluidAudioSessionAudioLoader()
+        private(set) var recordedAudioFileNames: [String] = []
+
+        var displayName: String { "decoding-recording-asr" }
+
+        func transcribe(
+            audioURL: URL,
+            channel: TranscriptChannel,
+            sessionID: UUID,
+            configuration: ASREngineConfiguration
+        ) async throws -> ASRDocument {
+            _ = try loader.loadAudio(from: audioURL)
+            recordedAudioFileNames.append(audioURL.lastPathComponent)
+            return ASRDocument(
+                version: 1,
+                sessionID: sessionID,
+                channel: channel,
+                createdAt: Date(),
+                segments: [
+                    ASRSegment(
+                        id: "\(channel.rawValue)-1",
+                        startMs: 0,
+                        endMs: 1_000,
+                        text: channel.rawValue,
+                        confidence: nil,
+                        language: "en",
+                        words: nil
+                    )
+                ]
+            )
+        }
+    }
+
     private struct StubSystemChunkTranscriptionEngine: SystemChunkTranscriptionEngine {
         let handler: @Sendable (UUID) throws -> SystemChunkTranscriptionDocument
 
@@ -1424,6 +1784,39 @@ final class TranscriptionPipelineTests: XCTestCase {
             configuration: ASREngineConfiguration
         ) async throws -> SystemChunkTranscriptionDocument {
             try handler(sessionID)
+        }
+    }
+
+    private final class DecodingSystemChunkEngine: SystemChunkTranscriptionEngine, @unchecked Sendable {
+        private let loader = FluidAudioSessionAudioLoader()
+        private(set) var recordedAudioFileNames: [String] = []
+
+        func transcribeSystemChunks(
+            systemAudioURL: URL,
+            diarization: DiarizationDocument,
+            sessionID: UUID,
+            configuration: ASREngineConfiguration
+        ) async throws -> SystemChunkTranscriptionDocument {
+            _ = try loader.loadAudio(from: systemAudioURL)
+            recordedAudioFileNames.append(systemAudioURL.lastPathComponent)
+            return SystemChunkTranscriptionDocument(
+                version: 1,
+                sessionID: sessionID,
+                createdAt: Date(),
+                segments: [
+                    SystemChunkTranscriptSegment(
+                        id: "system-1",
+                        speakerKey: diarization.segments.first?.speaker ?? "speaker-a",
+                        startMs: 0,
+                        endMs: 1_000,
+                        text: "system",
+                        confidence: nil,
+                        language: "en",
+                        speakerConfidence: diarization.segments.first?.confidence,
+                        words: nil
+                    )
+                ]
+            )
         }
     }
 

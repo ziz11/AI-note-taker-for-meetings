@@ -68,6 +68,7 @@ enum SystemTranscriptionMode: Sendable {
 struct TranscriptionPipeline {
     let mode: SystemTranscriptionMode
     let audioInputAdapter: any AudioInputAdapter
+    let audioInputValidator: any AudioInputValidating
     let alignmentService: SystemTranscriptAlignmentService
     let systemChunkTranscriptBuilder: SystemChunkTranscriptBuilder
     let mergeService: TranscriptMergeService
@@ -79,6 +80,7 @@ struct TranscriptionPipeline {
     init(
         mode: SystemTranscriptionMode = .diarizationChunked,
         audioInputAdapter: any AudioInputAdapter = PassthroughAudioInputAdapter(),
+        audioInputValidator: any AudioInputValidating = AVFoundationAudioInputValidator(),
         alignmentService: SystemTranscriptAlignmentService = SystemTranscriptAlignmentService(),
         systemChunkTranscriptBuilder: SystemChunkTranscriptBuilder = SystemChunkTranscriptBuilder(),
         mergeService: TranscriptMergeService = TranscriptMergeService(),
@@ -86,6 +88,7 @@ struct TranscriptionPipeline {
     ) {
         self.mode = mode
         self.audioInputAdapter = audioInputAdapter
+        self.audioInputValidator = audioInputValidator
         self.alignmentService = alignmentService
         self.systemChunkTranscriptBuilder = systemChunkTranscriptBuilder
         self.mergeService = mergeService
@@ -293,7 +296,11 @@ struct TranscriptionPipeline {
         }
 
         for candidate in liveCaptureCandidates(for: channel, recording: recording) {
-            if let prepared = try prepareInputCandidate(fileName: candidate, channel: channel, in: sessionDirectory) {
+            if let prepared = try prepareValidatedLiveCaptureCandidate(
+                fileName: candidate,
+                channel: channel,
+                in: sessionDirectory
+            ) {
                 return prepared
             }
         }
@@ -306,23 +313,23 @@ struct TranscriptionPipeline {
     ) -> [String] {
         let assetFileName = channel == .mic ? recording.assets.microphoneFile : recording.assets.systemAudioFile
         let canonicalDurable = channel == .mic ? "mic.m4a" : "system.m4a"
-        let legacyRaw = channel == .mic ? "mic.raw.flac" : "system.raw.flac"
-        let canonicalRaw = channel == .mic ? "mic.raw.caf" : "system.raw.caf"
 
         let orderedCandidates = [
-            canonicalRaw,
-            legacyRaw,
             canonicalDurable,
             assetFileName
         ]
 
         var unique: [String] = []
-        for candidate in orderedCandidates.compactMap({ $0 }) where candidate != "merged-call.m4a" {
+        for candidate in orderedCandidates.compactMap({ $0 }) where isLiveCaptureInferenceCandidate(candidate) {
             if !unique.contains(candidate) {
                 unique.append(candidate)
             }
         }
         return unique
+    }
+
+    private func isLiveCaptureInferenceCandidate(_ fileName: String) -> Bool {
+        fileName != "merged-call.m4a" && fileName.lowercased().hasSuffix(".m4a")
     }
 
     private func prepareInputCandidate(
@@ -337,6 +344,34 @@ struct TranscriptionPipeline {
             .sessionAsset(fileName: fileName, channel: channel),
             in: sessionDirectory
         )
+    }
+
+    private func prepareValidatedLiveCaptureCandidate(
+        fileName: String?,
+        channel: TranscriptChannel,
+        in sessionDirectory: URL
+    ) throws -> PreparedAudioInput? {
+        guard let prepared = try prepareInputCandidate(
+            fileName: fileName,
+            channel: channel,
+            in: sessionDirectory
+        ) else {
+            return nil
+        }
+
+        guard requiresLiveCaptureValidation(fileName: prepared.url.lastPathComponent) else {
+            return prepared
+        }
+
+        guard audioInputValidator.isUsable(prepared) else {
+            return nil
+        }
+
+        return prepared
+    }
+
+    private func requiresLiveCaptureValidation(fileName: String) -> Bool {
+        fileName == "mic.raw.caf" || fileName == "system.raw.caf"
     }
 
     private func prepareImportedInput(
@@ -668,7 +703,7 @@ struct TranscriptionPipeline {
             return DiarizationLoadOutcome(document: nil, degradedReason: nil, modelUsed: nil)
         }
 
-        guard ["system.raw.caf", "system.raw.flac", "system.m4a"].contains(systemAudioURL.lastPathComponent) else {
+        guard systemAudioURL.lastPathComponent == "system.m4a" else {
             return DiarizationLoadOutcome(document: nil, degradedReason: "unsupported system audio source", modelUsed: nil)
         }
 

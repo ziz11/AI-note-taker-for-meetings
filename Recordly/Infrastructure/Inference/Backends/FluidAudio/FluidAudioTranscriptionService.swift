@@ -21,7 +21,7 @@ struct FluidAudioSegment {
 
 protocol FluidAudioTranscribing {
     func transcribe(
-        audioBuffer: AVAudioPCMBuffer,
+        audioURL: URL,
         modelDirectoryURL: URL,
         channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput
@@ -34,14 +34,14 @@ final class FluidAudioTranscriber: FluidAudioTranscribing {
 #endif
 
     func transcribe(
-        audioBuffer: AVAudioPCMBuffer,
+        audioURL: URL,
         modelDirectoryURL: URL,
         channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput {
 #if arch(arm64) && canImport(FluidAudio)
         let manager = try await resolveManager(for: modelDirectoryURL)
-        let source = fluidSource(for: channel)
-        let rawResult = try await manager.transcribe(audioBuffer, source: source)
+        var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+        let rawResult = try await manager.transcribe(audioURL, decoderState: &decoderState)
         return mapResult(rawResult)
 #else
         throw ASREngineRuntimeError.inferenceFailed(
@@ -58,20 +58,10 @@ final class FluidAudioTranscriber: FluidAudioTranscribing {
         }
 
         let models = try await AsrModels.load(from: modelDirectoryURL, configuration: nil, version: .v3)
-        let manager = AsrManager(config: .default)
-        try await manager.initialize(models: models)
+        let manager = AsrManager(config: .default, models: models)
         cachedManager = manager
         cachedModelPath = modelPath
         return manager
-    }
-
-    private func fluidSource(for channel: TranscriptChannel) -> AudioSource {
-        switch channel {
-        case .system:
-            return .system
-        case .mic:
-            return .microphone
-        }
     }
 
     private func mapResult(_ result: ASRResult) -> FluidAudioRunnerOutput {
@@ -130,6 +120,7 @@ protocol FluidAudioTranscriptionServicing {
 }
 
 struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
+    private let fullInputWindowDurationMs = 30_000
     private let transcriber: FluidAudioTranscribing
     private let vadService: any FluidAudioVoiceActivityDetecting
 
@@ -177,9 +168,42 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
         modelDirectoryURL: URL,
         channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput {
-        let buffer = try preparedAudio.makePCMBuffer()
-        return try await transcriber.transcribe(
-            audioBuffer: buffer,
+        if preparedAudio.durationMs > fullInputWindowDurationMs,
+           let fallbackWindows = makeFallbackWindows(durationMs: preparedAudio.durationMs),
+           !fallbackWindows.isEmpty {
+            var mergedSegments: [FluidAudioSegment] = []
+            var resolvedLanguage: String?
+
+            for (index, region) in fallbackWindows.enumerated() {
+                let output = try await transcribeRegion(
+                    preparedAudio,
+                    region: region,
+                    modelDirectoryURL: modelDirectoryURL,
+                    channel: channel
+                )
+                resolvedLanguage = resolvedLanguage ?? output.language
+
+                for segment in output.segments {
+                    mergedSegments.append(
+                        FluidAudioSegment(
+                            id: "seg-\(index + 1)-\(segment.id)",
+                            startMs: segment.startMs + region.startMs,
+                            endMs: segment.endMs + region.startMs,
+                            text: segment.text,
+                            confidence: segment.confidence,
+                            words: offset(words: segment.words, by: region.startMs)
+                        )
+                    )
+                }
+            }
+
+            if !mergedSegments.isEmpty {
+                return FluidAudioRunnerOutput(language: resolvedLanguage, segments: mergedSegments)
+            }
+        }
+
+        return try await transcribePreparedAudio(
+            preparedAudio,
             modelDirectoryURL: modelDirectoryURL,
             channel: channel
         )
@@ -195,13 +219,9 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
         var resolvedLanguage: String?
 
         for (index, region) in regions.enumerated() {
-            let buffer = try preparedAudio.makePCMBuffer(for: region)
-            guard buffer.frameLength > 0 else {
-                continue
-            }
-
-            let output = try await transcriber.transcribe(
-                audioBuffer: buffer,
+            let output = try await transcribeRegion(
+                preparedAudio,
+                region: region,
                 modelDirectoryURL: modelDirectoryURL,
                 channel: channel
             )
@@ -232,6 +252,64 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
         return FluidAudioRunnerOutput(language: resolvedLanguage, segments: mergedSegments)
     }
 
+    private func transcribeRegion(
+        _ preparedAudio: PreparedSessionAudio,
+        region: FluidAudioSpeechRegion,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput {
+        let audioURL = try makeTemporaryAudioFile(from: preparedAudio, region: region)
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        return try await transcriber.transcribe(
+            audioURL: audioURL,
+            modelDirectoryURL: modelDirectoryURL,
+            channel: channel
+        )
+    }
+
+    private func transcribePreparedAudio(
+        _ preparedAudio: PreparedSessionAudio,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput {
+        let audioURL = try makeTemporaryAudioFile(from: preparedAudio)
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        return try await transcriber.transcribe(
+            audioURL: audioURL,
+            modelDirectoryURL: modelDirectoryURL,
+            channel: channel
+        )
+    }
+
+    private func makeTemporaryAudioFile(
+        from preparedAudio: PreparedSessionAudio,
+        region: FluidAudioSpeechRegion
+    ) throws -> URL {
+        let buffer = try preparedAudio.makePCMBuffer(for: region)
+        return try makeTemporaryAudioFile(from: preparedAudio, buffer: buffer)
+    }
+
+    private func makeTemporaryAudioFile(from preparedAudio: PreparedSessionAudio) throws -> URL {
+        let buffer = try preparedAudio.makePCMBuffer()
+        return try makeTemporaryAudioFile(from: preparedAudio, buffer: buffer)
+    }
+
+    private func makeTemporaryAudioFile(
+        from preparedAudio: PreparedSessionAudio,
+        buffer: AVAudioPCMBuffer
+    ) throws -> URL {
+        guard buffer.frameLength > 0 else {
+            throw ASREngineRuntimeError.unsupportedFormat(preparedAudio.sourceURL)
+        }
+
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Recordly-FluidAudio-\(UUID().uuidString)", isDirectory: false)
+            .appendingPathExtension("caf")
+        let audioFile = try AVAudioFile(forWriting: fileURL, settings: buffer.format.settings)
+        try audioFile.write(from: buffer)
+        return fileURL
+    }
+
     private func normalize(
         regions: [FluidAudioSpeechRegion],
         durationMs: Int
@@ -248,6 +326,22 @@ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
         }
 
         return normalized.isEmpty ? nil : normalized
+    }
+
+    private func makeFallbackWindows(durationMs: Int) -> [FluidAudioSpeechRegion]? {
+        guard durationMs > fullInputWindowDurationMs else { return nil }
+
+        var windows: [FluidAudioSpeechRegion] = []
+        var cursor = 0
+
+        while cursor < durationMs {
+            let nextEnd = min(cursor + fullInputWindowDurationMs, durationMs)
+            guard nextEnd > cursor else { break }
+            windows.append(FluidAudioSpeechRegion(startMs: cursor, endMs: nextEnd))
+            cursor = nextEnd
+        }
+
+        return windows.isEmpty ? nil : windows
     }
 
     private func offset(words: [ASRWord]?, by offsetMs: Int) -> [ASRWord]? {

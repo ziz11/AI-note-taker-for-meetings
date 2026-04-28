@@ -109,9 +109,11 @@ final class FluidAudioASREngineTests: XCTestCase {
         try Data("not-audio".utf8).write(to: audioURL)
         let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-format")
 
-        let engine = FluidAudioASREngine(transcriber: StubFluidAudioTranscriber(
-            output: FluidAudioRunnerOutput(language: nil, segments: [])
-        ))
+        let engine = FluidAudioASREngine(
+            transcriber: ThrowingFluidAudioTranscriber(
+                error: ASREngineRuntimeError.unsupportedFormat(audioURL)
+            )
+        )
 
         do {
             _ = try await engine.transcribe(
@@ -128,11 +130,10 @@ final class FluidAudioASREngineTests: XCTestCase {
         }
     }
 
-    func testEngineAcceptsAIFFWhenInputPreparerSucceeds() async throws {
+    func testEngineAcceptsAIFFWhenFileTranscriberSucceeds() async throws {
         let audioURL = tempDirectory.appendingPathComponent("input.aiff")
         try Data("placeholder".utf8).write(to: audioURL)
         let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-aiff")
-        let expectedBuffer = try makePCMBuffer(frameCount: 16_000, sampleRate: 48_000, channels: 2)
         let transcriber = RecordingFluidAudioTranscriber(
             output: FluidAudioRunnerOutput(
                 language: "en",
@@ -141,8 +142,7 @@ final class FluidAudioASREngineTests: XCTestCase {
                 ]
             )
         )
-        let preparer = StubFluidAudioInputPreparer(buffer: expectedBuffer)
-        let engine = FluidAudioASREngine(transcriber: transcriber, inputPreparer: preparer)
+        let engine = FluidAudioASREngine(transcriber: transcriber)
 
         let document = try await engine.transcribe(
             audioURL: audioURL,
@@ -152,11 +152,67 @@ final class FluidAudioASREngineTests: XCTestCase {
         )
 
         XCTAssertEqual(document.segments.first?.text, "ok")
-        XCTAssertEqual(preparer.preparedURLs, [audioURL])
         XCTAssertEqual(transcriber.callCount, 1)
-        XCTAssertEqual(transcriber.lastBufferFrameLength, expectedBuffer.frameLength)
-        XCTAssertEqual(transcriber.lastBufferSampleRate, expectedBuffer.format.sampleRate)
-        XCTAssertEqual(transcriber.lastBufferChannelCount, 1)
+        XCTAssertEqual(transcriber.lastAudioURL, audioURL)
+        XCTAssertEqual(transcriber.lastChannel, .mic)
+    }
+
+    func testEngineUsesFileBasedFluidAudioTranscriberWhenAvailable() async throws {
+        let audioURL = try createAudioFile(named: "merged-call.m4a")
+        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-file")
+        let transcriber = RecordingFluidAudioFileTranscriber(
+            output: FluidAudioRunnerOutput(
+                language: "ru",
+                segments: [
+                    FluidAudioSegment(
+                        id: "seg-1",
+                        startMs: 0,
+                        endMs: 1_000,
+                        text: "привет",
+                        confidence: 0.9,
+                        words: nil
+                    )
+                ]
+            )
+        )
+        let engine = FluidAudioASREngine(transcriber: transcriber)
+
+        let document = try await engine.transcribe(
+            audioURL: audioURL,
+            channel: .mic,
+            sessionID: UUID(),
+            configuration: ASREngineConfiguration(modelURL: modelDirectory)
+        )
+
+        XCTAssertEqual(document.segments.first?.text, "привет")
+        XCTAssertEqual(transcriber.lastAudioURL, audioURL)
+        XCTAssertEqual(transcriber.lastChannel, .mic)
+    }
+
+    func testEngineDoesNotLoadFullAudioIntoMemoryForASR() async throws {
+        let audioURL = tempDirectory.appendingPathComponent("long-call.m4a")
+        try Data("not-decodable-audio".utf8).write(to: audioURL)
+        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-long")
+        let transcriber = RecordingFluidAudioFileTranscriber(
+            output: FluidAudioRunnerOutput(language: "ru", segments: [])
+        )
+        let engine = FluidAudioASREngine(transcriber: transcriber)
+
+        XCTAssertThrowsError(try FluidAudioInputPreparer().prepareInput(from: audioURL)) { error in
+            guard case ASREngineRuntimeError.unsupportedFormat(let failedURL) = error else {
+                return XCTFail("Expected unsupportedFormat from in-memory preparation, got \(error)")
+            }
+            XCTAssertEqual(failedURL, audioURL)
+        }
+
+        _ = try await engine.transcribe(
+            audioURL: audioURL,
+            channel: .system,
+            sessionID: UUID(),
+            configuration: ASREngineConfiguration(modelURL: modelDirectory)
+        )
+
+        XCTAssertEqual(transcriber.lastAudioURL, audioURL)
     }
 
     func testEngineThrowsWhenAudioFileMissing() async throws {
@@ -342,22 +398,65 @@ final class FluidAudioASREngineTests: XCTestCase {
         XCTAssertGreaterThan(prepared.durationMs, 0)
     }
 
-    func testEngineFallsBackToFullInputWhenVADReturnsNoUsableRegions() async throws {
-        let audioURL = try createAudioFile(named: "input.caf", sampleRate: 16_000, channels: 1, frameCount: 16_000)
-        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-vad-fallback")
-        let transcriber = RecordingFluidAudioTranscriber(
+    func testTranscriptionServiceMaterializesPreparedFullInputBeforeFileTranscription() async throws {
+        let originalURL = try createAudioFile(named: "original.caf", frameCount: 16_000)
+        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-prepared-input")
+        let transcriber = InspectingFluidAudioFileTranscriber(
             output: FluidAudioRunnerOutput(
                 language: "en",
                 segments: [
-                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1000, text: "fallback", confidence: 0.9, words: nil)
+                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 250, text: "chunk", confidence: nil, words: nil)
                 ]
             )
         )
-        let engine = FluidAudioASREngine(
+        let service = FluidAudioTranscriptionService(
             transcriber: transcriber,
-            sessionAudioLoader: FluidAudioSessionAudioLoader(),
-            vadService: StubFluidAudioVADService(result: [])
+            vadService: StubFluidAudioVADService(result: nil)
         )
+        let preparedAudio = PreparedSessionAudio(
+            samples: Array(repeating: 0.1, count: 4_000),
+            sampleRate: 16_000,
+            durationMs: 250,
+            sourceURL: originalURL
+        )
+
+        let output = try await service.transcribe(
+            preparedAudio: preparedAudio,
+            modelDirectoryURL: modelDirectory,
+            channel: .system
+        )
+
+        XCTAssertEqual(output.segments.first?.text, "chunk")
+        XCTAssertNotEqual(transcriber.lastAudioURL, originalURL)
+        XCTAssertEqual(transcriber.lastFrameLength, 4_000)
+        XCTAssertEqual(transcriber.lastSampleRate, 16_000)
+    }
+
+    func testEngineTranscribesInputThroughFileTranscriberOnce() async throws {
+        let audioURL = tempDirectory.appendingPathComponent("long-input.caf")
+        FileManager.default.createFile(atPath: audioURL.path, contents: Data("audio".utf8))
+        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-windowed-fallback")
+        let transcriber = SequencedFluidAudioTranscriber(outputs: [
+            FluidAudioRunnerOutput(
+                language: "ru",
+                segments: [
+                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_200, text: "chunk-1", confidence: 0.9, words: nil)
+                ]
+            ),
+            FluidAudioRunnerOutput(
+                language: "ru",
+                segments: [
+                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_400, text: "chunk-2", confidence: 0.9, words: nil)
+                ]
+            ),
+            FluidAudioRunnerOutput(
+                language: "ru",
+                segments: [
+                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_600, text: "chunk-3", confidence: 0.9, words: nil)
+                ]
+            )
+        ])
+        let engine = FluidAudioASREngine(transcriber: transcriber)
 
         let document = try await engine.transcribe(
             audioURL: audioURL,
@@ -366,9 +465,10 @@ final class FluidAudioASREngineTests: XCTestCase {
             configuration: ASREngineConfiguration(modelURL: modelDirectory)
         )
 
-        XCTAssertEqual(document.segments.map(\.text), ["fallback"])
+        XCTAssertEqual(document.segments.count, 1)
         XCTAssertEqual(transcriber.callCount, 1)
-        XCTAssertGreaterThan(transcriber.lastBufferFrameLength, 0)
+        XCTAssertEqual(document.segments.first?.text, "chunk-1")
+        XCTAssertEqual(transcriber.lastAudioURL, audioURL)
     }
 
     private func createFluidModelDirectory(named name: String) throws -> URL {
@@ -491,7 +591,7 @@ private struct StubFluidAudioTranscriber: FluidAudioTranscribing {
     let output: FluidAudioRunnerOutput
 
     func transcribe(
-        audioBuffer: AVAudioPCMBuffer,
+        audioURL: URL,
         modelDirectoryURL: URL,
         channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput {
@@ -499,41 +599,80 @@ private struct StubFluidAudioTranscriber: FluidAudioTranscribing {
     }
 }
 
+private struct ThrowingFluidAudioTranscriber: FluidAudioTranscribing {
+    let error: Error
+
+    func transcribe(
+        audioURL: URL,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput {
+        throw error
+    }
+}
+
 private final class RecordingFluidAudioTranscriber: FluidAudioTranscribing, @unchecked Sendable {
     let output: FluidAudioRunnerOutput
     private(set) var callCount: Int = 0
-    private(set) var lastBufferFrameLength: AVAudioFrameCount = 0
-    private(set) var lastBufferSampleRate: Double = 0
-    private(set) var lastBufferChannelCount: AVAudioChannelCount = 0
+    private(set) var lastAudioURL: URL?
+    private(set) var lastChannel: TranscriptChannel?
 
     init(output: FluidAudioRunnerOutput) {
         self.output = output
     }
 
     func transcribe(
-        audioBuffer: AVAudioPCMBuffer,
+        audioURL: URL,
         modelDirectoryURL: URL,
         channel: TranscriptChannel
     ) async throws -> FluidAudioRunnerOutput {
         callCount += 1
-        lastBufferFrameLength = audioBuffer.frameLength
-        lastBufferSampleRate = audioBuffer.format.sampleRate
-        lastBufferChannelCount = audioBuffer.format.channelCount
+        lastAudioURL = audioURL
+        lastChannel = channel
         return output
     }
 }
 
-private final class StubFluidAudioInputPreparer: FluidAudioInputPreparing {
-    let buffer: AVAudioPCMBuffer
-    private(set) var preparedURLs: [URL] = []
+private final class RecordingFluidAudioFileTranscriber: FluidAudioTranscribing {
+    var output: FluidAudioRunnerOutput
+    var lastAudioURL: URL?
+    var lastChannel: TranscriptChannel?
 
-    init(buffer: AVAudioPCMBuffer) {
-        self.buffer = buffer
+    init(output: FluidAudioRunnerOutput) {
+        self.output = output
     }
 
-    func prepareInput(from audioURL: URL) throws -> AVAudioPCMBuffer {
-        preparedURLs.append(audioURL)
-        return buffer
+    func transcribe(
+        audioURL: URL,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput {
+        lastAudioURL = audioURL
+        lastChannel = channel
+        return output
+    }
+}
+
+private final class InspectingFluidAudioFileTranscriber: FluidAudioTranscribing {
+    let output: FluidAudioRunnerOutput
+    private(set) var lastAudioURL: URL?
+    private(set) var lastFrameLength: AVAudioFramePosition?
+    private(set) var lastSampleRate: Double?
+
+    init(output: FluidAudioRunnerOutput) {
+        self.output = output
+    }
+
+    func transcribe(
+        audioURL: URL,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput {
+        lastAudioURL = audioURL
+        let audioFile = try AVAudioFile(forReading: audioURL)
+        lastFrameLength = audioFile.length
+        lastSampleRate = audioFile.processingFormat.sampleRate
+        return output
     }
 }
 
@@ -542,5 +681,28 @@ private struct StubFluidAudioVADService: FluidAudioVoiceActivityDetecting {
 
     func detectSpeechRegions(in audio: PreparedSessionAudio) async -> [FluidAudioSpeechRegion]? {
         result
+    }
+}
+
+private final class SequencedFluidAudioTranscriber: FluidAudioTranscribing, @unchecked Sendable {
+    private var outputs: [FluidAudioRunnerOutput]
+    private(set) var callCount: Int = 0
+    private(set) var lastAudioURL: URL?
+
+    init(outputs: [FluidAudioRunnerOutput]) {
+        self.outputs = outputs
+    }
+
+    func transcribe(
+        audioURL: URL,
+        modelDirectoryURL: URL,
+        channel: TranscriptChannel
+    ) async throws -> FluidAudioRunnerOutput {
+        callCount += 1
+        lastAudioURL = audioURL
+        guard !outputs.isEmpty else {
+            return FluidAudioRunnerOutput(language: nil, segments: [])
+        }
+        return outputs.removeFirst()
     }
 }

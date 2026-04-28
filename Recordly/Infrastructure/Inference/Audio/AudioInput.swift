@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 enum AudioInput: Equatable, Sendable {
@@ -13,6 +14,21 @@ struct PreparedAudioInput: Equatable, Sendable {
 
 protocol AudioInputAdapter {
     func prepare(_ input: AudioInput, in sessionDirectory: URL) throws -> PreparedAudioInput?
+}
+
+protocol AudioInputValidating {
+    func isUsable(_ preparedInput: PreparedAudioInput) -> Bool
+}
+
+struct AVFoundationAudioInputValidator: AudioInputValidating {
+    func isUsable(_ preparedInput: PreparedAudioInput) -> Bool {
+        do {
+            let audioFile = try AVAudioFile(forReading: preparedInput.url)
+            return audioFile.length > 0
+        } catch {
+            return false
+        }
+    }
 }
 
 struct PassthroughAudioInputAdapter: AudioInputAdapter {

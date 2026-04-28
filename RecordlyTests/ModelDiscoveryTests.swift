@@ -133,6 +133,27 @@ final class ModelDiscoveryTests: XCTestCase {
     }
 
     @MainActor
+    func testUserSummarizationDiscoveryFollowsSymlinkedModelFiles() throws {
+        let externalModelsDirectory = tempDirectory.appendingPathComponent("external-models", isDirectory: true)
+        let userSummarizationDirectory = tempDirectory.appendingPathComponent("models/summarization", isDirectory: true)
+        try FileManager.default.createDirectory(at: userSummarizationDirectory, withIntermediateDirectories: true)
+        let target = try createModel(named: "meeting-summary.gguf", in: externalModelsDirectory)
+        let link = userSummarizationDirectory.appendingPathComponent("meeting-summary.gguf")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let manager = makeManager(
+            appSupportRoot: nil,
+            sharedRoot: nil,
+            userRoot: tempDirectory.appendingPathComponent("models", isDirectory: true),
+            projectDirectories: []
+        )
+
+        let options = manager.listLocalOptions(kind: .summarization)
+
+        XCTAssertEqual(options.map(\.url), [link])
+    }
+
+    @MainActor
     func testASRDiscoveryIsProviderManagedAndSkipsLocalDirectories() throws {
         let repoRoot = tempDirectory.appendingPathComponent("repo", isDirectory: true)
         let modelsDirectory = repoRoot.appendingPathComponent("Models", isDirectory: true)
@@ -168,6 +189,7 @@ final class ModelDiscoveryTests: XCTestCase {
     private func makeManager(
         appSupportRoot: URL?,
         sharedRoot: URL?,
+        userRoot: URL? = nil,
         projectDirectories: [URL]
     ) -> ModelManager {
         let discoveryPaths = ModelDiscoveryPaths(
@@ -177,7 +199,9 @@ final class ModelDiscoveryTests: XCTestCase {
             sharedDirectory: { kind in
                 sharedRoot?.appendingPathComponent(kind.rawValue, isDirectory: true)
             },
-            userDirectory: { _ in nil },
+            userDirectory: { kind in
+                userRoot?.appendingPathComponent(kind.rawValue, isDirectory: true)
+            },
             projectDirectories: {
                 projectDirectories
             }
@@ -190,9 +214,12 @@ final class ModelDiscoveryTests: XCTestCase {
         )
     }
 
-    private func createModel(named name: String, in directory: URL) throws {
+    @discardableResult
+    private func createModel(named name: String, in directory: URL) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try Data("model".utf8).write(to: directory.appendingPathComponent(name, isDirectory: false))
+        let url = directory.appendingPathComponent(name, isDirectory: false)
+        try Data("model".utf8).write(to: url)
+        return url
     }
 
     private func createFluidModelDirectory(named name: String, in parentDirectory: URL) throws -> URL {

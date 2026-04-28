@@ -12,6 +12,7 @@
 		FA1000132F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1000142F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift */; };
 		FA4000012F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4000022F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift */; };
 		FA5000012F0E000000000001 /* ModelSettingsViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA5000022F0E000000000001 /* ModelSettingsViewModelTests.swift */; };
+		FA6000012F10000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FA6000022F10000000000001 /* Assets.xcassets */; };
 		F0DC2B834E4BE6EFD06B9228 /* SummaryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18F73A72E7F344B6A8F1F3DD /* SummaryEngine.swift */; };
 		15CD5138FCA0BCCED1F11FA5 /* SummaryPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395881AA0C8D023430EC50AE /* SummaryPromptBuilder.swift */; };
 		36C8D91020D0987C43326380 /* SummaryOutputParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD717C9D72DB2D702C5C541E /* SummaryOutputParser.swift */; };
@@ -141,6 +142,7 @@
 		FA1000142F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FluidAudioSystemChunkTranscriptionEngineTests.swift; sourceTree = "<group>"; };
 		FA4000022F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FluidAudioDiarizationModelProviderTests.swift; sourceTree = "<group>"; };
 		FA5000022F0E000000000001 /* ModelSettingsViewModelTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ModelSettingsViewModelTests.swift; sourceTree = "<group>"; };
+		FA6000022F10000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 		9C41A2112D82A10000A13B02 /* Recordly.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recordly.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9C41A2202D82A10000A13B02 /* RecordlyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordlyApp.swift; sourceTree = "<group>"; };
 		9C41A2212D82A10000A13B02 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -231,6 +233,7 @@
 				9C41A2132D82A10000A13B02 /* Domain */,
 				9C41A2142D82A10000A13B02 /* Infrastructure */,
 				9C41A22C2D82A10000A13B02 /* Info.plist */,
+				FA6000022F10000000000001 /* Assets.xcassets */,
 				9C41A23B2D82A10000A13B02 /* Resources */,
 			);
 			path = Recordly;
@@ -548,6 +551,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FA6000012F10000000000001 /* Assets.xcassets in Resources */,
 				9C41A24C2D82A10000A13B02 /* Resources in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -733,7 +737,7 @@
 		9C41A21C2D82A10000A13B02 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
@@ -762,7 +766,7 @@
 		9C41A21D2D82A10000A13B02 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
@@ -806,8 +810,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
 			requirement = {
-				branch = main;
-				kind = branch;
+				kind = exactVersion;
+				version = 0.14.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

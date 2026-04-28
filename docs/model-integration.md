@@ -51,7 +51,7 @@ ASR model management is SDK-managed, not local-file based:
 - ASR: resolved via `FluidAudioASRModelProvider.resolveForRuntime()`. No local file picking needed.
 - Summarization: selected model IDs are persisted by model kind. Runtime profile selector reads local selection via `ModelManager`.
 - Diarization: runtime profile selection only checks provider readiness; runtime engine creation is delegated to `DefaultInferenceEngineFactory` with `FluidAudioDiarizationModelProvider`.
-- Missing FluidAudio diarization package currently blocks the default system transcription path at workflow preflight. Degraded behavior remains legacy/debug-path behavior rather than the default live path.
+- Missing FluidAudio diarization package degrades speaker labeling rather than blocking transcription; runtime availability reports `.degradedNoDiarization` and workflow can continue.
 - Missing summarization model triggers fallback summary generation.
 
 Compatibility note:
@@ -82,4 +82,5 @@ Legacy diarization `.bin` selections are not auto-converted and degrade cleanly 
 
 - Internal capture/storage contract remains canonical PCM-in-CAF for immediate live processing, with durable per-source `m4a` persisted for recovery.
 - The active FluidAudio backend path loads persisted `CAF`, `FLAC`, or per-source `m4a` artifacts and prepares SDK-ready mono Float32 PCM inside backend-local adapters.
+- When VAD does not provide usable regions, long full-input FluidAudio transcription is windowed backend-locally rather than emitted as one full-span segment.
 - Do not change internal capture format to satisfy a single backend input requirement.

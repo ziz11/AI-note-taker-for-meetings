@@ -193,8 +193,10 @@ final class ModelManager: ObservableObject {
             return discoveryPaths.sharedDirectory(kind)
         case .appSupport:
             return discoveryPaths.appSupportDirectory(kind)
+        case .homeModels:
+            return try? AppPaths.createUserModelsDirectory(kind: kind)
         case .userLocal:
-            return discoveryPaths.userDirectory(kind)
+            return discoveryPaths.userDirectory(kind) ?? discoveryPaths.appSupportDirectory(kind)
         case .projectLocal:
             return discoveryPaths.projectDirectories().first
         }
@@ -360,7 +362,7 @@ final class ModelManager: ObservableObject {
         guard let directory = discoveryPaths.userDirectory(kind) else {
             return []
         }
-        return loadDirectoryOptions(kind: kind, directory: directory, source: .userLocal, recursive: false)
+        return loadDirectoryOptions(kind: kind, directory: directory, source: .homeModels, recursive: false)
     }
 
     private func loadSharedOptions(kind: ModelKind) -> [LocalModelOption] {
@@ -420,7 +422,8 @@ final class ModelManager: ObservableObject {
 
     private func isSupportedModelFile(_ url: URL, extensions: Set<String>? = nil) -> Bool {
         let allowedExtensions = extensions ?? supportedModelExtensions(for: .summarization)
-        let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+        let resolvedURL = url.resolvingSymlinksInPath()
+        let values = try? resolvedURL.resourceValues(forKeys: [.isRegularFileKey])
         return values?.isRegularFile == true && allowedExtensions.contains(url.pathExtension.lowercased())
     }
 

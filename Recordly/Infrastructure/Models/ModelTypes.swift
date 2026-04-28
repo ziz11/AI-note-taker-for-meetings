@@ -44,6 +44,7 @@ struct LocalModelOption: Identifiable, Equatable {
     enum Source: String, Codable, Equatable {
         case shared
         case appSupport
+        case homeModels
         case projectLocal
         case userLocal
     }

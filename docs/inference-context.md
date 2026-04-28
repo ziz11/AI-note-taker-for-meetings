@@ -133,6 +133,7 @@ Backend rule:
 - live capture may persist durable per-source `m4a` alongside temporary `CAF`
 - immediate live processing prefers source-track `CAF`; recovery and later reprocessing may use per-source `m4a`
 - backend-local FluidAudio adapters may load persisted `CAF`, `FLAC`, or per-source `m4a` session artifacts and prepare SDK-ready PCM
+- backend-local FluidAudio transcription may use VAD regions first and fixed full-input windows second for long recordings
 - if a future backend needs WAV, FLAC, buffers, or another representation, adapt at the consumer boundary
 - do not rewrite the capture pipeline for one backend format preference
 
@@ -167,6 +168,11 @@ Summarization workflow:
 Hard failure rule:
 
 - ASR failure is generally a hard failure for transcript generation
+
+Transcript rendering behavior:
+
+- `TranscriptRenderService` only trusts `segment.words` when timings look lexical enough for display reflow
+- if backend token timings look syllabified or subword-like, render/export falls back to `segment.text` plus segment timing
 
 ## Change routing
 

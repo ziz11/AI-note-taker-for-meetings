@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import Recordly
 
@@ -214,6 +215,10 @@ struct NoopDiarizationEngine: DiarizationEngine {
     }
 }
 
+private struct AcceptingAudioInputValidator: AudioInputValidating {
+    func isUsable(_ preparedInput: PreparedAudioInput) -> Bool { true }
+}
+
 @MainActor
 private struct StaticRuntimeProfileSelector: InferenceRuntimeProfileSelecting {
     let availability: TranscriptionAvailability
@@ -378,7 +383,11 @@ final class SummaryPromptBuilderTests: XCTestCase {
         XCTAssertTrue(result.contains("Return structured markdown using the exact sections below."))
         XCTAssertTrue(result.contains("Answer in Russian by default."))
         XCTAssertTrue(result.contains("Rules:"))
-        XCTAssertTrue(result.contains("If a section has no items write: None"))
+        XCTAssertTrue(result.contains("Do not output any text before `## Call Summary` or after the `## Risks` section."))
+        XCTAssertTrue(result.contains("Output exactly these 5 sections in this exact order:"))
+        XCTAssertTrue(result.contains("Every section must be present even if there is no information."))
+        XCTAssertTrue(result.contains("Every bullet item must start with `- `"))
+        XCTAssertTrue(result.contains("If a section has no items, write exactly `- None` under that section."))
         XCTAssertTrue(result.contains("Return ONLY markdown."))
         XCTAssertTrue(result.contains("## Call Summary"))
         XCTAssertTrue(result.contains("## Topics"))
@@ -390,6 +399,33 @@ final class SummaryPromptBuilderTests: XCTestCase {
         XCTAssertTrue(result.contains("If the transcript is incomplete, summarize the available information."))
         XCTAssertTrue(result.contains("Transcript:"))
         XCTAssertTrue(result.contains("Write the summary now."))
+    }
+
+    func testPromptRequiresExactSectionOrderAndNoExtraText() {
+        let result = SummaryPromptBuilder.build(
+            transcript: "Sample transcript",
+            srtText: nil,
+            recordingTitle: "Meeting"
+        )
+
+        XCTAssertTrue(result.contains("Output exactly these 5 sections in this exact order:"))
+        XCTAssertTrue(result.contains("1. ## Call Summary"))
+        XCTAssertTrue(result.contains("2. ## Topics"))
+        XCTAssertTrue(result.contains("3. ## Decisions"))
+        XCTAssertTrue(result.contains("4. ## Action Items"))
+        XCTAssertTrue(result.contains("5. ## Risks"))
+        XCTAssertTrue(result.contains("Do not output any text before `## Call Summary` or after the `## Risks` section."))
+    }
+
+    func testPromptRequiresDashNoneFallbackForEmptySections() {
+        let result = SummaryPromptBuilder.build(
+            transcript: "Sample transcript",
+            srtText: nil,
+            recordingTitle: "Meeting"
+        )
+
+        XCTAssertTrue(result.contains("If a section has no items, write exactly `- None` under that section."))
+        XCTAssertFalse(result.contains("If a section has no items write: None"))
     }
 
     func testBuildWithSRT() {
@@ -1082,10 +1118,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
 
-        FileManager.default.createFile(
-            atPath: sessionDirectory.appendingPathComponent("mic.raw.caf").path,
-            contents: Data("mic".utf8)
-        )
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
 
         let asrModelURL = sessionDirectory.appendingPathComponent("asr.bin")
         let summarizationModelURL = try makeSummarizationModel(named: "workflow-chain.gguf")
@@ -1100,7 +1133,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             transcriptState: .queued,
             source: .liveCapture,
             notes: "Queued",
-            assets: RecordingAssets(microphoneFile: "mic.raw.caf")
+            assets: RecordingAssets(microphoneFile: "mic.m4a")
         )
         let repository = InMemoryRecordingsRepository(
             recordings: [recording],
@@ -1162,12 +1195,13 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         XCTAssertNil(summaryEngine.capturedSRTText)
     }
 
-    func testCompleteCaptureWithTranscriptionUnavailablePrecheckKeepsSessionFailed() async throws {
+    func testCompleteCaptureWithDiarizationUnavailablePrecheckKeepsSessionReady() async throws {
         let recordingID = UUID()
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
-        try Data("audio".utf8).write(to: sessionDirectory.appendingPathComponent("mic.raw.flac"))
-        try Data("audio".utf8).write(to: sessionDirectory.appendingPathComponent("system.raw.flac"))
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
+        try writeTestM4A(named: "system.m4a", in: sessionDirectory)
+        try writeTestM4A(named: "merged-call.m4a", in: sessionDirectory)
 
         let recording = RecordingSession(
             id: recordingID,
@@ -1179,8 +1213,9 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             source: .liveCapture,
             notes: "",
             assets: RecordingAssets(
-                microphoneFile: "mic.raw.flac",
-                systemAudioFile: "system.raw.flac"
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a",
+                mergedCallFile: "merged-call.m4a"
             )
         )
 
@@ -1213,8 +1248,9 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let workflow = RecordingWorkflowController(
             audioCaptureEngine: StubAudioCaptureEngine(
                 artifacts: CaptureArtifacts(
-                    microphoneFile: "mic.raw.flac",
-                    systemAudioFile: "system.raw.flac"
+                    microphoneFile: "mic.m4a",
+                    systemAudioFile: "system.m4a",
+                    mergedCallFile: "merged-call.m4a"
                 )
             ),
             transcriptionPipeline: TranscriptionPipeline(),
@@ -1229,26 +1265,23 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             runTranscription: true
         )
 
-        XCTAssertNil(result.transcriptionResult)
-        XCTAssertEqual(result.recording.transcriptState, .failed)
-        XCTAssertEqual(result.recording.lifecycleState, .failed)
-        XCTAssertTrue(result.recording.notes.hasPrefix("Transcript failed:"))
-
-        guard let workflowError = result.processingError as? RecordingWorkflowError else {
-            return XCTFail("Expected recording workflow error.")
-        }
-        guard case let .transcriptionUnavailable(.unavailable(reason)) = workflowError else {
-            return XCTFail("Expected transcriptionUnavailable reason.")
-        }
+        let transcriptionResult = try XCTUnwrap(result.transcriptionResult)
+        XCTAssertEqual(result.recording.transcriptState, .ready)
+        XCTAssertEqual(result.recording.lifecycleState, .ready)
+        XCTAssertNil(result.processingError)
+        XCTAssertEqual(transcriptionResult.state, .ready)
         XCTAssertEqual(
-            reason,
-            "System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
+            result.recording.notes,
+            "Transcript ready (degraded: emptyMicASR, emptySystemASR)."
         )
 
         let persisted = try XCTUnwrap(repository.recordings.first(where: { $0.id == recordingID }))
-        XCTAssertEqual(persisted.transcriptState, .failed)
-        XCTAssertEqual(persisted.lifecycleState, .failed)
-        XCTAssertTrue(persisted.notes.hasPrefix("Transcript failed:"))
+        XCTAssertEqual(persisted.transcriptState, .ready)
+        XCTAssertEqual(persisted.lifecycleState, .ready)
+        XCTAssertEqual(
+            persisted.notes,
+            "Transcript ready (degraded: emptyMicASR, emptySystemASR)."
+        )
     }
 
     func testRecoverPendingMergesPreservesTranscriptionFailureNote() async throws {
@@ -1312,13 +1345,146 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         XCTAssertEqual(restored.notes, failureReason)
     }
 
-    func testWorkflowDefaultChunkedTranscriptionFailsFastWhenDiarizationPackageMissing() async throws {
+    func testTranscribeDoesNotUseCAFArtifactsWhenM4AIsMissing() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let asrModelURL = try createFluidModelDirectory(named: "workflow-asr-keep-caf")
+        try Data("mic".utf8).write(to: sessionDirectory.appendingPathComponent("mic.raw.caf"))
+        try Data("system".utf8).write(to: sessionDirectory.appendingPathComponent("system.raw.caf"))
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Keep CAF",
+            createdAt: Date(),
+            duration: 4,
+            lifecycleState: .ready,
+            transcriptState: .idle,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.raw.caf",
+                systemAudioFile: "system.raw.caf"
+            )
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory]
+        )
+        let runtimeSelector = StaticRuntimeProfileSelector(
+            availability: .ready,
+            transcriptionProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: InferenceModelArtifacts(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: nil,
+                    summarizationModelURL: nil
+                ),
+                summarizationRuntimeSettings: .default
+            ),
+            summarizationProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: .empty,
+                summarizationRuntimeSettings: .default
+            )
+        )
+        let workflow = RecordingWorkflowController(
+            audioCaptureEngine: AudioCaptureService(),
+            transcriptionPipeline: TranscriptionPipeline(
+                audioInputValidator: AcceptingAudioInputValidator()
+            ),
+            runtimeProfileSelector: runtimeSelector,
+            inferenceEngineFactory: TestInferenceEngineFactory(
+                asrEngine: WorkflowASREngine(),
+                summarizationEngine: MockSummaryEngine()
+            ),
+            repository: repository
+        )
+
+        await XCTAssertThrowsErrorAsync(try await workflow.transcribe(recording: recording)) { error in
+            guard case TranscriptionPipelineError.missingInputAudio = error else {
+                XCTFail("Unexpected error: \(error)")
+                return
+            }
+        }
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("mic.raw.caf").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("system.raw.caf").path))
+    }
+
+    func testTranscribeRemovesCAFArtifactsAfterMergedM4AExists() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let asrModelURL = try createFluidModelDirectory(named: "workflow-asr-remove-caf")
+        try Data("mic".utf8).write(to: sessionDirectory.appendingPathComponent("mic.raw.caf"))
+        try Data("system".utf8).write(to: sessionDirectory.appendingPathComponent("system.raw.caf"))
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
+        try writeTestM4A(named: "system.m4a", in: sessionDirectory)
+        try Data("merged".utf8).write(to: sessionDirectory.appendingPathComponent("merged-call.m4a"))
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Remove CAF",
+            createdAt: Date(),
+            duration: 4,
+            lifecycleState: .ready,
+            transcriptState: .idle,
+            source: .liveCapture,
+            notes: "",
+            assets: RecordingAssets(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a",
+                mergedCallFile: "merged-call.m4a"
+            )
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory]
+        )
+        let runtimeSelector = StaticRuntimeProfileSelector(
+            availability: .ready,
+            transcriptionProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: InferenceModelArtifacts(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: nil,
+                    summarizationModelURL: nil
+                ),
+                summarizationRuntimeSettings: .default
+            ),
+            summarizationProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: .empty,
+                summarizationRuntimeSettings: .default
+            )
+        )
+        let workflow = RecordingWorkflowController(
+            audioCaptureEngine: AudioCaptureService(),
+            transcriptionPipeline: TranscriptionPipeline(
+                audioInputValidator: AcceptingAudioInputValidator()
+            ),
+            runtimeProfileSelector: runtimeSelector,
+            inferenceEngineFactory: TestInferenceEngineFactory(
+                asrEngine: WorkflowASREngine(),
+                summarizationEngine: MockSummaryEngine()
+            ),
+            repository: repository
+        )
+
+        _ = try await workflow.transcribe(recording: recording)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("mic.raw.caf").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("system.raw.caf").path))
+    }
+
+    func testWorkflowDefaultChunkedTranscriptionDegradesWhenDiarizationPackageMissing() async throws {
         let recordingID = UUID()
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         let asrModelURL = try createFluidModelDirectory(named: "workflow-asr-default-chunked")
-        try Data().write(to: sessionDirectory.appendingPathComponent("mic.raw.flac"))
-        try Data().write(to: sessionDirectory.appendingPathComponent("system.raw.flac"))
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
+        try writeTestM4A(named: "system.m4a", in: sessionDirectory)
 
         let recording = RecordingSession(
             id: recordingID,
@@ -1330,8 +1496,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             source: .liveCapture,
             notes: "",
             assets: RecordingAssets(
-                microphoneFile: "mic.raw.flac",
-                systemAudioFile: "system.raw.flac"
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a"
             )
         )
         let repository = InMemoryRecordingsRepository(
@@ -1363,22 +1529,16 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             repository: repository
         )
 
-        await XCTAssertThrowsErrorAsync(try await workflow.transcribe(recording: recording)) { error in
-            guard case let RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason)) = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertEqual(
-                reason,
-                "System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
-            )
-        }
+        let updated = try await workflow.transcribe(recording: recording)
 
         let savedRecording = try XCTUnwrap(repository.recordings.first(where: { $0.id == recordingID }))
-        XCTAssertEqual(savedRecording.transcriptState, .failed)
-        XCTAssertEqual(savedRecording.lifecycleState, .failed)
+        XCTAssertEqual(updated.transcriptState, .ready)
+        XCTAssertEqual(updated.lifecycleState, .ready)
+        XCTAssertEqual(savedRecording.transcriptState, .ready)
+        XCTAssertEqual(savedRecording.lifecycleState, .ready)
         XCTAssertEqual(
             savedRecording.notes,
-            "Transcript failed: System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
+            "Transcript ready (degraded: emptyMicASR, emptySystemASR)."
         )
     }
 
@@ -1387,8 +1547,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         let asrModelURL = try createFluidModelDirectory(named: "workflow-asr-legacy")
-        try Data().write(to: sessionDirectory.appendingPathComponent("mic.raw.flac"))
-        try Data().write(to: sessionDirectory.appendingPathComponent("system.raw.flac"))
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
+        try writeTestM4A(named: "system.m4a", in: sessionDirectory)
 
         let recording = RecordingSession(
             id: recordingID,
@@ -1400,8 +1560,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             source: .liveCapture,
             notes: "",
             assets: RecordingAssets(
-                microphoneFile: "mic.raw.flac",
-                systemAudioFile: "system.raw.flac"
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a"
             )
         )
         let repository = InMemoryRecordingsRepository(
@@ -1450,6 +1610,31 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let modelURL = modelsDirectory.appendingPathComponent(name, isDirectory: false)
         try Data("model".utf8).write(to: modelURL)
         return modelURL
+    }
+
+    private func writeTestM4A(named fileName: String, in directory: URL) throws {
+        let url = directory.appendingPathComponent(fileName)
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels,
+            interleaved: false
+        ))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800))
+        buffer.frameLength = 4_800
+        if let channel = buffer.floatChannelData?[0] {
+            for index in 0 ..< Int(buffer.frameLength) {
+                channel[index] = sin(Float(index) * 0.01)
+            }
+        }
+
+        let audioFile = try AVAudioFile(
+            forWriting: url,
+            settings: PCMTrackWriter.fileSettings(for: url),
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        try audioFile.write(from: buffer)
     }
 
     private func createFluidModelDirectory(named name: String) throws -> URL {

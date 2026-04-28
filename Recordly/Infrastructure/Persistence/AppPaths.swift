@@ -67,6 +67,15 @@ enum AppPaths {
         return directory
     }
 
+    static func createUserModelsDirectory(kind: ModelKind) throws -> URL {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let directory = home
+            .appendingPathComponent(userModelsFolder, isDirectory: true)
+            .appendingPathComponent(kind.rawValue, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
     static func repositoryRootDirectory(
         startingAt: URL = URL(fileURLWithPath: #filePath),
         fileManager: FileManager = .default

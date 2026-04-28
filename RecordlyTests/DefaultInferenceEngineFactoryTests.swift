@@ -90,7 +90,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
             throw XCTSkip("FluidAudio diarization model is not ready: \(provider.state)")
         }
 
-        let systemAudioURL = try makeSynthesizedSpeechCAF()
+        let systemAudioURL = try makeSynthesizedSpeechM4A()
         let factory = DefaultInferenceEngineFactory(diarizationModelProvider: provider)
         let profile = InferenceRuntimeProfile(
             stageSelection: .defaultLocal,
@@ -116,7 +116,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         throw XCTSkip("This regression only covers the non-FluidAudio runtime path.")
 #else
         let systemAudioURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "system.raw.caf"
+            "system.m4a"
         )
         let engine = FluidAudioDiarizationEngine(
             manager: StubOfflineDiarizationManager(),
@@ -139,7 +139,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
     func testFluidAudioDiarizationEngineMapsSDKOutputToDocument() async throws {
 #if arch(arm64) && canImport(FluidAudio)
         let systemAudioURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "system.raw.caf"
+            "system.m4a"
         )
         FileManager.default.createFile(atPath: systemAudioURL.path, contents: Data("caf".utf8))
         defer { try? FileManager.default.removeItem(at: systemAudioURL) }
@@ -188,6 +188,35 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
 #endif
     }
 
+    func testFluidAudioDiarizationEngineTimesOutHungSDKCall() async throws {
+#if arch(arm64) && canImport(FluidAudio)
+        let systemAudioURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "system.m4a"
+        )
+        FileManager.default.createFile(atPath: systemAudioURL.path, contents: Data("caf".utf8))
+        defer { try? FileManager.default.removeItem(at: systemAudioURL) }
+
+        let engine = FluidAudioDiarizationEngine(
+            manager: HangingOfflineDiarizationManager(),
+            sessionAudioLoader: StubFluidAudioSessionAudioLoader(),
+            timeoutSeconds: 1
+        )
+
+        do {
+            _ = try await engine.diarize(
+                systemAudioURL: systemAudioURL,
+                sessionID: UUID(),
+                configuration: DiarizationEngineConfiguration(modelURL: nil)
+            )
+            XCTFail("Expected diarization timeout")
+        } catch {
+            XCTAssertEqual(error as? DiarizationRuntimeError, .timedOut)
+        }
+#else
+        throw XCTSkip("FluidAudio SDK diarization timeout coverage requires arm64 macOS.")
+#endif
+    }
+
     private final class StubFluidAudioDiarizationModelProvider: FluidAudioDiarizationModelProviding {
         let state: FluidAudioModelProvisioningState = .ready
 
@@ -222,6 +251,15 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
             return result
         }
     }
+
+    private final class HangingOfflineDiarizationManager: OfflineDiarizationManaging, @unchecked Sendable {
+        func prepareModels() async throws {}
+
+        func process(audio: [Float]) async throws -> OfflineDiarizationResult {
+            try await Task.sleep(nanoseconds: 10_000_000_000)
+            return OfflineDiarizationResult(segments: [])
+        }
+    }
     #endif
 
     private final class StubFluidAudioSessionAudioLoader: FluidAudioSessionAudioLoading {
@@ -232,7 +270,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
             samples: [0, 0, 0, 0],
             sampleRate: 16_000,
             durationMs: 1,
-            sourceURL: URL(fileURLWithPath: "/tmp/system.raw.caf")
+            sourceURL: URL(fileURLWithPath: "/tmp/system.m4a")
         )) {
             self.preparedAudio = preparedAudio
         }
@@ -248,7 +286,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         }
     }
 
-    private func makeSynthesizedSpeechCAF() throws -> URL {
+    private func makeSynthesizedSpeechM4A() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "Recordly-Diarization-E2E-\(UUID().uuidString)",
             isDirectory: true
@@ -256,7 +294,7 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let aiffURL = directory.appendingPathComponent("speech.aiff")
-        let cafURL = directory.appendingPathComponent("system.raw.caf")
+        let m4aURL = directory.appendingPathComponent("system.m4a")
         try runProcess(
             executable: "/usr/bin/say",
             arguments: [
@@ -268,14 +306,14 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         try runProcess(
             executable: "/usr/bin/afconvert",
             arguments: [
-                "-f", "caff",
-                "-d", "LEI16@16000",
+                "-f", "m4af",
+                "-d", "aac",
                 "-c", "1",
                 aiffURL.path,
-                cafURL.path
+                m4aURL.path
             ]
         )
-        return cafURL
+        return m4aURL
     }
 
     private func runProcess(executable: String, arguments: [String]) throws {

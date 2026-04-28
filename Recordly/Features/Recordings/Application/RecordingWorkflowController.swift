@@ -3,12 +3,15 @@ import Foundation
 
 enum RecordingWorkflowError: LocalizedError {
     case missingTranscript
+    case missingMergedPlaybackAudio
     case transcriptionUnavailable(TranscriptionAvailability)
 
     var errorDescription: String? {
         switch self {
         case .missingTranscript:
             return "No transcript is available for this recording yet."
+        case .missingMergedPlaybackAudio:
+            return "Mixed playback audio is not ready yet."
         case let .transcriptionUnavailable(availability):
             switch availability {
             case .degradedNoDiarization:
@@ -175,6 +178,8 @@ final class RecordingWorkflowController {
         let processingError: Error?
         if runTranscription {
             do {
+                try ensureMergedPlaybackAudioReady(for: &updatedRecording)
+                cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
                 transcriptionResult = try await performTranscription(
                     for: updatedRecording,
                     onStateChange: onTranscriptionStateChange
@@ -195,6 +200,7 @@ final class RecordingWorkflowController {
                 processingError = error
             }
         } else {
+            cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
             transcriptionResult = nil
             processingError = nil
         }
@@ -268,6 +274,7 @@ final class RecordingWorkflowController {
         updatedRecording.transcriptState = .queued
         updatedRecording.notes = "Preparing transcript."
         try repository.save(updatedRecording)
+        cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
 
         do {
             let transcriptionResult = try await performTranscription(
@@ -555,6 +562,9 @@ final class RecordingWorkflowController {
 
         do {
             let sessionDirectory = try repository.sessionDirectory(for: recording.id)
+            guard shouldCleanupTemporaryCaptureArtifacts(in: sessionDirectory) else {
+                return
+            }
             try cleanupTemporaryCaptureArtifacts(in: sessionDirectory)
         } catch {
             let warning = "Temporary audio cleanup failed: \(error.localizedDescription)"
@@ -565,11 +575,32 @@ final class RecordingWorkflowController {
         }
     }
 
+    private func ensureMergedPlaybackAudioReady(for recording: inout RecordingSession) throws {
+        guard recording.source == .liveCapture else {
+            return
+        }
+
+        let sessionDirectory = try repository.sessionDirectory(for: recording.id)
+        let mergedFileName = recording.assets.mergedCallFile ?? "merged-call.m4a"
+        let mergedURL = sessionDirectory.appendingPathComponent(mergedFileName)
+        guard FileManager.default.fileExists(atPath: mergedURL.path) else {
+            throw RecordingWorkflowError.missingMergedPlaybackAudio
+        }
+        recording.assets.mergedCallFile = mergedFileName
+    }
+
+    private func shouldCleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) -> Bool {
+        let mergedM4AURL = sessionDirectory.appendingPathComponent("merged-call.m4a")
+        return FileManager.default.fileExists(atPath: mergedM4AURL.path)
+    }
+
     private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) throws {
         let fileManager = FileManager.default
         for fileName in [
             "mic.raw.caf",
-            "system.raw.caf"
+            "system.raw.caf",
+            "mic.raw.flac",
+            "system.raw.flac"
         ] {
             let url = sessionDirectory.appendingPathComponent(fileName)
             guard fileManager.fileExists(atPath: url.path) else {

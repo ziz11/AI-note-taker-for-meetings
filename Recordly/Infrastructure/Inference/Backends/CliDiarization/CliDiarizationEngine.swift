@@ -7,6 +7,7 @@ enum DiarizationRuntimeError: LocalizedError, Equatable {
     case nonZeroExit(code: Int32, stderr: String?)
     case malformedOutput
     case emptySegments
+    case timedOut
     case cancelled
 
     var errorDescription: String? {
@@ -26,6 +27,8 @@ enum DiarizationRuntimeError: LocalizedError, Equatable {
             return "Diarization runner produced malformed output."
         case .emptySegments:
             return "Diarization runner returned empty segments."
+        case .timedOut:
+            return "Diarization timed out."
         case .cancelled:
             return "Diarization was cancelled."
         }
@@ -221,7 +224,7 @@ struct CliDiarizationEngine: DiarizationEngine {
             throw DiarizationRuntimeError.cancelled
         }
 
-        guard let modelURL = configuration.modelURL else {
+        guard configuration.modelURL != nil else {
             throw DiarizationRuntimeError.modelMissing(URL(fileURLWithPath: "<no model URL>"))
         }
 
@@ -229,7 +232,7 @@ struct CliDiarizationEngine: DiarizationEngine {
             throw DiarizationRuntimeError.invalidInput
         }
 
-        guard ["system.raw.caf", "system.raw.flac", "system.m4a"].contains(systemAudioURL.lastPathComponent) else {
+        guard systemAudioURL.lastPathComponent == "system.m4a" else {
             throw DiarizationRuntimeError.invalidInput
         }
 

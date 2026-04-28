@@ -1,10 +1,9 @@
-import AppKit
-import ApplicationServices
 import SwiftUI
 
 struct RecordingSidebarView: View {
     @EnvironmentObject private var store: RecordingsStore
     @State private var isQueuePanelExpanded = true
+    private let screenCapturePermissionCoordinator = ScreenCapturePermissionCoordinator()
 
     var body: some View {
         VStack(spacing: 14) {
@@ -242,19 +241,17 @@ struct RecordingSidebarView: View {
                     Text("System audio permission needed")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
-                    Text("Enable Screen Recording access in System Settings.")
+                    Text("Grant Screen Recording access in System Settings, then return to Recordly.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(AppTheme.secondaryText)
                 }
 
                 Spacer(minLength: 8)
 
-                Button("Open") {
-                    Task {
-                        await requestSystemRecordingPermission()
-                    }
+                Button("Grant Access") {
+                    screenCapturePermissionCoordinator.requestSystemRecordingPermission()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .tint(AppTheme.accent)
             }
             .padding(14)
@@ -380,27 +377,6 @@ struct RecordingSidebarView: View {
         }
         .toggleStyle(.switch)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func openScreenRecordingSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else {
-            return
-        }
-        NSWorkspace.shared.open(url)
-    }
-
-    private func requestSystemRecordingPermission() async {
-        if CGPreflightScreenCaptureAccess() {
-            return
-        }
-
-        let granted = await Task.detached(priority: .userInitiated) {
-            CGRequestScreenCaptureAccess()
-        }.value
-
-        if !granted {
-            openScreenRecordingSettings()
-        }
     }
 }
 
