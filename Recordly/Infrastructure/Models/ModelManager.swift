@@ -422,7 +422,8 @@ final class ModelManager: ObservableObject {
 
     private func isSupportedModelFile(_ url: URL, extensions: Set<String>? = nil) -> Bool {
         let allowedExtensions = extensions ?? supportedModelExtensions(for: .summarization)
-        let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+        let resolvedURL = url.resolvingSymlinksInPath()
+        let values = try? resolvedURL.resourceValues(forKeys: [.isRegularFileKey])
         return values?.isRegularFile == true && allowedExtensions.contains(url.pathExtension.lowercased())
     }
 

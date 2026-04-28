@@ -116,9 +116,12 @@ struct StructuredTranscriptExportService {
         diarization: DiarizationDocument?
     ) -> [StructuredTranscriptSegment] {
         guard let words = segment.words,
-              !words.isEmpty,
-              shouldUseWordTimings(for: segment, words: words) else {
+              !words.isEmpty else {
             return [makeStructuredSegment(from: segment, diarization: diarization, idSuffix: nil, startMs: segment.startMs, endMs: segment.endMs, text: segment.text)]
+        }
+
+        guard shouldUseWordTimings(for: segment, words: words) else {
+            return reflowTextOnly(segment: segment, diarization: diarization)
         }
 
         var result: [StructuredTranscriptSegment] = []
@@ -163,6 +166,33 @@ struct StructuredTranscriptExportService {
         }
 
         return result
+    }
+
+    private func reflowTextOnly(
+        segment: TranscriptSegment,
+        diarization: DiarizationDocument?
+    ) -> [StructuredTranscriptSegment] {
+        let chunks = splitTextIntoDisplayChunks(segment.text)
+        guard chunks.count > 1 else {
+            return [makeStructuredSegment(from: segment, diarization: diarization, idSuffix: nil, startMs: segment.startMs, endMs: segment.endMs, text: segment.text)]
+        }
+
+        let durationMs = max(segment.endMs - segment.startMs, chunks.count)
+        return chunks.enumerated().map { index, chunk in
+            let startMs = segment.startMs + (durationMs * index / chunks.count)
+            let endMs = index == chunks.count - 1
+                ? segment.endMs
+                : segment.startMs + (durationMs * (index + 1) / chunks.count)
+
+            return makeStructuredSegment(
+                from: segment,
+                diarization: diarization,
+                idSuffix: index + 1,
+                startMs: startMs,
+                endMs: endMs,
+                text: chunk
+            )
+        }
     }
 
     private func shouldUseWordTimings(for segment: TranscriptSegment, words: [ASRWord]) -> Bool {
@@ -294,6 +324,32 @@ struct StructuredTranscriptExportService {
     private func endsSentence(_ token: String) -> Bool {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.hasSuffix(".") || trimmed.hasSuffix("!") || trimmed.hasSuffix("?") || trimmed.hasSuffix("…")
+    }
+
+    private func splitTextIntoDisplayChunks(_ text: String) -> [String] {
+        var chunks: [String] = []
+        var current = ""
+
+        for token in text.split(whereSeparator: \.isWhitespace).map(String.init) {
+            let candidate = current.isEmpty ? token : "\(current) \(token)"
+            if !current.isEmpty, candidate.count > maxCharactersPerSegment {
+                chunks.append(current)
+                current = token
+            } else {
+                current = candidate
+            }
+
+            if endsSentence(token), !current.isEmpty {
+                chunks.append(current)
+                current = ""
+            }
+        }
+
+        if !current.isEmpty {
+            chunks.append(current)
+        }
+
+        return chunks.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     private func join(words: [ASRWord]) -> String {
