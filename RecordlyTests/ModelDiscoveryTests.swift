@@ -150,7 +150,7 @@ final class ModelDiscoveryTests: XCTestCase {
 
         let options = manager.listLocalOptions(kind: .summarization)
 
-        XCTAssertEqual(options.map(\.url), [link])
+        XCTAssertEqual(options.map { $0.url.standardizedFileURL }, [link.standardizedFileURL])
     }
 
     @MainActor
