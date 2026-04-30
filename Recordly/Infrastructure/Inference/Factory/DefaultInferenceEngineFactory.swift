@@ -58,6 +58,8 @@ struct DefaultInferenceEngineFactory: InferenceEngineFactory {
         switch profile.stageSelection.backend(for: .summarization) {
         case .llamaCpp:
             return LlamaCppSummarizationEngine()
+        case .mlxLm:
+            return MlxSummarizationEngine()
         case let backend:
             throw InferenceEngineFactoryError.unsupportedBackend(stage: .summarization, backend: backend)
         }

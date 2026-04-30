@@ -154,6 +154,54 @@ final class ModelDiscoveryTests: XCTestCase {
     }
 
     @MainActor
+    func testUserSummarizationDiscoveryIncludesMLXModelDirectories() throws {
+        let userRoot = tempDirectory.appendingPathComponent("models", isDirectory: true)
+        let mlxDirectory = userRoot
+            .appendingPathComponent("summarization", isDirectory: true)
+            .appendingPathComponent("MLX-Qwen-0.8B", isDirectory: true)
+        try createMLXModelDirectory(at: mlxDirectory)
+
+        let manager = makeManager(
+            appSupportRoot: nil,
+            sharedRoot: nil,
+            userRoot: userRoot,
+            projectDirectories: []
+        )
+
+        let options = manager.listLocalOptions(kind: .summarization)
+
+        XCTAssertEqual(
+            options.map { $0.url.standardizedFileURL },
+            [mlxDirectory.standardizedFileURL]
+        )
+        XCTAssertEqual(options.first?.displayName, "Mlx Qwen 0.8B")
+    }
+
+    @MainActor
+    func testUserSummarizationDiscoveryFindsNestedMLXModelDirectoriesUnderModelsRoot() throws {
+        let userRoot = tempDirectory.appendingPathComponent("models", isDirectory: true)
+        let mlxDirectory = userRoot
+            .appendingPathComponent("Jackrong", isDirectory: true)
+            .appendingPathComponent("MLX-Qwen3.5-0.8B", isDirectory: true)
+        try createMLXModelDirectory(at: mlxDirectory)
+
+        let manager = makeManager(
+            appSupportRoot: nil,
+            sharedRoot: nil,
+            userRoot: userRoot,
+            projectDirectories: []
+        )
+
+        let options = manager.listLocalOptions(kind: .summarization)
+
+        XCTAssertEqual(
+            options.map { $0.url.standardizedFileURL },
+            [mlxDirectory.standardizedFileURL]
+        )
+        XCTAssertEqual(options.first?.source, .homeModels)
+    }
+
+    @MainActor
     func testASRDiscoveryIsProviderManagedAndSkipsLocalDirectories() throws {
         let repoRoot = tempDirectory.appendingPathComponent("repo", isDirectory: true)
         let modelsDirectory = repoRoot.appendingPathComponent("Models", isDirectory: true)
@@ -204,6 +252,9 @@ final class ModelDiscoveryTests: XCTestCase {
             },
             projectDirectories: {
                 projectDirectories
+            },
+            userRootDirectory: {
+                userRoot
             }
         )
 
@@ -220,6 +271,13 @@ final class ModelDiscoveryTests: XCTestCase {
         let url = directory.appendingPathComponent(name, isDirectory: false)
         try Data("model".utf8).write(to: url)
         return url
+    }
+
+    private func createMLXModelDirectory(at directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("config.json"))
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("tokenizer.json"))
+        try Data("weights".utf8).write(to: directory.appendingPathComponent("model.safetensors"))
     }
 
     private func createFluidModelDirectory(named name: String, in parentDirectory: URL) throws -> URL {

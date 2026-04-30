@@ -120,9 +120,13 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
         guard let summarizationOption = modelManager.selectedLocalOption(kind: .summarization) else {
             throw InferenceRuntimeProfileError.missingSummarizationModel
         }
+        var resolvedStageSelection = stageSelection
+        if MLXModelValidator.isValidModelDirectory(summarizationOption.url) {
+            resolvedStageSelection.setBackend(.mlxLm, for: .summarization)
+        }
 
         return InferenceRuntimeProfile(
-            stageSelection: stageSelection,
+            stageSelection: resolvedStageSelection,
             modelArtifacts: InferenceModelArtifacts(
                 asrModelURL: nil,
                 diarizationModelURL: nil,

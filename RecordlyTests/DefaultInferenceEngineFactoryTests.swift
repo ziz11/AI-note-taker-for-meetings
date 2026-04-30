@@ -78,6 +78,27 @@ final class DefaultInferenceEngineFactoryTests: XCTestCase {
         XCTAssertEqual(factory.transcriptionEngineDisplayName(for: selection), "FluidAudio")
     }
 
+    func testFactoryBuildsMLXSummarizationEngineWhenBackendIsMLX() throws {
+        let factory = DefaultInferenceEngineFactory(
+            diarizationModelProvider: StubFluidAudioDiarizationModelProvider()
+        )
+        var selection = StageRuntimeSelection.defaultLocal
+        selection.setBackend(.mlxLm, for: .summarization)
+        let profile = InferenceRuntimeProfile(
+            stageSelection: selection,
+            modelArtifacts: InferenceModelArtifacts(
+                asrModelURL: nil,
+                diarizationModelURL: nil,
+                summarizationModelURL: URL(fileURLWithPath: "/tmp/mlx-model", isDirectory: true)
+            ),
+            summarizationRuntimeSettings: .default
+        )
+
+        let engine = try factory.makeSummarizationEngine(for: profile)
+
+        XCTAssertEqual(String(describing: type(of: engine)), "MlxSummarizationEngine")
+    }
+
     func testSDKDiarizationEngineRunsEndToEnd() async throws {
 #if arch(arm64) && canImport(FluidAudio)
         let provider = FluidAudioDiarizationModelProvider()

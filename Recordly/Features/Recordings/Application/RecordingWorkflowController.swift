@@ -597,8 +597,6 @@ final class RecordingWorkflowController {
     private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) throws {
         let fileManager = FileManager.default
         for fileName in [
-            "mic.raw.caf",
-            "system.raw.caf",
             "mic.raw.flac",
             "system.raw.flac"
         ] {
@@ -646,27 +644,11 @@ final class RecordingWorkflowController {
             return "- Недостаточно данных для автоматического резюме."
         }()
 
-        let topicsBullets: String = {
-            if !timeline.isEmpty {
-                return timeline.prefix(4).map { "- \($0.text)" }.joined(separator: "\n")
-            }
-            if !transcriptLines.isEmpty {
-                return transcriptLines.prefix(4).map { "- \($0)" }.joined(separator: "\n")
-            }
-            return "- Темы не определены."
-        }()
+        let topicsBullets = "- Темы и договоренности не выделены автоматически. Требуется ручная проверка."
 
         let decisionsBullets = "- Решения и договоренности не выделены автоматически. Требуется ручная проверка."
 
-        let actionItemsBullets: String = {
-            if !timeline.isEmpty {
-                return timeline.prefix(4).map { "- [Не указан] [Не указан] \($0.text)" }.joined(separator: "\n")
-            }
-            if !transcriptLines.isEmpty {
-                return transcriptLines.prefix(4).map { "- [Не указан] [Не указан] \($0)" }.joined(separator: "\n")
-            }
-            return "- [Не указан] [Не указан] Action items не найдены."
-        }()
+        let actionItemsBullets = "- [Не указан] [Не указан] Action items не выделены автоматически. Требуется ручная проверка."
 
         let risksBullets = "- Риски и открытые вопросы не определены автоматически. Требуется ручная проверка."
 

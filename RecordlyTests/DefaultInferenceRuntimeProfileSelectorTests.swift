@@ -121,6 +121,27 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         XCTAssertEqual(profile.summarizationRuntimeSettings.contextSize, 4096)
     }
 
+    func testResolveSummarizationProfileUsesMLXBackendForMLXModelDirectory() throws {
+        let mlxDirectory = try createMLXModelDirectory(named: "MLX-Qwen-0.8B")
+        let manager = makeModelManager()
+        let summarizationOption = try XCTUnwrap(manager.listLocalOptions(kind: .summarization).first)
+        manager.setSelectedModelID(summarizationOption.id, for: .summarization)
+
+        let selector = DefaultInferenceRuntimeProfileSelector(
+            modelManager: manager,
+            asrModelProvider: StubFluidAudioASRModelProvider(modelURL: nil),
+            diarizationModelProvider: StubFluidAudioDiarizationModelProvider(state: .ready)
+        )
+
+        let profile = try selector.resolveSummarizationProfile(for: .balanced)
+
+        XCTAssertEqual(profile.stageSelection.backend(for: .summarization), .mlxLm)
+        XCTAssertEqual(
+            profile.modelArtifacts.summarizationModelURL?.resolvingSymlinksInPath().path,
+            mlxDirectory.resolvingSymlinksInPath().path
+        )
+    }
+
     func testTranscriptionAvailabilityReportsNeedsDownload() {
         let manager = makeModelManager()
         let asrProvider = StubFluidAudioASRModelProvider(modelURL: nil)
@@ -173,6 +194,15 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         let url = tempDirectory.appendingPathComponent(name)
         try Data("model".utf8).write(to: url)
         return url
+    }
+
+    private func createMLXModelDirectory(named name: String) throws -> URL {
+        let directory = tempDirectory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("config.json"))
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("tokenizer.json"))
+        try Data("weights".utf8).write(to: directory.appendingPathComponent("model.safetensors"))
+        return directory
     }
 
     private func createFluidModelDirectory(named name: String) throws -> URL {

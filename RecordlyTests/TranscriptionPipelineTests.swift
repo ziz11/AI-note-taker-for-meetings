@@ -622,13 +622,13 @@ final class TranscriptionPipelineTests: XCTestCase {
         let updated = try await controller.transcribe(recording: fixture.recording) { state in
             guard state != .ready, state != .failed else { return }
             observedPreTerminalState = true
-            XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
-            XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: micRawURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: systemRawURL.path))
         }
 
         XCTAssertTrue(observedPreTerminalState)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: micRawURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: systemRawURL.path))
         XCTAssertEqual(updated.assets.transcriptionAudioProvenance, .m4aRecovery)
     }
 
@@ -741,14 +741,14 @@ final class TranscriptionPipelineTests: XCTestCase {
             try await controller.transcribe(recording: fixture.recording) { state in
                 guard state != .ready, state != .failed else { return }
                 observedPreTerminalState = true
-                XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
-                XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
+                XCTAssertTrue(FileManager.default.fileExists(atPath: micRawURL.path))
+                XCTAssertTrue(FileManager.default.fileExists(atPath: systemRawURL.path))
             }
         )
 
         XCTAssertTrue(observedPreTerminalState)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: micRawURL.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: systemRawURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: micRawURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: systemRawURL.path))
         XCTAssertEqual(repository.recordings.first?.transcriptState, .failed)
     }
 

@@ -5,6 +5,7 @@ struct ModelDiscoveryPaths {
     let sharedDirectory: (ModelKind) -> URL?
     let userDirectory: (ModelKind) -> URL?
     let projectDirectories: () -> [URL]
+    var userRootDirectory: () -> URL? = { nil }
     var fluidAudioSDKDirectory: () -> URL? = { nil }
 
     static func live() -> ModelDiscoveryPaths {
@@ -20,6 +21,9 @@ struct ModelDiscoveryPaths {
             },
             projectDirectories: {
                 AppPaths.projectLocalModelsDirectories()
+            },
+            userRootDirectory: {
+                AppPaths.userModelsRootDirectory()
             },
             fluidAudioSDKDirectory: {
                 AppPaths.fluidAudioSDKModelsDirectory()
@@ -359,10 +363,15 @@ final class ModelManager: ObservableObject {
     }
 
     private func loadUserLocalOptions(kind: ModelKind) -> [LocalModelOption] {
-        guard let directory = discoveryPaths.userDirectory(kind) else {
-            return []
+        var options: [LocalModelOption] = []
+        if let directory = discoveryPaths.userDirectory(kind) {
+            options.append(contentsOf: loadDirectoryOptions(kind: kind, directory: directory, source: .homeModels, recursive: false))
         }
-        return loadDirectoryOptions(kind: kind, directory: directory, source: .homeModels, recursive: false)
+        if kind == .summarization,
+           let rootDirectory = discoveryPaths.userRootDirectory() {
+            options.append(contentsOf: loadRecursiveMLXSummarizationOptions(directory: rootDirectory, source: .homeModels))
+        }
+        return options
     }
 
     private func loadSharedOptions(kind: ModelKind) -> [LocalModelOption] {
@@ -409,6 +418,23 @@ final class ModelManager: ObservableObject {
             .compactMap { buildLocalOption(url: $0, kind: kind, source: source) }
     }
 
+    private func loadRecursiveMLXSummarizationOptions(
+        directory: URL,
+        source: LocalModelOption.Source
+    ) -> [LocalModelOption] {
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        )
+        let urls = (enumerator?.allObjects as? [URL]) ?? []
+        return urls
+            .sorted(by: modelURLSort)
+            .filter { MLXModelValidator.isValidModelDirectory($0, fileManager: fileManager) }
+            .compactMap { buildLocalOption(url: $0, kind: .summarization, source: source) }
+    }
+
     private func isModelCandidate(_ url: URL, kind: ModelKind) -> Bool {
         switch kind {
         case .asr:
@@ -416,7 +442,7 @@ final class ModelManager: ObservableObject {
         case .diarization:
             return isSupportedModelFile(url, extensions: ["bin"])
         case .summarization:
-            return isSupportedModelFile(url, extensions: ["gguf", "bin"])
+            return isSupportedModelFile(url, extensions: ["gguf", "bin"]) || MLXModelValidator.isValidModelDirectory(url)
         }
     }
 
@@ -445,7 +471,10 @@ final class ModelManager: ObservableObject {
 
         let attrs = try? fileManager.attributesOfItem(atPath: url.path)
         let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        let baseName = url.deletingPathExtension().lastPathComponent
+        let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey])
+        let baseName = resourceValues?.isDirectory == true
+            ? url.lastPathComponent
+            : url.deletingPathExtension().lastPathComponent
         let displayName = baseName
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
