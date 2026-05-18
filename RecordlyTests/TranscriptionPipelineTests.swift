@@ -633,7 +633,7 @@ final class TranscriptionPipelineTests: XCTestCase {
     }
 
     @MainActor
-    func testCompleteCaptureRequiresMergedM4ABeforeTranscriptionStarts() async throws {
+    func testCompleteCaptureTranscribesFromDurableTracksWhenMergedPlaybackIsMissing() async throws {
         let asrEngine = RecordingASREngine { channel, sessionID in
             ASRDocument(
                 version: 1,
@@ -689,11 +689,73 @@ final class TranscriptionPipelineTests: XCTestCase {
             runTranscription: true
         )
 
-        XCTAssertTrue(asrEngine.recordedAudioFileNames.isEmpty)
-        XCTAssertEqual(result.recording.lifecycleState, .failed)
-        XCTAssertEqual(result.recording.transcriptState, .failed)
-        XCTAssertNotNil(result.processingError)
+        XCTAssertEqual(asrEngine.recordedAudioFileNames, ["mic.m4a", "system.m4a"])
+        XCTAssertEqual(result.recording.lifecycleState, .ready)
+        XCTAssertEqual(result.recording.transcriptState, .ready)
+        XCTAssertNil(result.processingError)
         XCTAssertNil(result.recording.assets.mergedCallFile)
+    }
+
+    func testMergeServiceFallsBackToDurableM4AWhenRawTracksAreUnusable() async throws {
+        let sessionID = UUID()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try Data("not-a-caf".utf8).write(to: directory.appendingPathComponent("mic.raw.caf"))
+        try Data("not-a-caf".utf8).write(to: directory.appendingPathComponent("system.raw.caf"))
+        try writeAudioFile(
+            named: "mic.m4a",
+            in: directory,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels
+        )
+        try writeAudioFile(
+            named: "system.m4a",
+            in: directory,
+            sampleRate: PCMTrackWriter.canonicalSampleRate,
+            channels: PCMTrackWriter.canonicalChannels
+        )
+
+        let metadataStore = SessionMetadataStore()
+        try await metadataStore.createSession(id: sessionID, in: directory)
+        try await metadataStore.updateTrack(
+            TrackRuntimeStats(
+                kind: .microphone,
+                fileName: "mic.raw.caf",
+                firstPTS: 0,
+                lastPTS: 1,
+                framesWritten: 48_000,
+                sampleRate: PCMTrackWriter.canonicalSampleRate,
+                bufferCount: 1,
+                fallback: false,
+                diagnostics: []
+            ),
+            in: directory
+        )
+        try await metadataStore.updateTrack(
+            TrackRuntimeStats(
+                kind: .system,
+                fileName: "system.raw.caf",
+                firstPTS: 0.25,
+                lastPTS: 1.25,
+                framesWritten: 48_000,
+                sampleRate: PCMTrackWriter.canonicalSampleRate,
+                bufferCount: 1,
+                fallback: false,
+                diagnostics: []
+            ),
+            in: directory
+        )
+
+        let mergeService = SessionMergeService(metadataStore: metadataStore)
+        let result = try await mergeService.mergeSession(in: directory, exportM4A: true)
+
+        let mergedURL = directory.appendingPathComponent("merged-call.m4a")
+        XCTAssertEqual(result.mergedM4AFileName, "merged-call.m4a")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mergedURL.path))
+        XCTAssertGreaterThan((try mergedURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0, 0)
+        XCTAssertNoThrow(try AVAudioFile(forReading: mergedURL))
     }
 
     @MainActor

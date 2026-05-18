@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import Foundation
 
 protocol RecordingsPersistence: AnyObject {
@@ -186,14 +187,30 @@ final class RecordingsRepository: RecordingsPersistence {
     }
 
     func playableAudioURL(for recording: RecordingSession) throws -> URL? {
-        guard let fileName = recording.playableAudioFileName else {
-            return nil
+        let candidates: [String?] = [
+            recording.assets.importedAudioFile,
+            recording.assets.mergedCallFile,
+            recording.assets.microphoneFile,
+            recording.assets.systemAudioFile
+        ]
+        let directory = try sessionDirectory(for: recording.id)
+        for fileName in candidates.compactMap({ $0 }) {
+            let url = directory.appendingPathComponent(fileName)
+            if isUsableAudioFile(url) {
+                return url
+            }
         }
+        return nil
+    }
 
-        let url = try sessionDirectory(for: recording.id).appendingPathComponent(fileName)
-        guard fileManager.fileExists(atPath: url.path) else {
-            return nil
+    private func isUsableAudioFile(_ url: URL) -> Bool {
+        guard fileManager.fileExists(atPath: url.path),
+              let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
+            return false
         }
-        return url
+        guard size > 0, let file = try? AVAudioFile(forReading: url) else {
+            return false
+        }
+        return file.length > 0
     }
 }

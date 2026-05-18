@@ -1,5 +1,5 @@
 import AppKit
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 import ApplicationServices
 import ScreenCaptureKit
@@ -998,11 +998,22 @@ final class AudioCaptureService: AudioCaptureEngine {
 
         try await metadataStore.updateStatus(.readyForMix, in: sessionDirectory)
 
-        let mergeResult = try await mergeService.mergeSession(in: sessionDirectory, exportM4A: true)
-
         return CaptureArtifacts(
             microphoneFile: microphoneFileName,
             systemAudioFile: systemAudioFileName,
+            mergedCallFile: nil,
+            connectorNotesFile: "capture-session.json",
+            note: "Audio saved. Mixed playback is being prepared."
+        )
+    }
+
+    func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+        let mergeResult = try await mergeService.mergeSession(in: sessionDirectory, exportM4A: true)
+        return CaptureArtifacts(
+            microphoneFile: LiveCaptureArtifactNames.microphoneDurable,
+            systemAudioFile: FileManager.default.fileExists(
+                atPath: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable).path
+            ) ? LiveCaptureArtifactNames.systemDurable : nil,
             mergedCallFile: mergeResult.mergedM4AFileName,
             connectorNotesFile: "capture-session.json",
             note: mergeResult.note
@@ -1057,14 +1068,23 @@ final class AudioCaptureService: AudioCaptureEngine {
                 continue
             }
 
+            let mergedM4A = sessionDirectory.appendingPathComponent("merged-call.m4a")
+            if fileManager.fileExists(atPath: mergedM4A.path),
+               !Self.isUsableAudioFile(mergedM4A) {
+                try? fileManager.removeItem(at: mergedM4A)
+            }
+
             switch metadata.status {
-            case .finalizingTracks, .readyForMix, .mixing:
-                do {
-                    _ = try await mergeService.mergeSession(in: sessionDirectory, exportM4A: true)
-                } catch {
+            case .finalizingTracks:
+                if Self.hasUsableDurableTrack(in: sessionDirectory) {
+                    try? await metadataStore.updateStatus(.readyForMix, in: sessionDirectory)
+                    try? await metadataStore.appendNote("Recovered finalized channel audio. Mixed playback is pending.", in: sessionDirectory)
+                } else {
                     try? await metadataStore.updateStatus(.mixError, in: sessionDirectory)
-                    try? await metadataStore.appendNote("Recovery merge failed: \(error.localizedDescription)", in: sessionDirectory)
+                    try? await metadataStore.appendNote("Recovered interrupted finalization without durable channel audio.", in: sessionDirectory)
                 }
+            case .readyForMix, .mixing:
+                try? await metadataStore.updateStatus(.readyForMix, in: sessionDirectory)
             case .recording:
                 try? await metadataStore.updateStatus(.mixError, in: sessionDirectory)
                 try? await metadataStore.appendNote("Recovered interrupted recording session.", in: sessionDirectory)
@@ -1072,6 +1092,24 @@ final class AudioCaptureService: AudioCaptureEngine {
                 continue
             }
         }
+    }
+
+    private static func hasUsableDurableTrack(in sessionDirectory: URL) -> Bool {
+        isUsableAudioFile(sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable))
+            || isUsableAudioFile(sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable))
+    }
+
+    private static func isUsableAudioFile(_ url: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size > 0 else {
+            return false
+        }
+
+        guard let file = try? AVAudioFile(forReading: url) else {
+            return false
+        }
+        return file.length > 0
     }
 
 }

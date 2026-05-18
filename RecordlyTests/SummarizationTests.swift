@@ -121,6 +121,10 @@ final class StubAudioCaptureEngine: AudioCaptureEngine {
     func currentMicrophoneLevel() -> Double { 0 }
     func currentSystemAudioLevel() -> Double { 0 }
     func recoverPendingSessions(in recordingsDirectory: URL) async {}
+
+    func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+        CaptureArtifacts()
+    }
 }
 
 final class CapturingLlamaProcessExecutor: LlamaProcessExecutor {
@@ -372,12 +376,22 @@ final class InMemoryRecordingsRepository: RecordingsPersistence {
     }
 
     func playableAudioURL(for recording: RecordingSession) throws -> URL? {
-        guard let fileName = recording.playableAudioFileName else {
-            return nil
-        }
         let directory = try sessionDirectory(for: recording.id)
-        let url = directory.appendingPathComponent(fileName)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        for fileName in [
+            recording.assets.importedAudioFile,
+            recording.assets.mergedCallFile,
+            recording.assets.microphoneFile,
+            recording.assets.systemAudioFile
+        ].compactMap({ $0 }) {
+            let url = directory.appendingPathComponent(fileName)
+            guard FileManager.default.fileExists(atPath: url.path),
+                  let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  size > 0 else {
+                continue
+            }
+            return url
+        }
+        return nil
     }
 }
 
@@ -1459,13 +1473,12 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         )
     }
 
-    func testRecoverPendingMergesPreservesTranscriptionFailureNote() async throws {
+    func testRecoverPendingMergesIgnoresZeroByteMergedPlaybackFile() async throws {
         let recordingID = UUID()
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
-        try Data("offline merge".utf8).write(
-            to: sessionDirectory.appendingPathComponent("merged-call.m4a")
-        )
+        FileManager.default.createFile(atPath: sessionDirectory.appendingPathComponent("merged-call.m4a").path, contents: Data())
+        try Data("mic".utf8).write(to: sessionDirectory.appendingPathComponent("mic.m4a"))
 
         let failureReason = "Transcript failed: System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
         let recording = RecordingSession(
@@ -1516,7 +1529,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let restored: RecordingSession = try XCTUnwrap(
             repository.recordings.first(where: { $0.id == recordingID })
         )
-        XCTAssertEqual(restored.assets.mergedCallFile, "merged-call.m4a")
+        XCTAssertNil(restored.assets.mergedCallFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("mic.m4a").path))
         XCTAssertEqual(restored.notes, failureReason)
     }
 

@@ -48,6 +48,7 @@ final class RecordingsStore: ObservableObject {
     private var lastPublishedRecordingSecond = -1
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var summarizationTasks: [UUID: Task<Void, Never>] = [:]
+    private var playbackMixTasks: [UUID: Task<Void, Never>] = [:]
     private var transcriptionQueue: [UUID] = []
     private var transcriptionSummarizationRequests: [UUID: Bool] = [:]
 
@@ -134,6 +135,7 @@ final class RecordingsStore: ObservableObject {
     deinit {
         transcriptionTasks.values.forEach { $0.cancel() }
         summarizationTasks.values.forEach { $0.cancel() }
+        playbackMixTasks.values.forEach { $0.cancel() }
     }
 
     var availableModels: [ModelDescriptor] {
@@ -533,14 +535,8 @@ final class RecordingsStore: ObservableObject {
         guard !previewMode else { return }
 
         do {
-            guard let fileName = recording.playableAudioFileName else {
+            guard let sourceURL = try workflow.playableAudioURL(for: recording) else {
                 throw RecordingActionError.noAudioToExport
-            }
-
-            let sessionDirectory = try workflow.sessionDirectory(for: recording.id)
-            let sourceURL = sessionDirectory.appendingPathComponent(fileName)
-            guard FileManager.default.fileExists(atPath: sourceURL.path) else {
-                throw RecordingActionError.sourceFileMissing
             }
 
             let ext = sourceURL.pathExtension
@@ -735,9 +731,8 @@ final class RecordingsStore: ObservableObject {
                 viewState.runtime.activityStatus = "Ready"
             }
 
-            if result.recording.source == .liveCapture,
-               result.recording.assets.mergedCallFile == nil {
-                scheduleMergeProgressRefresh(recordingID: result.recording.id)
+            if shouldSchedulePlaybackMix(for: result.recording) {
+                schedulePlaybackMix(recordingID: result.recording.id)
             }
             if let processingError = result.processingError {
                 handleTranscriptionError(processingError, isBackground: true)
@@ -783,6 +778,9 @@ final class RecordingsStore: ObservableObject {
     private func recoverPendingPostProcessing() async {
         await workflow.recoverPendingMerges()
         loadRecordings(preserveSelection: true)
+        for recording in recordings where shouldSchedulePlaybackMix(for: recording) {
+            schedulePlaybackMix(recordingID: recording.id)
+        }
         viewState.pendingRecoveryTranscriptionCount = 0
         viewState.isRecoveryPromptVisible = false
         let recoverableRecordings = recordings.filter { shouldRecoverTranscriptionFromState(for: $0) }
@@ -1223,6 +1221,8 @@ final class RecordingsStore: ObservableObject {
             case .summarization:
                 viewState.runtime.summarizationProgress = nil
                 viewState.runtime.summarizationStageLabel = nil
+            case .playbackMix:
+                break
             }
         }
     }
@@ -1308,9 +1308,12 @@ final class RecordingsStore: ObservableObject {
         transcriptionTasks[recordingID] = nil
         summarizationTasks[recordingID]?.cancel()
         summarizationTasks[recordingID] = nil
+        playbackMixTasks[recordingID]?.cancel()
+        playbackMixTasks[recordingID] = nil
         transcriptionSummarizationRequests[recordingID] = nil
         removeProcessingJob(recordingID: recordingID, kind: .transcription)
         removeProcessingJob(recordingID: recordingID, kind: .summarization)
+        removeProcessingJob(recordingID: recordingID, kind: .playbackMix)
         refreshRuntimeStatusFromJobs()
     }
 
@@ -1325,24 +1328,71 @@ final class RecordingsStore: ObservableObject {
         present(error, shouldSetRuntimeErrorState: !isBackground)
     }
 
-    private func scheduleMergeProgressRefresh(recordingID: UUID) {
-        Task { @MainActor [weak self] in
+    private func schedulePlaybackMix(recordingID: UUID) {
+        guard playbackMixTasks[recordingID] == nil,
+              let recording = recordings.first(where: { $0.id == recordingID }),
+              shouldSchedulePlaybackMix(for: recording) else {
+            return
+        }
+
+        upsertProcessingJob(
+            recordingID: recording.id,
+            recordingTitle: recording.title,
+            kind: .playbackMix,
+            progress: 0.1,
+            stageLabel: "Preparing playback"
+        )
+        refreshRuntimeStatusFromJobs()
+
+        playbackMixTasks[recordingID] = Task { @MainActor [weak self] in
             guard let self else { return }
-            for _ in 0..<12 {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard self.recordings.contains(where: { $0.id == recordingID }) else {
+            defer {
+                self.playbackMixTasks[recordingID] = nil
+                self.removeProcessingJob(recordingID: recordingID, kind: .playbackMix)
+                self.refreshRuntimeStatusFromJobs()
+            }
+
+            guard let current = self.recordings.first(where: { $0.id == recordingID }) else {
+                return
+            }
+
+            do {
+                self.upsertProcessingJob(
+                    recordingID: current.id,
+                    recordingTitle: current.title,
+                    kind: .playbackMix,
+                    progress: 0.5,
+                    stageLabel: "Mixing"
+                )
+                let updated = try await self.workflow.mergeCompletedSession(for: current)
+                self.replaceRecording(updated)
+                self.playbackController.syncSelection(self.selectedRecording)
+            } catch {
+                guard let index = self.recordings.firstIndex(where: { $0.id == recordingID }) else {
                     return
                 }
-
-                await self.workflow.recoverPendingMerges()
-                self.loadRecordings(preserveSelection: true)
-
-                if let refreshed = self.recordings.first(where: { $0.id == recordingID }),
-                   refreshed.assets.mergedCallFile != nil {
-                    return
+                var updated = self.recordings[index]
+                updated.assets.mergedCallFile = nil
+                if updated.lifecycleState != .failed {
+                    updated.lifecycleState = .ready
                 }
+                if !updated.notes.localizedCaseInsensitiveContains("Transcript failed") {
+                    updated.notes = "Audio saved. Mixed playback unavailable: \(error.localizedDescription)"
+                }
+                try? self.workflow.save(updated)
+                self.recordings[index] = updated
+                self.playbackController.syncSelection(self.selectedRecording)
             }
         }
+    }
+
+    private func shouldSchedulePlaybackMix(for recording: RecordingSession) -> Bool {
+        guard recording.source == .liveCapture,
+              recording.assets.mergedCallFile == nil,
+              recording.assets.microphoneFile != nil || recording.assets.systemAudioFile != nil else {
+            return false
+        }
+        return true
     }
 
     private func readableMessage(for error: Error) -> String {

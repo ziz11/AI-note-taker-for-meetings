@@ -4,10 +4,17 @@ import Foundation
 protocol AudioCaptureEngine: AnyObject {
     func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts
     func stopCapture() async throws -> CaptureArtifacts
+    func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts
     func currentMicrophoneLevel() -> Double
     func currentSystemAudioLevel() -> Double
     var systemAudioStatusLabel: String { get }
     func recoverPendingSessions(in recordingsDirectory: URL) async
+}
+
+extension AudioCaptureEngine {
+    func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+        throw AudioCaptureError.mixdownFailed
+    }
 }
 
 struct ASREngineConfiguration: Sendable {

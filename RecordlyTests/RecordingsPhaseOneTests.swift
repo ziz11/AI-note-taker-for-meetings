@@ -144,6 +144,31 @@ final class RecordingsPhaseOneTests: XCTestCase {
         XCTAssertEqual(controller.state.selectedSource, .microphone)
     }
 
+    func testStoppingRecordingAllowsNextRecordingWhilePlaybackMixIsPending() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = PendingMergeCaptureEngine()
+        let store = makeStore(repository: repository, audioCaptureEngine: captureEngine)
+        store.viewState.autoTranscribeEnabled = false
+
+        await store.beginRecording()
+        let firstRecordingID = try XCTUnwrap(store.viewState.runtime.activeRecordingID)
+        await store.endRecording()
+
+        XCTAssertFalse(store.viewState.runtime.isRecording)
+        XCTAssertFalse(store.viewState.runtime.isCaptureTransitionInFlight)
+        XCTAssertTrue(store.processingJobs.contains { $0.kind == .playbackMix && $0.recordingID == firstRecordingID })
+
+        await store.beginRecording()
+
+        XCTAssertTrue(store.viewState.runtime.isRecording)
+        XCTAssertNotEqual(store.viewState.runtime.activeRecordingID, firstRecordingID)
+
+        for _ in 0..<10 where !captureEngine.isMergePending {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        captureEngine.finishMerge()
+    }
+
     private func makeStore(repository: InMemoryRecordingsRepository) -> RecordingsStore {
         let modelManager = ModelManager()
         let fluidProvider = FluidAudioASRModelProvider()
@@ -153,12 +178,58 @@ final class RecordingsPhaseOneTests: XCTestCase {
             asrModelProvider: fluidProvider,
             diarizationModelProvider: diarizationProvider
         )
-        return RecordingsStore(
+        return makeStore(
+            repository: repository,
             audioCaptureEngine: composition.audioCaptureEngine,
-            transcriptionPipeline: TranscriptionPipeline(),
             runtimeProfileSelector: composition.runtimeProfileSelector,
             inferenceEngineFactory: composition.engineFactory,
             transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
+            modelManager: modelManager,
+            fluidProvider: fluidProvider,
+            diarizationProvider: diarizationProvider
+        )
+    }
+
+    private func makeStore(
+        repository: InMemoryRecordingsRepository,
+        audioCaptureEngine: any AudioCaptureEngine
+    ) -> RecordingsStore {
+        let modelManager = ModelManager()
+        let fluidProvider = FluidAudioASRModelProvider()
+        let diarizationProvider = FluidAudioDiarizationModelProvider()
+        let composition = DefaultInferenceComposition.make(
+            modelManager: modelManager,
+            asrModelProvider: fluidProvider,
+            diarizationModelProvider: diarizationProvider
+        )
+        return makeStore(
+            repository: repository,
+            audioCaptureEngine: audioCaptureEngine,
+            runtimeProfileSelector: composition.runtimeProfileSelector,
+            inferenceEngineFactory: composition.engineFactory,
+            transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
+            modelManager: modelManager,
+            fluidProvider: fluidProvider,
+            diarizationProvider: diarizationProvider
+        )
+    }
+
+    private func makeStore(
+        repository: InMemoryRecordingsRepository,
+        audioCaptureEngine: any AudioCaptureEngine,
+        runtimeProfileSelector: any InferenceRuntimeProfileSelecting,
+        inferenceEngineFactory: any InferenceEngineFactory,
+        transcriptionEngineDisplayName: String,
+        modelManager: ModelManager,
+        fluidProvider: any FluidAudioASRModelProviding,
+        diarizationProvider: any FluidAudioDiarizationModelProviding
+    ) -> RecordingsStore {
+        return RecordingsStore(
+            audioCaptureEngine: audioCaptureEngine,
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: runtimeProfileSelector,
+            inferenceEngineFactory: inferenceEngineFactory,
+            transcriptionEngineDisplayName: transcriptionEngineDisplayName,
             modelManager: modelManager,
             fluidAudioModelProvider: fluidProvider,
             fluidAudioDiarizationModelProvider: diarizationProvider,
@@ -190,6 +261,56 @@ final class RecordingsPhaseOneTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    @MainActor
+    private final class PendingMergeCaptureEngine: AudioCaptureEngine {
+        var systemAudioStatusLabel: String { "Captured" }
+        private(set) var isMergePending = false
+        private var shouldBlockMerge = true
+
+        func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            CaptureArtifacts(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a",
+                mergedCallFile: nil,
+                connectorNotesFile: "capture-session.json",
+                note: "Recording."
+            )
+        }
+
+        func stopCapture() async throws -> CaptureArtifacts {
+            CaptureArtifacts(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a",
+                mergedCallFile: nil,
+                connectorNotesFile: "capture-session.json",
+                note: "Audio saved. Mixed playback is being prepared."
+            )
+        }
+
+        func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            isMergePending = true
+            while shouldBlockMerge && !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            isMergePending = false
+            return CaptureArtifacts(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a",
+                mergedCallFile: nil,
+                connectorNotesFile: "capture-session.json",
+                note: "Mixed playback unavailable."
+            )
+        }
+
+        func finishMerge() {
+            shouldBlockMerge = false
+        }
+
+        func currentMicrophoneLevel() -> Double { 0 }
+        func currentSystemAudioLevel() -> Double { 0 }
+        func recoverPendingSessions(in recordingsDirectory: URL) async {}
     }
 }
 
