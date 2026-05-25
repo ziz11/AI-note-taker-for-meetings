@@ -379,6 +379,8 @@ extension RecordingSession {
         guard assets.microphoneFile != nil || assets.systemAudioFile != nil else { return false }
         return notes.localizedCaseInsensitiveContains("merge is running in background")
             || notes.localizedCaseInsensitiveContains("offline merge")
+            || notes.localizedCaseInsensitiveContains("mixed playback is being prepared")
+            || notes.localizedCaseInsensitiveContains("preparing playback")
     }
 
     var microphoneState: RecordingSourceState {

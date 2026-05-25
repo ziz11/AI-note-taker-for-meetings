@@ -67,6 +67,15 @@ enum AppPaths {
         return directory
     }
 
+    static func userModelsRootDirectory() -> URL? {
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(userModelsFolder, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: directory.path) else {
+            return nil
+        }
+        return directory
+    }
+
     static func createUserModelsDirectory(kind: ModelKind) throws -> URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let directory = home

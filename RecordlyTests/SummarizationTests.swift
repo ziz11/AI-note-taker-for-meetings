@@ -16,6 +16,18 @@ final class MockLlamaCppRunner: LlamaCppRunner {
     }
 }
 
+final class MockMlxLmRunner: MlxLmRunner {
+    var result: Result<String, Error>
+
+    init(result: Result<String, Error> = .success("")) {
+        self.result = result
+    }
+
+    func generate(prompt: String, configuration: SummarizationConfiguration) async throws -> String {
+        try result.get()
+    }
+}
+
 final class MockSummaryEngine: SummarizationEngine {
     var result: Result<SummaryDocument, Error>
 
@@ -109,6 +121,10 @@ final class StubAudioCaptureEngine: AudioCaptureEngine {
     func currentMicrophoneLevel() -> Double { 0 }
     func currentSystemAudioLevel() -> Double { 0 }
     func recoverPendingSessions(in recordingsDirectory: URL) async {}
+
+    func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+        CaptureArtifacts()
+    }
 }
 
 final class CapturingLlamaProcessExecutor: LlamaProcessExecutor {
@@ -360,12 +376,22 @@ final class InMemoryRecordingsRepository: RecordingsPersistence {
     }
 
     func playableAudioURL(for recording: RecordingSession) throws -> URL? {
-        guard let fileName = recording.playableAudioFileName else {
-            return nil
-        }
         let directory = try sessionDirectory(for: recording.id)
-        let url = directory.appendingPathComponent(fileName)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        for fileName in [
+            recording.assets.importedAudioFile,
+            recording.assets.mergedCallFile,
+            recording.assets.microphoneFile,
+            recording.assets.systemAudioFile
+        ].compactMap({ $0 }) {
+            let url = directory.appendingPathComponent(fileName)
+            guard FileManager.default.fileExists(atPath: url.path),
+                  let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  size > 0 else {
+                continue
+            }
+            return url
+        }
+        return nil
     }
 }
 
@@ -560,6 +586,48 @@ final class SummaryOutputParserTests: XCTestCase {
         XCTAssertEqual(doc.actionItems, ["[Анна] [2026-03-12] Подготовить rollout-план."])
         XCTAssertEqual(doc.risks, ["Возможна задержка по backend."])
     }
+
+    func testSanitizesModelPreambleThinkBlocksAndRepeatedBullets() throws {
+        let markdown = """
+        Let me analyze the transcript to create a structured summary.
+
+        <think>
+        internal reasoning that should not be persisted
+        </think>
+
+        ## Call Summary
+        - Discussion focused on product updates and testing methodology
+
+        ## Topics
+        - Product updates
+        - Product updates
+
+        ## Decisions
+        - Implement new testing approach (Abtest)
+        - Implement new testing approach (Abtest)
+
+        ## Action Items
+        - Implement new testing approach (Abtest)
+        - Implement new testing approach (Abtest)
+
+        ## Risks
+        - GitLab space issues
+
+        ==========
+        Prompt: 5957 tokens, 2379.637 tokens-per-sec
+        """
+
+        let doc = try SummaryOutputParser.parse(markdown)
+
+        XCTAssertTrue(doc.rawMarkdown.hasPrefix("## Call Summary"))
+        XCTAssertFalse(doc.rawMarkdown.contains("Let me analyze"))
+        XCTAssertFalse(doc.rawMarkdown.contains("<think>"))
+        XCTAssertFalse(doc.rawMarkdown.contains("Prompt: 5957 tokens"))
+        XCTAssertEqual(doc.topics, ["Product updates"])
+        XCTAssertEqual(doc.decisions, ["Implement new testing approach (Abtest)"])
+        XCTAssertEqual(doc.actionItems, ["Implement new testing approach (Abtest)"])
+        XCTAssertEqual(doc.risks, ["GitLab space issues"])
+    }
 }
 
 // MARK: - LlamaCppSummarizationEngine Tests
@@ -719,6 +787,77 @@ final class LlamaCppSummarizationEngineTests: XCTestCase {
             XCTFail("Should throw")
         } catch {
             XCTAssertEqual(error as? SummarizationError, .outputParseFailed)
+        }
+    }
+}
+
+// MARK: - MlxSummarizationEngine Tests
+
+final class MlxSummarizationEngineTests: XCTestCase {
+    private let tempModelURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("mlx-model-\(UUID().uuidString)", isDirectory: true)
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        try FileManager.default.createDirectory(at: tempModelURL, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: tempModelURL.appendingPathComponent("config.json"))
+        try Data("{}".utf8).write(to: tempModelURL.appendingPathComponent("tokenizer.json"))
+        try Data("weights".utf8).write(to: tempModelURL.appendingPathComponent("model.safetensors"))
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: tempModelURL)
+        try super.tearDownWithError()
+    }
+
+    func testSuccessfulSummarizationParsesStructuredMLXOutput() async throws {
+        let markdown = """
+        ## Topics
+        - Local model support
+
+        ## Decisions
+        - Route MLX folders to mlx-lm
+
+        ## Action Items
+        - Verify summary generation
+
+        ## Risks
+        - Missing CLI binary
+        """
+        let runner = MockMlxLmRunner(result: .success(markdown))
+        let engine = MlxSummarizationEngine(runner: runner)
+        let config = SummarizationConfiguration(modelURL: tempModelURL)
+        let transcript = String(repeating: "word ", count: 20)
+
+        let doc = try await engine.summarize(
+            transcript: transcript,
+            srtText: nil,
+            recordingTitle: "MLX Test",
+            configuration: config
+        )
+
+        XCTAssertEqual(doc.topics, ["Local model support"])
+        XCTAssertEqual(doc.decisions, ["Route MLX folders to mlx-lm"])
+        XCTAssertEqual(doc.actionItems, ["Verify summary generation"])
+        XCTAssertEqual(doc.risks, ["Missing CLI binary"])
+    }
+
+    func testInvalidMLXModelDirectoryThrowsModelMissing() async {
+        let invalidURL = tempModelURL.appendingPathComponent("missing", isDirectory: true)
+        let engine = MlxSummarizationEngine(runner: MockMlxLmRunner())
+        let config = SummarizationConfiguration(modelURL: invalidURL)
+        let transcript = String(repeating: "word ", count: 20)
+
+        do {
+            _ = try await engine.summarize(
+                transcript: transcript,
+                srtText: nil,
+                recordingTitle: "MLX Test",
+                configuration: config
+            )
+            XCTFail("Should throw")
+        } catch {
+            XCTAssertEqual(error as? SummarizationError, .modelMissing(invalidURL))
         }
     }
 }
@@ -976,6 +1115,56 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let logText = try String(contentsOf: logURL, encoding: .utf8)
         XCTAssertTrue(logText.contains("llm_status=failed"))
         XCTAssertTrue(logText.contains("summary_source=fallback"))
+    }
+
+    func testFallbackSummaryDoesNotPromoteTranscriptExcerptsToTopicsOrActionItems() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Fallback quality",
+            createdAt: Date(),
+            duration: 90,
+            lifecycleState: .ready,
+            transcriptState: .ready,
+            source: .importedAudio,
+            notes: "Transcript ready.",
+            assets: RecordingAssets(importedAudioFile: "call.m4a")
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory],
+            transcriptBodies: [
+                recordingID: """
+                [00:01 - 00:05] [SPEAKER_01] Да, но нормально, хорошо прошел.
+                [00:07 - 00:12] [You] Бациллы распространились.
+                [00:12 - 00:18] [You] Так, а есть ли у нас тема звонка?
+                """
+            ]
+        )
+
+        let modelURL = try makeSummarizationModel(named: "fallback-quality.gguf")
+        let modelManager = makeModelManager(modelURL: modelURL)
+        let workflow = makeWorkflow(
+            repository: repository,
+            modelManager: modelManager,
+            summarizationEngine: MockSummaryEngine(result: .failure(SummarizationError.inferenceFailed(message: "boom"))),
+            summarizationTimeoutSeconds: 3
+        )
+
+        _ = try await workflow.summarize(recording: recording)
+
+        let summaryURL = sessionDirectory.appendingPathComponent("summary.md")
+        let summaryText = try String(contentsOf: summaryURL, encoding: .utf8)
+
+        XCTAssertTrue(summaryText.contains("## Call Summary"))
+        XCTAssertTrue(summaryText.contains("- [00:01 - 00:05] [SPEAKER_01] Да, но нормально"))
+        XCTAssertFalse(summaryText.contains("## Topics and Agreements\n\n- [00:01 - 00:05]"))
+        XCTAssertFalse(summaryText.contains("- [Не указан] [Не указан] [00:01 - 00:05]"))
+        XCTAssertTrue(summaryText.contains("- Темы и договоренности не выделены автоматически. Требуется ручная проверка."))
+        XCTAssertTrue(summaryText.contains("- [Не указан] [Не указан] Action items не выделены автоматически. Требуется ручная проверка."))
     }
 
     func testSummarizePreservesLLMOutputWhenTimeoutAllowsCompletion() async throws {
@@ -1284,13 +1473,12 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         )
     }
 
-    func testRecoverPendingMergesPreservesTranscriptionFailureNote() async throws {
+    func testRecoverPendingMergesIgnoresZeroByteMergedPlaybackFile() async throws {
         let recordingID = UUID()
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
-        try Data("offline merge".utf8).write(
-            to: sessionDirectory.appendingPathComponent("merged-call.m4a")
-        )
+        FileManager.default.createFile(atPath: sessionDirectory.appendingPathComponent("merged-call.m4a").path, contents: Data())
+        try Data("mic".utf8).write(to: sessionDirectory.appendingPathComponent("mic.m4a"))
 
         let failureReason = "Transcript failed: System diarization package is required for the default system transcription path. Download the FluidAudio diarization package in Models settings."
         let recording = RecordingSession(
@@ -1341,7 +1529,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let restored: RecordingSession = try XCTUnwrap(
             repository.recordings.first(where: { $0.id == recordingID })
         )
-        XCTAssertEqual(restored.assets.mergedCallFile, "merged-call.m4a")
+        XCTAssertNil(restored.assets.mergedCallFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("mic.m4a").path))
         XCTAssertEqual(restored.notes, failureReason)
     }
 
@@ -1412,7 +1601,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("system.raw.caf").path))
     }
 
-    func testTranscribeRemovesCAFArtifactsAfterMergedM4AExists() async throws {
+    func testTranscribePreservesCanonicalCAFArtifactsAfterMergedM4AExists() async throws {
         let recordingID = UUID()
         let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
@@ -1474,8 +1663,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
 
         _ = try await workflow.transcribe(recording: recording)
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("mic.raw.caf").path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("system.raw.caf").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("mic.raw.caf").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("system.raw.caf").path))
     }
 
     func testWorkflowDefaultChunkedTranscriptionDegradesWhenDiarizationPackageMissing() async throws {
@@ -1858,6 +2047,67 @@ final class ResolveLlamaBinaryURLTests: XCTestCase {
         let resolved = try resolveLlamaBinaryURL(fileManager: fileManager, environment: [:])
         XCTAssertEqual(resolved.lastPathComponent, "llama-cli")
         XCTAssertEqual(resolved.standardizedFileURL.path, llamaCliURL.standardizedFileURL.path)
+    }
+}
+
+final class ResolveMlxLmGenerateBinaryURLTests: XCTestCase {
+    func testPrefersBundledBinaryOverUserAndPathBinaries() throws {
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent("resolve-mlx-\(UUID().uuidString)")
+        let resourceDirectory = tempDirectory.appendingPathComponent("resources", isDirectory: true)
+        let userHomeDirectory = tempDirectory.appendingPathComponent("home", isDirectory: true)
+        let pathDirectory = tempDirectory.appendingPathComponent("path", isDirectory: true)
+        try fileManager.createDirectory(
+            at: resourceDirectory.appendingPathComponent("Binaries", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: userHomeDirectory.appendingPathComponent(".local/bin", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(at: pathDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let bundledURL = resourceDirectory.appendingPathComponent("Binaries/mlx_lm.generate")
+        let userURL = userHomeDirectory.appendingPathComponent(".local/bin/mlx_lm.generate")
+        let pathURL = pathDirectory.appendingPathComponent("mlx_lm.generate")
+        try makeExecutable(at: bundledURL, fileManager: fileManager)
+        try makeExecutable(at: userURL, fileManager: fileManager)
+        try makeExecutable(at: pathURL, fileManager: fileManager)
+
+        let resolved = try resolveMlxLmGenerateBinaryURL(
+            fileManager: fileManager,
+            environment: ["PATH": pathDirectory.path],
+            homeDirectoryURL: userHomeDirectory,
+            bundleResourceURL: resourceDirectory
+        )
+
+        XCTAssertEqual(resolved.standardizedFileURL.path, bundledURL.standardizedFileURL.path)
+    }
+
+    func testUsesEnvironmentOverrideWhenNoBundledBinaryExists() throws {
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent("resolve-mlx-env-\(UUID().uuidString)")
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let overrideURL = tempDirectory.appendingPathComponent("mlx_lm.generate")
+        try makeExecutable(at: overrideURL, fileManager: fileManager)
+
+        let resolved = try resolveMlxLmGenerateBinaryURL(
+            fileManager: fileManager,
+            environment: ["MLX_LM_GENERATE_PATH": overrideURL.path],
+            homeDirectoryURL: tempDirectory.appendingPathComponent("home", isDirectory: true),
+            bundleResourceURL: tempDirectory.appendingPathComponent("resources", isDirectory: true)
+        )
+
+        XCTAssertEqual(resolved.standardizedFileURL.path, overrideURL.standardizedFileURL.path)
+    }
+
+    private func makeExecutable(at url: URL, fileManager: FileManager) throws {
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        fileManager.createFile(atPath: url.path, contents: Data("binary".utf8))
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 }
 

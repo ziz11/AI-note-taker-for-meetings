@@ -12,6 +12,7 @@ struct RecordingsAlertState: Equatable {
 enum RecordingProcessingKind: String, Equatable, Hashable {
     case transcription
     case summarization
+    case playbackMix
 
     var label: String {
         switch self {
@@ -19,6 +20,8 @@ enum RecordingProcessingKind: String, Equatable, Hashable {
             return "Transcribing"
         case .summarization:
             return "Summarizing"
+        case .playbackMix:
+            return "Preparing playback"
         }
     }
 }

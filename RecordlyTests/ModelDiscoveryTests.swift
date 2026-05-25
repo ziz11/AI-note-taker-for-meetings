@@ -204,6 +204,9 @@ final class ModelDiscoveryTests: XCTestCase {
             },
             projectDirectories: {
                 projectDirectories
+            },
+            userRootDirectory: {
+                userRoot
             }
         )
 
@@ -220,6 +223,13 @@ final class ModelDiscoveryTests: XCTestCase {
         let url = directory.appendingPathComponent(name, isDirectory: false)
         try Data("model".utf8).write(to: url)
         return url
+    }
+
+    private func createMLXModelDirectory(at directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("config.json"))
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("tokenizer.json"))
+        try Data("weights".utf8).write(to: directory.appendingPathComponent("model.safetensors"))
     }
 
     private func createFluidModelDirectory(named name: String, in parentDirectory: URL) throws -> URL {

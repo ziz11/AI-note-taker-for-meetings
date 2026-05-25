@@ -178,7 +178,6 @@ final class RecordingWorkflowController {
         let processingError: Error?
         if runTranscription {
             do {
-                try ensureMergedPlaybackAudioReady(for: &updatedRecording)
                 cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
                 transcriptionResult = try await performTranscription(
                     for: updatedRecording,
@@ -211,6 +210,39 @@ final class RecordingWorkflowController {
             systemAudioLabel: captureArtifacts.systemAudioFile != nil ? "Captured" : audioCaptureEngine.systemAudioStatusLabel,
             processingError: processingError
         )
+    }
+
+    func mergeCompletedSession(for recording: RecordingSession) async throws -> RecordingSession {
+        let sessionDirectory = try repository.sessionDirectory(for: recording.id)
+        let captureArtifacts = try await audioCaptureEngine.mergeCompletedSession(in: sessionDirectory)
+
+        var updatedRecording = recording
+        updatedRecording.assets.microphoneFile = captureArtifacts.microphoneFile ?? updatedRecording.assets.microphoneFile
+        updatedRecording.assets.systemAudioFile = captureArtifacts.systemAudioFile ?? updatedRecording.assets.systemAudioFile
+        updatedRecording.assets.connectorNotesFile = captureArtifacts.connectorNotesFile ?? updatedRecording.assets.connectorNotesFile
+
+        if let mergedCallFile = captureArtifacts.mergedCallFile,
+           isUsableAudioFile(sessionDirectory.appendingPathComponent(mergedCallFile)) {
+            updatedRecording.assets.mergedCallFile = mergedCallFile
+            if updatedRecording.lifecycleState != .failed {
+                updatedRecording.lifecycleState = .ready
+            }
+            if !isTranscriptFailureNote(updatedRecording.notes) {
+                updatedRecording.notes = captureArtifacts.note ?? "Offline merge completed."
+            }
+            try repository.save(updatedRecording)
+            return updatedRecording
+        }
+
+        updatedRecording.assets.mergedCallFile = nil
+        if updatedRecording.lifecycleState != .failed {
+            updatedRecording.lifecycleState = .ready
+        }
+        if !isTranscriptFailureNote(updatedRecording.notes) {
+            updatedRecording.notes = "Audio saved. Mixed playback unavailable."
+        }
+        try repository.save(updatedRecording)
+        return updatedRecording
     }
 
     func importAudio(
@@ -441,7 +473,22 @@ final class RecordingWorkflowController {
 
             let mergedM4A = sessionDirectory.appendingPathComponent("merged-call.m4a")
 
-            if FileManager.default.fileExists(atPath: mergedM4A.path) {
+            if FileManager.default.fileExists(atPath: mergedM4A.path),
+               !isUsableAudioFile(mergedM4A) {
+                try? FileManager.default.removeItem(at: mergedM4A)
+                recordings[index].assets.mergedCallFile = nil
+                if recordings[index].source == .liveCapture,
+                   recordings[index].lifecycleState != .failed,
+                   hasUsableChannelAudio(for: recordings[index], in: sessionDirectory),
+                   recordings[index].transcriptState == .idle {
+                    recordings[index].lifecycleState = .ready
+                }
+                try? repository.save(recordings[index])
+                continue
+            }
+
+            if FileManager.default.fileExists(atPath: mergedM4A.path),
+               isUsableAudioFile(mergedM4A) {
                 recordings[index].assets.mergedCallFile = "merged-call.m4a"
                 if recordings[index].lifecycleState != .failed {
                     recordings[index].lifecycleState = .ready
@@ -451,6 +498,13 @@ final class RecordingWorkflowController {
                 if !shouldPreserveTranscriptFailureNote {
                     recordings[index].notes = "Offline merge completed."
                 }
+                try? repository.save(recordings[index])
+            } else if recordings[index].source == .liveCapture,
+                      recordings[index].lifecycleState != .failed,
+                      hasUsableChannelAudio(for: recordings[index], in: sessionDirectory),
+                      recordings[index].transcriptState == .idle {
+                recordings[index].assets.mergedCallFile = nil
+                recordings[index].lifecycleState = .ready
                 try? repository.save(recordings[index])
             }
         }
@@ -575,30 +629,14 @@ final class RecordingWorkflowController {
         }
     }
 
-    private func ensureMergedPlaybackAudioReady(for recording: inout RecordingSession) throws {
-        guard recording.source == .liveCapture else {
-            return
-        }
-
-        let sessionDirectory = try repository.sessionDirectory(for: recording.id)
-        let mergedFileName = recording.assets.mergedCallFile ?? "merged-call.m4a"
-        let mergedURL = sessionDirectory.appendingPathComponent(mergedFileName)
-        guard FileManager.default.fileExists(atPath: mergedURL.path) else {
-            throw RecordingWorkflowError.missingMergedPlaybackAudio
-        }
-        recording.assets.mergedCallFile = mergedFileName
-    }
-
     private func shouldCleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) -> Bool {
         let mergedM4AURL = sessionDirectory.appendingPathComponent("merged-call.m4a")
-        return FileManager.default.fileExists(atPath: mergedM4AURL.path)
+        return isUsableAudioFile(mergedM4AURL)
     }
 
     private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) throws {
         let fileManager = FileManager.default
         for fileName in [
-            "mic.raw.caf",
-            "system.raw.caf",
             "mic.raw.flac",
             "system.raw.flac"
         ] {
@@ -625,6 +663,25 @@ final class RecordingWorkflowController {
         return SummaryInputs(transcript: nil, srtText: srtText)
     }
 
+    private func hasUsableChannelAudio(for recording: RecordingSession, in sessionDirectory: URL) -> Bool {
+        [recording.assets.microphoneFile, recording.assets.systemAudioFile]
+            .compactMap { $0 }
+            .contains { isUsableAudioFile(sessionDirectory.appendingPathComponent($0)) }
+    }
+
+    private func isUsableAudioFile(_ url: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size > 0 else {
+            return false
+        }
+
+        guard let file = try? AVAudioFile(forReading: url) else {
+            return false
+        }
+        return file.length > 0
+    }
+
     private func composeSummary(
         recording: RecordingSession,
         transcript: String?,
@@ -646,27 +703,11 @@ final class RecordingWorkflowController {
             return "- Недостаточно данных для автоматического резюме."
         }()
 
-        let topicsBullets: String = {
-            if !timeline.isEmpty {
-                return timeline.prefix(4).map { "- \($0.text)" }.joined(separator: "\n")
-            }
-            if !transcriptLines.isEmpty {
-                return transcriptLines.prefix(4).map { "- \($0)" }.joined(separator: "\n")
-            }
-            return "- Темы не определены."
-        }()
+        let topicsBullets = "- Темы и договоренности не выделены автоматически. Требуется ручная проверка."
 
         let decisionsBullets = "- Решения и договоренности не выделены автоматически. Требуется ручная проверка."
 
-        let actionItemsBullets: String = {
-            if !timeline.isEmpty {
-                return timeline.prefix(4).map { "- [Не указан] [Не указан] \($0.text)" }.joined(separator: "\n")
-            }
-            if !transcriptLines.isEmpty {
-                return transcriptLines.prefix(4).map { "- [Не указан] [Не указан] \($0)" }.joined(separator: "\n")
-            }
-            return "- [Не указан] [Не указан] Action items не найдены."
-        }()
+        let actionItemsBullets = "- [Не указан] [Не указан] Action items не выделены автоматически. Требуется ручная проверка."
 
         let risksBullets = "- Риски и открытые вопросы не определены автоматически. Требуется ручная проверка."
 

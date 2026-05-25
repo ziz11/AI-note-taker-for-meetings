@@ -12,6 +12,7 @@ enum InferenceBackend: String, Equatable, Sendable {
     case nativeCapture
     case cliDiarization
     case llamaCpp
+    case mlxLm
     case fluidAudio
     case disabled
 }

@@ -234,7 +234,7 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
 
     private func buildSourceAvailability(for recording: RecordingSession) -> [PlaybackState.SourceAvailability] {
         let sources: [PlaybackAudioSource] = [.microphone, .system, .mixed]
-        let existingFiles = existingFilesByName(for: recording)
+        let existingFiles = existingUsableFilesByName(for: recording)
 
         return sources.map { source in
             let fileName = recording.playbackFileName(for: source)
@@ -253,7 +253,7 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         }
     }
 
-    private func existingFilesByName(for recording: RecordingSession) -> Set<String> {
+    private func existingUsableFilesByName(for recording: RecordingSession) -> Set<String> {
         guard !previewMode else { return [] }
         guard let sessionDirectory = try? repository.sessionDirectory(for: recording.id),
               let urls = try? FileManager.default.contentsOfDirectory(
@@ -264,7 +264,18 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
             return []
         }
 
-        return Set(urls.map(\.lastPathComponent))
+        return Set(urls.filter(isUsableAudioFile(_:)).map(\.lastPathComponent))
+    }
+
+    private func isUsableAudioFile(_ url: URL) -> Bool {
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size > 0 else {
+            return false
+        }
+        guard let file = try? AVAudioFile(forReading: url) else {
+            return false
+        }
+        return file.length > 0
     }
 
     private func syncStateFromPlayer() {
