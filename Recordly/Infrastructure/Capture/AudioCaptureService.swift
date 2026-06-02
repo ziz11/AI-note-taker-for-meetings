@@ -19,6 +19,34 @@ struct CaptureArtifacts {
     var note: String?
 }
 
+enum CaptureArtifactValidator {
+    static func usableAudioFileName(_ fileName: String?, in sessionDirectory: URL) -> String? {
+        guard let fileName else { return nil }
+        let url = sessionDirectory.appendingPathComponent(fileName)
+        return isUsableAudioFile(url) ? fileName : nil
+    }
+
+    static func shouldReplaceDestination(at url: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return true
+        }
+        return !isUsableAudioFile(url)
+    }
+
+    static func isUsableAudioFile(_ url: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size > 0 else {
+            return false
+        }
+
+        guard let file = try? AVAudioFile(forReading: url) else {
+            return false
+        }
+        return file.length > 0
+    }
+}
+
 enum AudioCaptureError: LocalizedError {
     case microphonePermissionDenied
     case captureAlreadyRunning
@@ -422,6 +450,10 @@ actor PCMTrackWriter {
         )
     }
 
+    func recordDiagnostic(_ diagnostic: String) {
+        diagnostics.append(diagnostic)
+    }
+
     private func stage(_ buffer: AVAudioPCMBuffer) throws {
         let incoming = buffer.frameLength
         guard incoming > 0 else { return }
@@ -603,6 +635,11 @@ actor MirroredTrackWriter {
         }
         return stats
     }
+
+    func recordDiagnostic(_ diagnostic: String) async {
+        await temporary.recordDiagnostic(diagnostic)
+        await durable?.recordDiagnostic(diagnostic)
+    }
 }
 
 final class FallbackMicrophoneRecorder: NSObject, AVAudioRecorderDelegate {
@@ -771,7 +808,10 @@ final class AudioCaptureService: AudioCaptureEngine {
     private var microphoneLevelValue: Double = 0
     private var systemLevelValue: Double = 0
     private var systemStatusLabelValue = "Idle"
+    private var lastSystemSampleAt: Date?
+    private var systemAppendErrorCount = 0
     private let screenCaptureStartupTimeoutNanos: UInt64 = 2_000_000_000
+    private let systemAudioSilenceTimeout: TimeInterval = 3
 
     func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
         guard !isRunning else {
@@ -842,8 +882,13 @@ final class AudioCaptureService: AudioCaptureEngine {
                                     do {
                                         try await streamSysWriter.append(sampleBuffer: sampleBuffer)
                                         self.systemLevelValue = sampleBuffer.normalizedLevel
+                                        self.lastSystemSampleAt = Date()
+                                        self.systemAppendErrorCount = 0
+                                        self.systemStatusLabelValue = "Captured"
                                     } catch {
-                                        // Keep recording alive if one buffer fails to convert.
+                                        self.systemAppendErrorCount += 1
+                                        await streamSysWriter.recordDiagnostic("system append failed: \(error.localizedDescription)")
+                                        self.systemStatusLabelValue = "System write error"
                                     }
                                 }
                             },
@@ -861,7 +906,7 @@ final class AudioCaptureService: AudioCaptureEngine {
                         )
                     }
                     didStartStreamCapture = true
-                    systemStatusLabelValue = "Captured"
+                    systemStatusLabelValue = "Waiting for audio"
                 } catch {
                     streamStartError = error
                     systemStatusLabelValue = label(for: error)
@@ -876,6 +921,8 @@ final class AudioCaptureService: AudioCaptureEngine {
                 try? await screenCaptureService.stopCapture()
                 micWriter = nil
                 sysWriter = nil
+                removeInvalidFileIfPresent(microphoneDurableURL)
+                removeInvalidFileIfPresent(systemDurableURL)
                 try fallbackMicrophoneRecorder.startRecording(to: microphoneTemporaryURL)
                 if let streamStartError {
                     try await metadataStore.appendNote(
@@ -914,6 +961,8 @@ final class AudioCaptureService: AudioCaptureEngine {
             self.activeSessionID = nil
             self.microphoneFileName = nil
             self.systemAudioFileName = nil
+            self.lastSystemSampleAt = nil
+            self.systemAppendErrorCount = 0
             throw error
         }
     }
@@ -961,6 +1010,8 @@ final class AudioCaptureService: AudioCaptureEngine {
             microphoneLevelValue = 0
             systemLevelValue = 0
             systemStatusLabelValue = "Idle"
+            lastSystemSampleAt = nil
+            systemAppendErrorCount = 0
         }
 
         try await metadataStore.updateStatus(.finalizingTracks, in: sessionDirectory)
@@ -999,8 +1050,8 @@ final class AudioCaptureService: AudioCaptureEngine {
         try await metadataStore.updateStatus(.readyForMix, in: sessionDirectory)
 
         return CaptureArtifacts(
-            microphoneFile: microphoneFileName,
-            systemAudioFile: systemAudioFileName,
+            microphoneFile: CaptureArtifactValidator.usableAudioFileName(microphoneFileName, in: sessionDirectory),
+            systemAudioFile: CaptureArtifactValidator.usableAudioFileName(systemAudioFileName, in: sessionDirectory),
             mergedCallFile: nil,
             connectorNotesFile: "capture-session.json",
             note: "Audio saved. Mixed playback is being prepared."
@@ -1010,10 +1061,14 @@ final class AudioCaptureService: AudioCaptureEngine {
     func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
         let mergeResult = try await mergeService.mergeSession(in: sessionDirectory, exportM4A: true)
         return CaptureArtifacts(
-            microphoneFile: LiveCaptureArtifactNames.microphoneDurable,
-            systemAudioFile: FileManager.default.fileExists(
-                atPath: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable).path
-            ) ? LiveCaptureArtifactNames.systemDurable : nil,
+            microphoneFile: CaptureArtifactValidator.usableAudioFileName(
+                LiveCaptureArtifactNames.microphoneDurable,
+                in: sessionDirectory
+            ),
+            systemAudioFile: CaptureArtifactValidator.usableAudioFileName(
+                LiveCaptureArtifactNames.systemDurable,
+                in: sessionDirectory
+            ),
             mergedCallFile: mergeResult.mergedM4AFileName,
             connectorNotesFile: "capture-session.json",
             note: mergeResult.note
@@ -1024,9 +1079,10 @@ final class AudioCaptureService: AudioCaptureEngine {
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
             return
         }
-        guard !FileManager.default.fileExists(atPath: destinationURL.path) else {
+        guard CaptureArtifactValidator.shouldReplaceDestination(at: destinationURL) else {
             return
         }
+        removeInvalidFileIfPresent(destinationURL)
 
         let asset = AVURLAsset(url: sourceURL)
         guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
@@ -1034,6 +1090,18 @@ final class AudioCaptureService: AudioCaptureEngine {
         }
 
         try await exportSession.export(to: destinationURL, as: .m4a)
+        guard CaptureArtifactValidator.isUsableAudioFile(destinationURL) else {
+            removeInvalidFileIfPresent(destinationURL)
+            throw AudioCaptureError.invalidRecordedFile
+        }
+    }
+
+    private func removeInvalidFileIfPresent(_ url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path),
+              !CaptureArtifactValidator.isUsableAudioFile(url) else {
+            return
+        }
+        try? FileManager.default.removeItem(at: url)
     }
 
     func currentMicrophoneLevel() -> Double {
@@ -1041,11 +1109,31 @@ final class AudioCaptureService: AudioCaptureEngine {
     }
 
     func currentSystemAudioLevel() -> Double {
-        systemLevelValue
+        refreshSystemAudioHealth()
+        return systemLevelValue
     }
 
     var systemAudioStatusLabel: String {
-        systemStatusLabelValue
+        refreshSystemAudioHealth()
+        return systemStatusLabelValue
+    }
+
+    private func refreshSystemAudioHealth(now: Date = Date()) {
+        guard isRunning, systemWriter != nil else {
+            return
+        }
+        guard systemAppendErrorCount == 0 else {
+            systemLevelValue = 0
+            systemStatusLabelValue = "System write error"
+            return
+        }
+        guard let lastSystemSampleAt else {
+            return
+        }
+        if now.timeIntervalSince(lastSystemSampleAt) > systemAudioSilenceTimeout {
+            systemLevelValue = 0
+            systemStatusLabelValue = "System silent"
+        }
     }
 
     func recoverPendingSessions(in recordingsDirectory: URL) async {
@@ -1095,21 +1183,12 @@ final class AudioCaptureService: AudioCaptureEngine {
     }
 
     private static func hasUsableDurableTrack(in sessionDirectory: URL) -> Bool {
-        isUsableAudioFile(sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable))
-            || isUsableAudioFile(sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable))
+        CaptureArtifactValidator.isUsableAudioFile(sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable))
+            || CaptureArtifactValidator.isUsableAudioFile(sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable))
     }
 
     private static func isUsableAudioFile(_ url: URL) -> Bool {
-        guard FileManager.default.fileExists(atPath: url.path),
-              let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              size > 0 else {
-            return false
-        }
-
-        guard let file = try? AVAudioFile(forReading: url) else {
-            return false
-        }
-        return file.length > 0
+        CaptureArtifactValidator.isUsableAudioFile(url)
     }
 
 }

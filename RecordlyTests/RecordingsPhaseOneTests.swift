@@ -3,6 +3,39 @@ import XCTest
 
 @MainActor
 final class RecordingsPhaseOneTests: XCTestCase {
+    func testCaptureUsableAudioFileNameRejectsEmptyAudioFile() throws {
+        let directory = try makeSessionDirectory(named: "RecordlyEmptySystemAudio-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let emptyURL = directory.appendingPathComponent("system.m4a")
+        try Data().write(to: emptyURL)
+
+        XCTAssertNil(CaptureArtifactValidator.usableAudioFileName("system.m4a", in: directory))
+    }
+
+    func testCaptureExistingInvalidDestinationIsNotProtectedFromRewrite() throws {
+        let directory = try makeSessionDirectory(named: "RecordlyInvalidDurable-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let emptyURL = directory.appendingPathComponent("mic.m4a")
+        try Data().write(to: emptyURL)
+
+        XCTAssertTrue(CaptureArtifactValidator.shouldReplaceDestination(at: emptyURL))
+    }
+
+    func testCompletingCaptureClearsSystemAudioWhenFinalArtifactIsInvalid() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = SystemAudioLostOnStopCaptureEngine()
+        let store = makeStore(repository: repository, audioCaptureEngine: captureEngine)
+        store.viewState.autoTranscribeEnabled = false
+
+        await store.beginRecording()
+        let recordingID = try XCTUnwrap(store.viewState.runtime.activeRecordingID)
+        await store.endRecording()
+
+        let saved = try XCTUnwrap(repository.recordings.first(where: { $0.id == recordingID }))
+        XCTAssertEqual(saved.assets.microphoneFile, "mic.m4a")
+        XCTAssertNil(saved.assets.systemAudioFile)
+    }
+
     func testSearchMatchesTitleSummaryAndTranscriptCaseInsensitively() {
         let titleMatch = makeRecording(title: "Design Review")
         let summaryMatch = makeRecording(title: "Call with Alex")
@@ -306,6 +339,45 @@ final class RecordingsPhaseOneTests: XCTestCase {
 
         func finishMerge() {
             shouldBlockMerge = false
+        }
+
+        func currentMicrophoneLevel() -> Double { 0 }
+        func currentSystemAudioLevel() -> Double { 0 }
+        func recoverPendingSessions(in recordingsDirectory: URL) async {}
+    }
+
+    @MainActor
+    private final class SystemAudioLostOnStopCaptureEngine: AudioCaptureEngine {
+        var systemAudioStatusLabel: String { "System silent" }
+
+        func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            CaptureArtifacts(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a",
+                mergedCallFile: nil,
+                connectorNotesFile: "capture-session.json",
+                note: "Recording."
+            )
+        }
+
+        func stopCapture() async throws -> CaptureArtifacts {
+            CaptureArtifacts(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: nil,
+                mergedCallFile: nil,
+                connectorNotesFile: "capture-session.json",
+                note: "Audio saved. System audio was not captured."
+            )
+        }
+
+        func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            CaptureArtifacts(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: nil,
+                mergedCallFile: nil,
+                connectorNotesFile: "capture-session.json",
+                note: "Mixed playback unavailable."
+            )
         }
 
         func currentMicrophoneLevel() -> Double { 0 }

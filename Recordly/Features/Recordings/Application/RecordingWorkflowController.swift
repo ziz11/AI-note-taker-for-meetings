@@ -167,8 +167,8 @@ final class RecordingWorkflowController {
         updatedRecording.duration = duration
         updatedRecording.lifecycleState = runTranscription ? .processing : .ready
         updatedRecording.transcriptState = runTranscription ? .queued : .idle
-        updatedRecording.assets.microphoneFile = captureArtifacts.microphoneFile ?? updatedRecording.assets.microphoneFile
-        updatedRecording.assets.systemAudioFile = captureArtifacts.systemAudioFile ?? updatedRecording.assets.systemAudioFile
+        updatedRecording.assets.microphoneFile = captureArtifacts.microphoneFile
+        updatedRecording.assets.systemAudioFile = captureArtifacts.systemAudioFile
         updatedRecording.assets.mergedCallFile = captureArtifacts.mergedCallFile
         updatedRecording.assets.connectorNotesFile = captureArtifacts.connectorNotesFile ?? updatedRecording.assets.connectorNotesFile
         updatedRecording.notes = runTranscription ? "Audio saved. Preparing transcript." : "Audio saved."
