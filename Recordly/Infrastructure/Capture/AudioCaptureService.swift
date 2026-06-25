@@ -58,6 +58,7 @@ enum AudioCaptureError: LocalizedError {
     case systemAudioPermissionDenied
     case systemAudioFailedToStart
     case systemAudioStartupTimeout
+    case captureFinalizationTimedOut
     case invalidSystemAudioFile
     case mixdownFailed
     case noScreenToCapture
@@ -84,6 +85,8 @@ enum AudioCaptureError: LocalizedError {
             return "The system audio recorder could not start."
         case .systemAudioStartupTimeout:
             return "System audio capture did not start in time."
+        case .captureFinalizationTimedOut:
+            return "Capture finalization timed out."
         case .invalidSystemAudioFile:
             return "The system audio file was created, but the audio data is invalid or unreadable."
         case .mixdownFailed:

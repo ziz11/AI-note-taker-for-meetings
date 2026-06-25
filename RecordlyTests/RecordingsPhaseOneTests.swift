@@ -202,6 +202,28 @@ final class RecordingsPhaseOneTests: XCTestCase {
         captureEngine.finishMerge()
     }
 
+    func testStopCaptureTimeoutClearsRecordingRuntimeState() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = HangingStopCaptureEngine()
+        let store = makeStore(
+            repository: repository,
+            audioCaptureEngine: captureEngine,
+            captureFinalizationTimeoutNanoseconds: 20_000_000
+        )
+        store.viewState.autoTranscribeEnabled = false
+
+        await store.beginRecording()
+        let recordingID = try XCTUnwrap(store.viewState.runtime.activeRecordingID)
+
+        await store.endRecording()
+
+        XCTAssertFalse(store.viewState.runtime.isRecording)
+        XCTAssertFalse(store.viewState.runtime.isCaptureTransitionInFlight)
+        let saved = try XCTUnwrap(repository.recordings.first(where: { $0.id == recordingID }))
+        XCTAssertEqual(saved.lifecycleState, .failed)
+        XCTAssertTrue(saved.notes.contains("Capture finalization failed"))
+    }
+
     private func makeStore(repository: InMemoryRecordingsRepository) -> RecordingsStore {
         let modelManager = ModelManager()
         let fluidProvider = FluidAudioASRModelProvider()
@@ -225,7 +247,8 @@ final class RecordingsPhaseOneTests: XCTestCase {
 
     private func makeStore(
         repository: InMemoryRecordingsRepository,
-        audioCaptureEngine: any AudioCaptureEngine
+        audioCaptureEngine: any AudioCaptureEngine,
+        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000
     ) -> RecordingsStore {
         let modelManager = ModelManager()
         let fluidProvider = FluidAudioASRModelProvider()
@@ -243,7 +266,8 @@ final class RecordingsPhaseOneTests: XCTestCase {
             transcriptionEngineDisplayName: composition.transcriptionEngineDisplayName,
             modelManager: modelManager,
             fluidProvider: fluidProvider,
-            diarizationProvider: diarizationProvider
+            diarizationProvider: diarizationProvider,
+            captureFinalizationTimeoutNanoseconds: captureFinalizationTimeoutNanoseconds
         )
     }
 
@@ -255,7 +279,8 @@ final class RecordingsPhaseOneTests: XCTestCase {
         transcriptionEngineDisplayName: String,
         modelManager: ModelManager,
         fluidProvider: any FluidAudioASRModelProviding,
-        diarizationProvider: any FluidAudioDiarizationModelProviding
+        diarizationProvider: any FluidAudioDiarizationModelProviding,
+        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000
     ) -> RecordingsStore {
         return RecordingsStore(
             audioCaptureEngine: audioCaptureEngine,
@@ -267,7 +292,8 @@ final class RecordingsPhaseOneTests: XCTestCase {
             fluidAudioModelProvider: fluidProvider,
             fluidAudioDiarizationModelProvider: diarizationProvider,
             repository: repository,
-            previewMode: false
+            previewMode: false,
+            captureFinalizationTimeoutNanoseconds: captureFinalizationTimeoutNanoseconds
         )
     }
 
@@ -378,6 +404,36 @@ final class RecordingsPhaseOneTests: XCTestCase {
                 connectorNotesFile: "capture-session.json",
                 note: "Mixed playback unavailable."
             )
+        }
+
+        func currentMicrophoneLevel() -> Double { 0 }
+        func currentSystemAudioLevel() -> Double { 0 }
+        func recoverPendingSessions(in recordingsDirectory: URL) async {}
+    }
+
+    @MainActor
+    private final class HangingStopCaptureEngine: AudioCaptureEngine {
+        var systemAudioStatusLabel: String { "Captured" }
+
+        func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            CaptureArtifacts(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: nil,
+                mergedCallFile: nil,
+                connectorNotesFile: "capture-session.json",
+                note: "Recording."
+            )
+        }
+
+        func stopCapture() async throws -> CaptureArtifacts {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            throw CancellationError()
+        }
+
+        func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            CaptureArtifacts()
         }
 
         func currentMicrophoneLevel() -> Double { 0 }

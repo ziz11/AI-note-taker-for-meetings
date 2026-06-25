@@ -51,6 +51,7 @@ final class RecordingWorkflowController {
     private let inferenceEngineFactory: any InferenceEngineFactory
     private let repository: RecordingsPersistence
     private let summarizationTimeoutSeconds: UInt64
+    private let captureFinalizationTimeoutNanoseconds: UInt64
     var selectedModelProfile: ModelProfile
 
     init(
@@ -60,7 +61,8 @@ final class RecordingWorkflowController {
         inferenceEngineFactory: any InferenceEngineFactory,
         repository: RecordingsPersistence,
         selectedModelProfile: ModelProfile = .balanced,
-        summarizationTimeoutSeconds: UInt64 = 180
+        summarizationTimeoutSeconds: UInt64 = 180,
+        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000
     ) {
         self.audioCaptureEngine = audioCaptureEngine
         self.transcriptionPipeline = transcriptionPipeline
@@ -69,6 +71,7 @@ final class RecordingWorkflowController {
         self.repository = repository
         self.selectedModelProfile = selectedModelProfile
         self.summarizationTimeoutSeconds = max(1, summarizationTimeoutSeconds)
+        self.captureFinalizationTimeoutNanoseconds = max(1, captureFinalizationTimeoutNanoseconds)
     }
 
     var currentSystemAudioStatusLabel: String {
@@ -147,7 +150,7 @@ final class RecordingWorkflowController {
     ) async throws -> RecordingCompletionResult {
         let captureArtifacts: CaptureArtifacts
         do {
-            captureArtifacts = try await audioCaptureEngine.stopCapture()
+            captureArtifacts = try await stopCaptureWithTimeout()
         } catch {
             var failedRecording = recording
             failedRecording.duration = duration
@@ -210,6 +213,33 @@ final class RecordingWorkflowController {
             systemAudioLabel: captureArtifacts.systemAudioFile != nil ? "Captured" : audioCaptureEngine.systemAudioStatusLabel,
             processingError: processingError
         )
+    }
+
+    private func stopCaptureWithTimeout() async throws -> CaptureArtifacts {
+        let stopTask = Task { @MainActor [audioCaptureEngine] in
+            try await audioCaptureEngine.stopCapture()
+        }
+        defer {
+            stopTask.cancel()
+        }
+
+        return try await withThrowingTaskGroup(of: CaptureArtifacts.self) { group in
+            group.addTask {
+                try await stopTask.value
+            }
+            group.addTask { [captureFinalizationTimeoutNanoseconds] in
+                try await Task.sleep(nanoseconds: captureFinalizationTimeoutNanoseconds)
+                stopTask.cancel()
+                throw AudioCaptureError.captureFinalizationTimedOut
+            }
+
+            guard let result = try await group.next() else {
+                throw AudioCaptureError.captureFinalizationTimedOut
+            }
+
+            group.cancelAll()
+            return result
+        }
     }
 
     func mergeCompletedSession(for recording: RecordingSession) async throws -> RecordingSession {

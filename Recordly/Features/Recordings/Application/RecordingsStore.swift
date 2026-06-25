@@ -62,7 +62,8 @@ final class RecordingsStore: ObservableObject {
         fluidAudioModelProvider: any FluidAudioASRModelProviding,
         fluidAudioDiarizationModelProvider: any FluidAudioDiarizationModelProviding,
         repository: RecordingsPersistence = RecordingsRepository(),
-        previewMode: Bool = false
+        previewMode: Bool = false,
+        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000
     ) {
         self.previewMode = previewMode
         self.modelManager = modelManager
@@ -81,7 +82,8 @@ final class RecordingsStore: ObservableObject {
             runtimeProfileSelector: runtimeProfileSelector,
             inferenceEngineFactory: inferenceEngineFactory,
             repository: repository,
-            selectedModelProfile: initialViewState.selectedModelProfile
+            selectedModelProfile: initialViewState.selectedModelProfile,
+            captureFinalizationTimeoutNanoseconds: captureFinalizationTimeoutNanoseconds
         )
         self.playbackController = PlaybackController(repository: repository, previewMode: previewMode)
         self.playbackController.onStateChange = { [weak self] state in
