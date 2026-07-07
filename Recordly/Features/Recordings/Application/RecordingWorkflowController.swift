@@ -724,16 +724,7 @@ final class RecordingWorkflowController {
     }
 
     private func isUsableAudioFile(_ url: URL) -> Bool {
-        guard FileManager.default.fileExists(atPath: url.path),
-              let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              size > 0 else {
-            return false
-        }
-
-        guard let file = try? AVAudioFile(forReading: url) else {
-            return false
-        }
-        return file.length > 0
+        AudioFileProbe.isReadable(url, caller: "RecordingWorkflowController")
     }
 
     private func composeSummary(

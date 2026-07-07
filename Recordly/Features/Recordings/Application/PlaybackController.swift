@@ -1,5 +1,10 @@
 import AVFoundation
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 @MainActor
 final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate {
@@ -10,6 +15,7 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
     private var preferredSourceByRecordingID: [UUID: PlaybackAudioSource] = [:]
     private var playbackRate: Float = 1
     private var usableFilesCache: (key: String, files: Set<String>)?
+    private var foregroundObserver: NSObjectProtocol?
 
     private(set) var state = PlaybackState() {
         didSet {
@@ -23,6 +29,30 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         self.repository = repository
         self.previewMode = previewMode
         super.init()
+
+        // Diagnostics: log bundle identity to catch accidental relaunch into a different target
+        let bundleID = Bundle.main.bundleIdentifier ?? "<nil>"
+        let bundlePath = Bundle.main.bundlePath
+        print("[PlaybackController] Launched with bundle: \(bundleID) at \(bundlePath)")
+
+        // When returning from Settings or background, resync playback state without forcing a restart
+        #if canImport(UIKit)
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.syncStateFromPlayer()
+        }
+        #elseif canImport(AppKit)
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.syncStateFromPlayer()
+        }
+        #endif
     }
 
     func syncSelection(_ recording: RecordingSession?) {
@@ -132,6 +162,9 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
     }
 
     deinit {
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
+        }
         playbackTimer?.invalidate()
     }
 
@@ -295,14 +328,7 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
     }
 
     private func isUsableAudioFile(_ url: URL) -> Bool {
-        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              size > 0 else {
-            return false
-        }
-        guard let file = try? AVAudioFile(forReading: url) else {
-            return false
-        }
-        return file.length > 0
+        AudioFileProbe.isReadable(url, caller: "PlaybackController")
     }
 
     private func syncStateFromPlayer() {
@@ -327,3 +353,4 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         playbackTimer = nil
     }
 }
+
