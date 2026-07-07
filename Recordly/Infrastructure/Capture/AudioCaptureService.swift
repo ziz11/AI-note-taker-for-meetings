@@ -757,6 +757,7 @@ final class ScreenCaptureAudioService: NSObject {
     private var stream: SCStream?
     private let router = OutputRouter()
     private let sampleQueue = DispatchQueue(label: "Recordly.ScreenCaptureSamples", qos: .userInitiated)
+    private let screenDiscardQueue = DispatchQueue(label: "Recordly.ScreenCaptureDiscard", qos: .utility)
     private(set) var microphoneViaStreamEnabled = false
 
     func startCapture(
@@ -789,6 +790,12 @@ final class ScreenCaptureAudioService: NSObject {
         router.onMicrophoneSample = onMicrophoneSample
 
         try stream.addStreamOutput(router, type: .audio, sampleHandlerQueue: sampleQueue)
+
+        // SCK still produces a video stream for a display filter even when we only
+        // want audio. Register a screen output (frames are discarded in the router)
+        // so its queue has a consumer — otherwise every frame logs
+        // "stream output NOT found. Dropping frame".
+        try? stream.addStreamOutput(router, type: .screen, sampleHandlerQueue: screenDiscardQueue)
 
         do {
             try stream.addStreamOutput(router, type: .microphone, sampleHandlerQueue: sampleQueue)
