@@ -183,4 +183,28 @@ final class RecordingSessionCompatibilityTests: XCTestCase {
         XCTAssertTrue(AdaptiveLayoutMetrics.isSidebarNarrow(259))
         XCTAssertFalse(AdaptiveLayoutMetrics.isSidebarNarrow(260))
     }
+
+    func testDefaultTitleUsesDateTimeAndFourDigitHash() {
+        let id = UUID(uuidString: "A3F91234-0000-0000-0000-000000000000")!
+        var components = DateComponents()
+        components.year = 2026
+        components.month = 7
+        components.day = 8
+        components.hour = 14
+        components.minute = 32
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone.current
+        let date = calendar.date(from: components)!
+
+        let title = RecordingSession.defaultTitle(createdAt: date, id: id)
+
+        XCTAssertEqual(title, "2026-07-08 14:32 · A3F9")
+    }
+
+    func testDraftTitleMatchesDefaultTitleFormat() {
+        let draft = RecordingSession.draft(index: 1)
+        let expected = RecordingSession.defaultTitle(createdAt: draft.createdAt, id: draft.id)
+        XCTAssertEqual(draft.title, expected)
+        XCTAssertTrue(draft.title.contains(" · "))
+    }
 }
