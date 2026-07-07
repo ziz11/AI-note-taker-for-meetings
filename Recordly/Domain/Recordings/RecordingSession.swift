@@ -217,12 +217,10 @@ struct RecordingSession: Identifiable, Codable, Hashable {
     }
 
     static func draft(index: Int) -> RecordingSession {
-        let id = UUID()
-        let createdAt = Date()
-        return RecordingSession(
-            id: id,
-            title: defaultTitle(createdAt: createdAt, id: id),
-            createdAt: createdAt,
+        RecordingSession(
+            id: UUID(),
+            title: "New Recording \(index)",
+            createdAt: Date(),
             duration: 0,
             lifecycleState: .recording,
             transcriptState: .idle,
@@ -230,18 +228,6 @@ struct RecordingSession: Identifiable, Codable, Hashable {
             notes: "Recording in progress.",
             assets: RecordingAssets()
         )
-    }
-
-    /// Default recording name: date + time + a short hash from the session id,
-    /// e.g. "2026-07-08 14:32 · A3F9". The hash disambiguates recordings made
-    /// in the same minute while keeping names human-readable and sortable.
-    static func defaultTitle(createdAt: Date, id: UUID) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        let timestamp = formatter.string(from: createdAt)
-        let hash = String(id.uuidString.prefix(4)).uppercased()
-        return "\(timestamp) · \(hash)"
     }
 
     init(from decoder: Decoder) throws {
