@@ -30,6 +30,8 @@
 		6C21B2A77926FB977C286632 /* TranscriptionPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */; };
 		CA0000012F10000000000001 /* DirectPCMMixServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000022F10000000000001 /* DirectPCMMixServiceTests.swift */; };
 		CA0000032F10000000000001 /* SessionMergeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000042F10000000000001 /* SessionMergeServiceTests.swift */; };
+		CA0000052F10000000000001 /* CaptureSamplePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000062F10000000000001 /* CaptureSamplePipeline.swift */; };
+		CA0000072F10000000000001 /* CaptureSamplePipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000082F10000000000001 /* CaptureSamplePipelineTests.swift */; };
 		8754BE5E6A83DDC122A462CC /* ASRDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE471CED942092CB3514DA68 /* ASRDocument.swift */; };
 		8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */; };
 		FA3000092F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA30000A2F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift */; };
@@ -180,6 +182,8 @@
 		F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TranscriptionPipelineTests.swift; path = TranscriptionPipelineTests.swift; sourceTree = "<group>"; };
 		CA0000022F10000000000001 /* DirectPCMMixServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DirectPCMMixServiceTests.swift; path = DirectPCMMixServiceTests.swift; sourceTree = "<group>"; };
 		CA0000042F10000000000001 /* SessionMergeServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SessionMergeServiceTests.swift; path = SessionMergeServiceTests.swift; sourceTree = "<group>"; };
+		CA0000062F10000000000001 /* CaptureSamplePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSamplePipeline.swift; sourceTree = "<group>"; };
+		CA0000082F10000000000001 /* CaptureSamplePipelineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CaptureSamplePipelineTests.swift; path = CaptureSamplePipelineTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -222,6 +226,7 @@
 				FA5000022F0E000000000001 /* ModelSettingsViewModelTests.swift */,
 				CA0000022F10000000000001 /* DirectPCMMixServiceTests.swift */,
 				CA0000042F10000000000001 /* SessionMergeServiceTests.swift */,
+				CA0000082F10000000000001 /* CaptureSamplePipelineTests.swift */,
 			);
 			name = RecordlyTests;
 			path = RecordlyTests;
@@ -424,6 +429,7 @@
 				9C41A2242D82A10000A13B02 /* AudioCaptureService.swift */,
 				CAB301002EBC1D6F00000001 /* SessionMergeService.swift */,
 				CAB301022EBC1D6F00000001 /* DirectPCMMixService.swift */,
+				CA0000062F10000000000001 /* CaptureSamplePipeline.swift */,
 			);
 			path = Capture;
 			sourceTree = "<group>";
@@ -595,6 +601,7 @@
 				FA5000012F0E000000000001 /* ModelSettingsViewModelTests.swift in Sources */,
 				CA0000012F10000000000001 /* DirectPCMMixServiceTests.swift in Sources */,
 				CA0000032F10000000000001 /* SessionMergeServiceTests.swift in Sources */,
+				CA0000072F10000000000001 /* CaptureSamplePipelineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -620,6 +627,7 @@
 				9C41A24B2D82A10000A13B02 /* EmptyRecordingView.swift in Sources */,
 				CAB301012EBC1D6F00000001 /* SessionMergeService.swift in Sources */,
 				CAB301032EBC1D6F00000001 /* DirectPCMMixService.swift in Sources */,
+				CA0000052F10000000000001 /* CaptureSamplePipeline.swift in Sources */,
 				8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */,
 				FA3000092F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift in Sources */,
 				FA3000012F0C000000000001 /* FluidAudioSessionAudioLoader.swift in Sources */,
