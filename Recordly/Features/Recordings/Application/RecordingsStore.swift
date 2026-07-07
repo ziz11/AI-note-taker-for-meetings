@@ -46,6 +46,7 @@ final class RecordingsStore: ObservableObject {
     private let modelSettingsViewModel: ModelSettingsViewModel
     private var meterTimer: Timer?
     private var lastPublishedRecordingSecond = -1
+    private var shareableURLCache: (key: String, url: URL?)?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var summarizationTasks: [UUID: Task<Void, Never>] = [:]
     private var playbackMixTasks: [UUID: Task<Void, Never>] = [:]
@@ -643,7 +644,30 @@ final class RecordingsStore: ObservableObject {
     }
 
     func shareableAudioURL(for recording: RecordingSession) -> URL? {
-        try? workflow.playableAudioURL(for: recording)
+        // Called from view bodies on every render — memoize so re-renders don't
+        // redo file I/O (opening a mid-write m4a also spams CoreAudio errors).
+        let key = [
+            recording.id.uuidString,
+            recording.assets.importedAudioFile ?? "-",
+            recording.assets.mergedCallFile ?? "-",
+            recording.assets.microphoneFile ?? "-",
+            recording.assets.systemAudioFile ?? "-",
+            String(describing: recording.lifecycleState)
+        ].joined(separator: "|")
+
+        if let shareableURLCache, shareableURLCache.key == key {
+            return shareableURLCache.url
+        }
+
+        // While this recording is actively capturing, its files are mid-write and
+        // unreadable — don't probe them; sharing becomes available after stop.
+        if viewState.runtime.isRecording, viewState.runtime.activeRecordingID == recording.id {
+            return nil
+        }
+
+        let url = try? workflow.playableAudioURL(for: recording)
+        shareableURLCache = (key, url)
+        return url
     }
 
     func deleteSelectedRecording() {
@@ -842,22 +866,34 @@ final class RecordingsStore: ObservableObject {
                     return
                 }
 
+                // Publish only actual changes: every @Published write re-renders the
+                // whole view tree, so unchanged levels/durations must not publish.
                 if let recordingStartedAt = self.viewState.runtime.recordingStartedAt {
                     let duration = Date().timeIntervalSince(recordingStartedAt)
                     let currentSecond = Int(duration.rounded(.down))
-                    self.viewState.runtime.activeDuration = duration
 
-                    if currentSecond != self.lastPublishedRecordingSecond,
-                       let activeRecordingID = self.viewState.runtime.activeRecordingID,
-                       let index = self.recordings.firstIndex(where: { $0.id == activeRecordingID }) {
-                        self.recordings[index].duration = duration
+                    if currentSecond != self.lastPublishedRecordingSecond {
+                        self.viewState.runtime.activeDuration = duration
+                        if let activeRecordingID = self.viewState.runtime.activeRecordingID,
+                           let index = self.recordings.firstIndex(where: { $0.id == activeRecordingID }) {
+                            self.recordings[index].duration = duration
+                        }
                         self.lastPublishedRecordingSecond = currentSecond
                     }
                 }
 
-                self.viewState.runtime.meterLevels.microphoneLevel = self.workflow.microphoneLevel()
-                self.viewState.runtime.meterLevels.systemAudioLevel = self.workflow.systemAudioLevel()
-                self.viewState.runtime.meterLevels.systemAudioLabel = self.workflow.currentSystemAudioStatusLabel
+                let microphoneLevel = (self.workflow.microphoneLevel() * 100).rounded() / 100
+                let systemAudioLevel = (self.workflow.systemAudioLevel() * 100).rounded() / 100
+                let systemAudioLabel = self.workflow.currentSystemAudioStatusLabel
+                if self.viewState.runtime.meterLevels.microphoneLevel != microphoneLevel {
+                    self.viewState.runtime.meterLevels.microphoneLevel = microphoneLevel
+                }
+                if self.viewState.runtime.meterLevels.systemAudioLevel != systemAudioLevel {
+                    self.viewState.runtime.meterLevels.systemAudioLevel = systemAudioLevel
+                }
+                if self.viewState.runtime.meterLevels.systemAudioLabel != systemAudioLabel {
+                    self.viewState.runtime.meterLevels.systemAudioLabel = systemAudioLabel
+                }
             }
         }
     }
