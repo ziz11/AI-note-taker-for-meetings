@@ -1,3 +1,4 @@
+import Accelerate
 import AppKit
 @preconcurrency import AVFoundation
 import Foundation
@@ -771,6 +772,13 @@ final class ScreenCaptureAudioService: NSObject {
         config.sampleRate = Int(PCMTrackWriter.canonicalSampleRate)
         config.channelCount = Int(PCMTrackWriter.canonicalChannels)
         config.queueDepth = 8
+        // Audio-only capture: keep the video leg of the stream as cheap as possible.
+        // Without this, SCK captures full-res frames at display refresh rate and
+        // drops each one with a "stream output NOT found" error.
+        config.width = 2
+        config.height = 2
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+        config.showsCursor = false
 
         let stream = SCStream(filter: filter, configuration: config, delegate: nil)
         router.onSystemSample = onSystemSample
@@ -823,6 +831,8 @@ final class AudioCaptureService: AudioCaptureEngine {
     private var systemStatusLabelValue = "Idle"
     private var lastSystemSampleAt: Date?
     private var systemAppendErrorCount = 0
+    private var systemSamplePipeline: CaptureSamplePipeline<CMSampleBuffer>?
+    private var microphoneSamplePipeline: CaptureSamplePipeline<CMSampleBuffer>?
     private let screenCaptureStartupTimeoutNanos: UInt64 = 2_000_000_000
     private let systemAudioSilenceTimeout: TimeInterval = 3
 
@@ -886,35 +896,53 @@ final class AudioCaptureService: AudioCaptureEngine {
                 micWriter = streamMicWriter
                 sysWriter = streamSysWriter
                 systemCaptureAttempted = true
+                // Buffers flow through single-consumer pipelines off the main actor;
+                // UI/metering state hops back to MainActor at most every 100 ms.
+                let systemMeter = MeteringThrottle()
+                let systemPipeline = CaptureSamplePipeline<CMSampleBuffer>(bufferLimit: 64) { [weak self] sampleBuffer in
+                    do {
+                        try await streamSysWriter.append(sampleBuffer: sampleBuffer)
+                        guard let self, systemMeter.due() else { return }
+                        let level = sampleBuffer.normalizedLevel
+                        await MainActor.run {
+                            self.systemLevelValue = level
+                            self.lastSystemSampleAt = Date()
+                            self.systemAppendErrorCount = 0
+                            self.systemStatusLabelValue = "Captured"
+                        }
+                    } catch {
+                        await streamSysWriter.recordDiagnostic("system append failed: \(error.localizedDescription)")
+                        guard let self else { return }
+                        await MainActor.run {
+                            self.systemAppendErrorCount += 1
+                            self.systemStatusLabelValue = "System write error"
+                        }
+                    }
+                }
+                let microphoneMeter = MeteringThrottle()
+                let microphonePipeline = CaptureSamplePipeline<CMSampleBuffer>(bufferLimit: 64) { [weak self] sampleBuffer in
+                    do {
+                        try await streamMicWriter.append(sampleBuffer: sampleBuffer)
+                        guard let self, microphoneMeter.due() else { return }
+                        let level = sampleBuffer.normalizedLevel
+                        await MainActor.run {
+                            self.microphoneLevelValue = level
+                        }
+                    } catch {
+                        // Keep recording alive if one buffer fails to convert.
+                    }
+                }
+                self.systemSamplePipeline = systemPipeline
+                self.microphoneSamplePipeline = microphonePipeline
+
                 do {
                     try await withStartupTimeout { [self] in
                         try await self.screenCaptureService.startCapture(
-                            onSystemSample: { [weak self] sampleBuffer in
-                                guard let self else { return }
-                                Task {
-                                    do {
-                                        try await streamSysWriter.append(sampleBuffer: sampleBuffer)
-                                        self.systemLevelValue = sampleBuffer.normalizedLevel
-                                        self.lastSystemSampleAt = Date()
-                                        self.systemAppendErrorCount = 0
-                                        self.systemStatusLabelValue = "Captured"
-                                    } catch {
-                                        self.systemAppendErrorCount += 1
-                                        await streamSysWriter.recordDiagnostic("system append failed: \(error.localizedDescription)")
-                                        self.systemStatusLabelValue = "System write error"
-                                    }
-                                }
+                            onSystemSample: { sampleBuffer in
+                                systemPipeline.submit(sampleBuffer)
                             },
-                            onMicrophoneSample: { [weak self] sampleBuffer in
-                                guard let self else { return }
-                                Task {
-                                    do {
-                                        try await streamMicWriter.append(sampleBuffer: sampleBuffer)
-                                        self.microphoneLevelValue = sampleBuffer.normalizedLevel
-                                    } catch {
-                                        // Keep recording alive if one buffer fails to convert.
-                                    }
-                                }
+                            onMicrophoneSample: { sampleBuffer in
+                                microphonePipeline.submit(sampleBuffer)
                             }
                         )
                     }
@@ -968,6 +996,10 @@ final class AudioCaptureService: AudioCaptureEngine {
                     : "Recording microphone only. System capture permissions are unavailable."
             )
         } catch {
+            await self.systemSamplePipeline?.finish()
+            await self.microphoneSamplePipeline?.finish()
+            self.systemSamplePipeline = nil
+            self.microphoneSamplePipeline = nil
             self.microphoneWriter = nil
             self.systemWriter = nil
             self.activeSessionDirectory = nil
@@ -1018,6 +1050,8 @@ final class AudioCaptureService: AudioCaptureEngine {
             isRunning = false
             microphoneWriter = nil
             systemWriter = nil
+            systemSamplePipeline = nil
+            microphoneSamplePipeline = nil
             activeSessionDirectory = nil
             activeSessionID = nil
             microphoneLevelValue = 0
@@ -1038,6 +1072,22 @@ final class AudioCaptureService: AudioCaptureEngine {
             )
         }
         try? await fallbackMicrophoneRecorder.stopRecording()
+
+        // Drain buffered samples before finalizing so tail audio isn't lost.
+        await systemSamplePipeline?.finish()
+        await microphoneSamplePipeline?.finish()
+        if let systemSamplePipeline, systemSamplePipeline.droppedCount > 0 {
+            try? await metadataStore.appendNote(
+                "system pipeline dropped \(systemSamplePipeline.droppedCount) buffers",
+                in: sessionDirectory
+            )
+        }
+        if let microphoneSamplePipeline, microphoneSamplePipeline.droppedCount > 0 {
+            try? await metadataStore.appendNote(
+                "microphone pipeline dropped \(microphoneSamplePipeline.droppedCount) buffers",
+                in: sessionDirectory
+            )
+        }
 
         if let microphoneWriter,
            let micStats = await microphoneWriter.finalize().first {
@@ -1254,11 +1304,11 @@ private extension CMSampleBuffer {
         var peak: Float = 0
 
         for buffer in audioBuffers {
-            let frameCount = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size / channels
-            guard let data = buffer.mData?.assumingMemoryBound(to: Float.self), frameCount > 0 else { continue }
-            for index in 0..<(frameCount * channels) {
-                peak = max(peak, abs(data[index]))
-            }
+            let sampleCountInBuffer = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            guard let data = buffer.mData?.assumingMemoryBound(to: Float.self), sampleCountInBuffer > 0 else { continue }
+            var bufferPeak: Float = 0
+            vDSP_maxmgv(data, 1, &bufferPeak, vDSP_Length(sampleCountInBuffer))
+            peak = max(peak, bufferPeak)
         }
 
         return min(Double(peak), 1)
