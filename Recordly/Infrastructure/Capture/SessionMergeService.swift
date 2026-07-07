@@ -1,7 +1,9 @@
 @preconcurrency import AVFoundation
 import Foundation
+import os.signpost
 
 actor SessionMergeService {
+    private static let signposter = OSSignposter(subsystem: "com.recordly.capture", category: "merge")
     struct Result {
         let mergedM4AFileName: String?
         let note: String
@@ -24,6 +26,9 @@ actor SessionMergeService {
     }
 
     func mergeSession(in sessionDirectory: URL) async throws -> Result {
+        let signpostState = Self.signposter.beginInterval("merge.session")
+        defer { Self.signposter.endInterval("merge.session", signpostState) }
+
         var metadata = try await metadataStore.load(in: sessionDirectory)
         metadata.status = .mixing
         try await save(metadata, in: sessionDirectory)

@@ -3,6 +3,7 @@ import AppKit
 @preconcurrency import AVFoundation
 import Foundation
 import ApplicationServices
+import os.signpost
 import ScreenCaptureKit
 
 private enum LiveCaptureArtifactNames {
@@ -341,6 +342,7 @@ actor PCMTrackWriter {
     static let canonicalSampleRate: Double = 48_000
     static let canonicalChannels: AVAudioChannelCount = 1
     static let durableAACBitRate = 96_000
+    private static let signposter = OSSignposter(subsystem: "com.recordly.capture", category: "writer")
 
     let kind: TrackKind
     let fileName: String
@@ -510,6 +512,8 @@ actor PCMTrackWriter {
 
     private func flushStagingBufferThrowing() throws {
         guard let staging = stagingBuffer, stagedFrames > 0 else { return }
+        let signpostState = Self.signposter.beginInterval("capture.flush")
+        defer { Self.signposter.endInterval("capture.flush", signpostState) }
         staging.frameLength = stagedFrames
         try audioFile.write(from: staging)
         framesWritten += Int64(stagedFrames)
@@ -1142,6 +1146,9 @@ final class AudioCaptureService: AudioCaptureEngine {
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
             return
         }
+        let signposter = OSSignposter(subsystem: "com.recordly.capture", category: "export")
+        let signpostState = signposter.beginInterval("capture.durableExport")
+        defer { signposter.endInterval("capture.durableExport", signpostState) }
         guard CaptureArtifactValidator.shouldReplaceDestination(at: destinationURL) else {
             return
         }
