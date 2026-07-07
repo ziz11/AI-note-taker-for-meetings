@@ -860,39 +860,52 @@ final class RecordingsStore: ObservableObject {
     private func startMeterTimer() {
         stopMeterTimer()
         lastPublishedRecordingSecond = -1
-        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
+        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else {
                     return
                 }
 
-                // Publish only actual changes: every @Published write re-renders the
-                // whole view tree, so unchanged levels/durations must not publish.
-                if let recordingStartedAt = self.viewState.runtime.recordingStartedAt {
+                // Each write to the @Published viewState re-renders every view that
+                // observes the store (incl. the whole detail pane, which doesn't even
+                // read meter levels). So: compute everything first, mutate once, and
+                // only when something visible actually changed. Levels are quantized
+                // to ~5% buckets — finer changes are sub-pixel on the meter bars.
+                var newRuntime = self.viewState.runtime
+                var changed = false
+
+                if let recordingStartedAt = newRuntime.recordingStartedAt {
                     let duration = Date().timeIntervalSince(recordingStartedAt)
                     let currentSecond = Int(duration.rounded(.down))
-
                     if currentSecond != self.lastPublishedRecordingSecond {
-                        self.viewState.runtime.activeDuration = duration
-                        if let activeRecordingID = self.viewState.runtime.activeRecordingID,
+                        newRuntime.activeDuration = duration
+                        if let activeRecordingID = newRuntime.activeRecordingID,
                            let index = self.recordings.firstIndex(where: { $0.id == activeRecordingID }) {
                             self.recordings[index].duration = duration
                         }
                         self.lastPublishedRecordingSecond = currentSecond
+                        changed = true
                     }
                 }
 
-                let microphoneLevel = (self.workflow.microphoneLevel() * 100).rounded() / 100
-                let systemAudioLevel = (self.workflow.systemAudioLevel() * 100).rounded() / 100
+                let microphoneLevel = (self.workflow.microphoneLevel() * 20).rounded() / 20
+                let systemAudioLevel = (self.workflow.systemAudioLevel() * 20).rounded() / 20
                 let systemAudioLabel = self.workflow.currentSystemAudioStatusLabel
-                if self.viewState.runtime.meterLevels.microphoneLevel != microphoneLevel {
-                    self.viewState.runtime.meterLevels.microphoneLevel = microphoneLevel
+                if newRuntime.meterLevels.microphoneLevel != microphoneLevel {
+                    newRuntime.meterLevels.microphoneLevel = microphoneLevel
+                    changed = true
                 }
-                if self.viewState.runtime.meterLevels.systemAudioLevel != systemAudioLevel {
-                    self.viewState.runtime.meterLevels.systemAudioLevel = systemAudioLevel
+                if newRuntime.meterLevels.systemAudioLevel != systemAudioLevel {
+                    newRuntime.meterLevels.systemAudioLevel = systemAudioLevel
+                    changed = true
                 }
-                if self.viewState.runtime.meterLevels.systemAudioLabel != systemAudioLabel {
-                    self.viewState.runtime.meterLevels.systemAudioLabel = systemAudioLabel
+                if newRuntime.meterLevels.systemAudioLabel != systemAudioLabel {
+                    newRuntime.meterLevels.systemAudioLabel = systemAudioLabel
+                    changed = true
+                }
+
+                if changed {
+                    self.viewState.runtime = newRuntime
                 }
             }
         }
