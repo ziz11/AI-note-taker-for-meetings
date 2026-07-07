@@ -403,12 +403,18 @@ actor PCMTrackWriter {
                 AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
             ]
         default:
-            AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: Self.canonicalSampleRate,
-                channels: Self.canonicalChannels,
-                interleaved: false
-            )?.settings ?? [:]
+            // Int16 halves raw CAF size vs Float32 (330 MB/hr vs 660 MB/hr per track);
+            // capture sources deliver ≤1.0 material, so no headroom is lost in practice.
+            // Processing format stays Float32 — ExtAudioFile converts on write.
+            [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: Self.canonicalSampleRate,
+                AVNumberOfChannelsKey: Int(Self.canonicalChannels),
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
+            ]
         }
     }
 
@@ -440,6 +446,9 @@ actor PCMTrackWriter {
 
     func finalize() -> TrackRuntimeStats {
         flushStagingBuffer()
+        // Close the file so the container is complete (AAC/m4a stays invalid until
+        // closed) — stop-time validation and immediate reads depend on this.
+        audioFile.close()
         return TrackRuntimeStats(
             kind: kind,
             fileName: fileName,
@@ -663,9 +672,10 @@ final class FallbackMicrophoneRecorder: NSObject, AVAudioRecorderDelegate {
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: PCMTrackWriter.canonicalSampleRate,
                 AVNumberOfChannelsKey: Int(PCMTrackWriter.canonicalChannels),
-                AVLinearPCMBitDepthKey: 32,
-                AVLinearPCMIsFloatKey: true,
-                AVLinearPCMIsNonInterleaved: true
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
             ]
         }
 
@@ -1062,7 +1072,7 @@ final class AudioCaptureService: AudioCaptureEngine {
     }
 
     func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
-        let mergeResult = try await mergeService.mergeSession(in: sessionDirectory, exportM4A: true)
+        let mergeResult = try await mergeService.mergeSession(in: sessionDirectory)
         return CaptureArtifacts(
             microphoneFile: CaptureArtifactValidator.usableAudioFileName(
                 LiveCaptureArtifactNames.microphoneDurable,

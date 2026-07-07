@@ -261,6 +261,7 @@ final class RecordingWorkflowController {
                 updatedRecording.notes = captureArtifacts.note ?? "Offline merge completed."
             }
             try repository.save(updatedRecording)
+            cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
             return updatedRecording
         }
 
@@ -649,7 +650,14 @@ final class RecordingWorkflowController {
             guard shouldCleanupTemporaryCaptureArtifacts(in: sessionDirectory) else {
                 return
             }
-            try cleanupTemporaryCaptureArtifacts(in: sessionDirectory)
+            // Raw CAFs are the transcription fast-path fallback; keep them while a
+            // transcription pass is in flight (or pending recovery) and after a
+            // failure, so a retry still has every candidate available.
+            let transcriptionSettled = recording.transcriptState == .idle || recording.transcriptState == .ready
+            try cleanupTemporaryCaptureArtifacts(
+                in: sessionDirectory,
+                allowRawCAFDeletion: transcriptionSettled
+            )
         } catch {
             let warning = "Temporary audio cleanup failed: \(error.localizedDescription)"
             if !recording.notes.contains(warning) {
@@ -664,12 +672,28 @@ final class RecordingWorkflowController {
         return isUsableAudioFile(mergedM4AURL)
     }
 
-    private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) throws {
+    private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL, allowRawCAFDeletion: Bool) throws {
         let fileManager = FileManager.default
-        for fileName in [
+        var deletableFileNames = [
             "mic.raw.flac",
             "system.raw.flac"
-        ] {
+        ]
+
+        if allowRawCAFDeletion {
+            // A raw CAF is pure redundancy once its durable m4a is usable: the durable
+            // track is the preferred ASR candidate, the preferred merge input, and what
+            // recovery re-merge consumes.
+            let rawToDurable = [
+                "mic.raw.caf": "mic.m4a",
+                "system.raw.caf": "system.m4a"
+            ]
+            for (rawFileName, durableFileName) in rawToDurable
+            where isUsableAudioFile(sessionDirectory.appendingPathComponent(durableFileName)) {
+                deletableFileNames.append(rawFileName)
+            }
+        }
+
+        for fileName in deletableFileNames {
             let url = sessionDirectory.appendingPathComponent(fileName)
             guard fileManager.fileExists(atPath: url.path) else {
                 continue

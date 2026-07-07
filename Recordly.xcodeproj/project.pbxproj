@@ -28,6 +28,8 @@
 		2E4CAE3A529698B5142F49C6 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2F770263847E29213B40F9F9 /* Foundation.framework */; };
 		49F43926E87A51AB075E490E /* TranscriptRenderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83340338D9A97D1FCCE50966 /* TranscriptRenderService.swift */; };
 		6C21B2A77926FB977C286632 /* TranscriptionPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */; };
+		CA0000012F10000000000001 /* DirectPCMMixServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000022F10000000000001 /* DirectPCMMixServiceTests.swift */; };
+		CA0000032F10000000000001 /* SessionMergeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000042F10000000000001 /* SessionMergeServiceTests.swift */; };
 		8754BE5E6A83DDC122A462CC /* ASRDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE471CED942092CB3514DA68 /* ASRDocument.swift */; };
 		8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */; };
 		FA3000092F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA30000A2F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift */; };
@@ -176,6 +178,8 @@
 		DE471CED942092CB3514DA68 /* ASRDocument.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ASRDocument.swift; sourceTree = "<group>"; };
 		EC87BE0D109F50639B2B62E9 /* DiarizationDocument.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DiarizationDocument.swift; sourceTree = "<group>"; };
 		F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TranscriptionPipelineTests.swift; path = TranscriptionPipelineTests.swift; sourceTree = "<group>"; };
+		CA0000022F10000000000001 /* DirectPCMMixServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DirectPCMMixServiceTests.swift; path = DirectPCMMixServiceTests.swift; sourceTree = "<group>"; };
+		CA0000042F10000000000001 /* SessionMergeServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SessionMergeServiceTests.swift; path = SessionMergeServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -216,6 +220,8 @@
 				FA1000142F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift */,
 				FA4000022F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift */,
 				FA5000022F0E000000000001 /* ModelSettingsViewModelTests.swift */,
+				CA0000022F10000000000001 /* DirectPCMMixServiceTests.swift */,
+				CA0000042F10000000000001 /* SessionMergeServiceTests.swift */,
 			);
 			name = RecordlyTests;
 			path = RecordlyTests;
@@ -587,6 +593,8 @@
 				FA1000132F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift in Sources */,
 				FA4000012F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift in Sources */,
 				FA5000012F0E000000000001 /* ModelSettingsViewModelTests.swift in Sources */,
+				CA0000012F10000000000001 /* DirectPCMMixServiceTests.swift in Sources */,
+				CA0000032F10000000000001 /* SessionMergeServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
