@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CAFE00012F31000000000001 /* CaptureHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00022F31000000000001 /* CaptureHealth.swift */; };
+		CAFE00032F31000000000001 /* CaptureHealthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00042F31000000000001 /* CaptureHealthTests.swift */; };
 		FA1000012F0A000000000001 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = FA1000022F0A000000000001 /* FluidAudio */; };
 		FA1000112F0A000000000001 /* FluidAudioASREngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */; };
 		FA1000132F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1000142F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift */; };
@@ -101,6 +103,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		CAFE00022F31000000000001 /* CaptureHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureHealth.swift; sourceTree = "<group>"; };
+		CAFE00042F31000000000001 /* CaptureHealthTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaptureHealthTests.swift; sourceTree = "<group>"; };
 		18F73A72E7F344B6A8F1F3DD /* SummaryEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SummaryEngine.swift; sourceTree = "<group>"; };
 		395881AA0C8D023430EC50AE /* SummaryPromptBuilder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SummaryPromptBuilder.swift; sourceTree = "<group>"; };
 		BD717C9D72DB2D702C5C541E /* SummaryOutputParser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SummaryOutputParser.swift; sourceTree = "<group>"; };
@@ -209,6 +213,7 @@
 		29C3C247DD8022A1CC461F0C /* RecordlyTests */ = {
 			isa = PBXGroup;
 			children = (
+				CAFE00042F31000000000001 /* CaptureHealthTests.swift */,
 				61A96044014F4044B8D17512 /* ModelDiscoveryTests.swift */,
 				458D7BF2780B07D4DABC985A /* TranscriptMergeServiceTests.swift */,
 				248B0A3CEFC995A4371B6129 /* SystemSpeakerMappingServiceTests.swift */,
@@ -426,6 +431,7 @@
 		CAB300EE2EBC1D6F00000001 /* Capture */ = {
 			isa = PBXGroup;
 			children = (
+				CAFE00022F31000000000001 /* CaptureHealth.swift */,
 				9C41A2242D82A10000A13B02 /* AudioCaptureService.swift */,
 				CAB301002EBC1D6F00000001 /* SessionMergeService.swift */,
 				CAB301022EBC1D6F00000001 /* DirectPCMMixService.swift */,
@@ -602,6 +608,7 @@
 				CA0000012F10000000000001 /* DirectPCMMixServiceTests.swift in Sources */,
 				CA0000032F10000000000001 /* SessionMergeServiceTests.swift in Sources */,
 				CA0000072F10000000000001 /* CaptureSamplePipelineTests.swift in Sources */,
+				CAFE00032F31000000000001 /* CaptureHealthTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -628,6 +635,7 @@
 				CAB301012EBC1D6F00000001 /* SessionMergeService.swift in Sources */,
 				CAB301032EBC1D6F00000001 /* DirectPCMMixService.swift in Sources */,
 				CA0000052F10000000000001 /* CaptureSamplePipeline.swift in Sources */,
+				CAFE00012F31000000000001 /* CaptureHealth.swift in Sources */,
 				8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */,
 				FA3000092F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift in Sources */,
 				FA3000012F0C000000000001 /* FluidAudioSessionAudioLoader.swift in Sources */,
