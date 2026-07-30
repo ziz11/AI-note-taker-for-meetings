@@ -314,8 +314,12 @@ final class RecordingsStore: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             await workflow.retryCaptureNow()
-            publishCaptureHealth(workflow.currentCaptureHealth)
+            refreshCaptureHealth()
         }
+    }
+
+    func refreshCaptureHealth() {
+        publishCaptureHealth(workflow.currentCaptureHealth)
     }
 
     func finalizeActiveRecordingBeforeTermination() async {

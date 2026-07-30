@@ -9,6 +9,7 @@ struct RecordingSidebarView: View {
         VStack(spacing: 14) {
             header
             searchField
+            captureHealthBanner
             progressSection
             permissionHelp
             recordingsList
@@ -20,6 +21,52 @@ struct RecordingSidebarView: View {
             Rectangle()
                 .fill(AppTheme.sidebarBackground)
                 .ignoresSafeArea()
+        }
+    }
+
+    @ViewBuilder
+    private var captureHealthBanner: some View {
+        if let presentation = store.viewState.runtime.captureHealthPresentation {
+            let color = captureHealthColor(for: presentation.severity)
+
+            HStack(alignment: .center, spacing: 10) {
+                if presentation.showsProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(color)
+                } else {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(color)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(presentation.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(presentation.message)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+
+                Spacer(minLength: 8)
+
+                if presentation.isRetryable {
+                    Button("Retry now") {
+                        store.retryCaptureNow()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(color)
+                }
+            }
+            .padding(12)
+            .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(color.opacity(0.45), lineWidth: 1)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(presentation.accessibilityLabel)
         }
     }
 
@@ -284,14 +331,22 @@ struct RecordingSidebarView: View {
             HStack(spacing: 12) {
                 meterColumn(
                     title: "Mic",
-                    status: store.isRecording ? "Live" : "Idle",
-                    value: store.viewState.runtime.meterLevels.microphoneLevel
+                    status: meterStatus(
+                        for: .microphone,
+                        default: store.isRecording ? "Live" : "Idle"
+                    ),
+                    value: store.viewState.runtime.meterLevels.microphoneLevel,
+                    tint: meterTint(for: .microphone)
                 )
 
                 meterColumn(
                     title: "System",
-                    status: store.viewState.runtime.meterLevels.systemAudioLabel,
-                    value: store.viewState.runtime.meterLevels.systemAudioLevel
+                    status: meterStatus(
+                        for: .system,
+                        default: store.viewState.runtime.meterLevels.systemAudioLabel
+                    ),
+                    value: store.viewState.runtime.meterLevels.systemAudioLevel,
+                    tint: meterTint(for: .system)
                 )
             }
 
@@ -350,7 +405,12 @@ struct RecordingSidebarView: View {
         .buttonStyle(.plain)
     }
 
-    private func meterColumn(title: String, status: String, value: Double) -> some View {
+    private func meterColumn(
+        title: String,
+        status: String,
+        value: Double,
+        tint: Color
+    ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(title)
@@ -359,14 +419,59 @@ struct RecordingSidebarView: View {
                 Spacer(minLength: 8)
                 Text(status)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(AppTheme.secondaryText)
+                    .foregroundStyle(tint)
                     .lineLimit(1)
             }
 
             ProgressView(value: value, total: 1)
-                .tint(AppTheme.accent)
+                .tint(tint)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title), \(status)")
+    }
+
+    private func meterStatus(for channel: CaptureChannel, default defaultStatus: String) -> String {
+        let health = store.viewState.runtime.captureHealth
+        guard health.affectedChannels.contains(channel) else {
+            return defaultStatus
+        }
+
+        switch health.phase {
+        case .starting:
+            return "Starting"
+        case .recovering:
+            return "Restoring"
+        case .failed:
+            return "Not recording"
+        case .idle, .healthy:
+            return defaultStatus
+        }
+    }
+
+    private func meterTint(for channel: CaptureChannel) -> Color {
+        let health = store.viewState.runtime.captureHealth
+        guard health.affectedChannels.contains(channel) else {
+            return AppTheme.accent
+        }
+
+        switch health.phase {
+        case .starting, .recovering:
+            return .orange
+        case .failed:
+            return .red
+        case .idle, .healthy:
+            return AppTheme.accent
+        }
+    }
+
+    private func captureHealthColor(for severity: RecordingCaptureHealthSeverity) -> Color {
+        switch severity {
+        case .warning:
+            return .orange
+        case .critical:
+            return .red
+        }
     }
 
     private func toggleChip(title: String, isOn: Binding<Bool>) -> some View {

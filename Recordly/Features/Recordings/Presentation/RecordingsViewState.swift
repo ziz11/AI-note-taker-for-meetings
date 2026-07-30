@@ -45,6 +45,66 @@ struct RecordingMeterLevels: Equatable {
     var systemAudioLabel: String = "Stub"
 }
 
+enum RecordingCaptureHealthSeverity: Equatable {
+    case warning
+    case critical
+}
+
+struct RecordingCaptureHealthPresentation: Equatable {
+    var severity: RecordingCaptureHealthSeverity
+    var title: String
+    var message: String
+    var showsProgress: Bool
+    var isPersistent: Bool
+    var isRetryable: Bool
+    var accessibilityLabel: String
+
+    init?(snapshot: CaptureHealthSnapshot) {
+        switch snapshot.phase {
+        case .recovering:
+            severity = .warning
+            title = "Restoring audio…"
+            message = Self.recoveryMessage(for: snapshot.affectedChannels)
+            showsProgress = true
+            isPersistent = false
+            isRetryable = false
+        case .failed:
+            severity = .critical
+            title = "Audio capture stopped"
+            message = Self.failureMessage(for: snapshot.affectedChannels)
+            showsProgress = false
+            isPersistent = true
+            isRetryable = true
+        case .idle, .starting, .healthy:
+            return nil
+        }
+
+        accessibilityLabel = "\(title). \(message)"
+    }
+
+    private static func recoveryMessage(for channels: Set<CaptureChannel>) -> String {
+        switch channels {
+        case [.system]:
+            return "Trying to restore system audio."
+        case [.microphone]:
+            return "Trying to restore the microphone."
+        default:
+            return "Trying to restore microphone and system audio."
+        }
+    }
+
+    private static func failureMessage(for channels: Set<CaptureChannel>) -> String {
+        switch channels {
+        case [.system]:
+            return "System audio is not being recorded."
+        case [.microphone]:
+            return "The microphone is not being recorded."
+        default:
+            return "Microphone and system audio are not being recorded."
+        }
+    }
+}
+
 struct RecordingRuntimeState: Equatable {
     var isRecording = false
     var activeRecordingID: UUID?
@@ -64,6 +124,10 @@ struct RecordingRuntimeState: Equatable {
 
     var activeProcessingCount: Int {
         processingJobs.count
+    }
+
+    var captureHealthPresentation: RecordingCaptureHealthPresentation? {
+        RecordingCaptureHealthPresentation(snapshot: captureHealth)
     }
 
     var backgroundProcessingLabel: String {

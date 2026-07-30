@@ -235,7 +235,7 @@ final class RecordingsPhaseOneTests: XCTestCase {
             affectedChannels: [.system],
             statusLabel: "Restoring audio…"
         )
-        try await waitForMeterTick()
+        store.refreshCaptureHealth()
 
         XCTAssertEqual(store.viewState.runtime.captureHealth, captureEngine.captureHealth)
     }
@@ -251,7 +251,7 @@ final class RecordingsPhaseOneTests: XCTestCase {
             affectedChannels: [.system],
             statusLabel: "Not recording"
         )
-        try await waitForMeterTick()
+        store.refreshCaptureHealth()
 
         XCTAssertEqual(store.viewState.runtime.captureHealth, captureEngine.captureHealth)
     }
@@ -272,8 +272,8 @@ final class RecordingsPhaseOneTests: XCTestCase {
             affectedChannels: [.system],
             statusLabel: "Not recording"
         )
-        try await waitForMeterTick()
-        try await waitForMeterTick()
+        store.refreshCaptureHealth()
+        store.refreshCaptureHealth()
 
         XCTAssertEqual(alertCount, 1)
     }
@@ -294,7 +294,7 @@ final class RecordingsPhaseOneTests: XCTestCase {
             affectedChannels: [.system],
             statusLabel: "Restoring audio…"
         )
-        try await waitForMeterTick()
+        store.refreshCaptureHealth()
 
         XCTAssertEqual(alertCount, 0)
     }
@@ -310,10 +310,11 @@ final class RecordingsPhaseOneTests: XCTestCase {
             affectedChannels: [.system],
             statusLabel: "Not recording"
         )
-        try await waitForMeterTick()
+        store.refreshCaptureHealth()
 
         store.retryCaptureNow()
-        try await waitForMeterTick()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        store.refreshCaptureHealth()
 
         XCTAssertEqual(captureEngine.retryCount, 1)
         XCTAssertEqual(store.viewState.runtime.captureHealth.phase, .recovering(attempt: 1))
@@ -335,19 +336,19 @@ final class RecordingsPhaseOneTests: XCTestCase {
             affectedChannels: [.system],
             statusLabel: "Not recording"
         )
-        try await waitForMeterTick()
+        store.refreshCaptureHealth()
         captureEngine.captureHealth = CaptureHealthSnapshot(
             phase: .healthy,
             affectedChannels: [],
             statusLabel: "Captured"
         )
-        try await waitForMeterTick()
+        store.refreshCaptureHealth()
         captureEngine.captureHealth = CaptureHealthSnapshot(
             phase: .failed(message: "Second failure."),
             affectedChannels: [.system],
             statusLabel: "Not recording"
         )
-        try await waitForMeterTick()
+        store.refreshCaptureHealth()
 
         XCTAssertEqual(alertCount, 2)
     }
@@ -427,10 +428,6 @@ final class RecordingsPhaseOneTests: XCTestCase {
             captureFinalizationTimeoutNanoseconds: captureFinalizationTimeoutNanoseconds,
             captureFailureNotifier: captureFailureNotifier
         )
-    }
-
-    private func waitForMeterTick() async throws {
-        try await Task.sleep(nanoseconds: 350_000_000)
     }
 
     private func makeRecording(
@@ -675,5 +672,73 @@ final class RecordingRuntimeStateProcessingTests: XCTestCase {
 
         XCTAssertEqual(state.backgroundProcessingLabel, "Processing 2 jobs")
         XCTAssertEqual(state.activeProcessingCount, 2)
+    }
+}
+
+final class RecordingCaptureHealthPresentationTests: XCTestCase {
+    func testRecoveringPresentationIsAmberAndNonFatal() throws {
+        let snapshot = CaptureHealthSnapshot(
+            phase: .recovering(attempt: 2),
+            affectedChannels: [.system],
+            statusLabel: "Restoring audio…"
+        )
+
+        let presentation = try XCTUnwrap(RecordingCaptureHealthPresentation(snapshot: snapshot))
+
+        XCTAssertEqual(presentation.severity, .warning)
+        XCTAssertEqual(presentation.title, "Restoring audio…")
+        XCTAssertTrue(presentation.showsProgress)
+        XCTAssertFalse(presentation.isRetryable)
+    }
+
+    func testFailedPresentationIsRedPersistentAndRetryable() throws {
+        let snapshot = CaptureHealthSnapshot(
+            phase: .failed(message: "Audio capture could not be restored."),
+            affectedChannels: [.system],
+            statusLabel: "Not recording"
+        )
+
+        let presentation = try XCTUnwrap(RecordingCaptureHealthPresentation(snapshot: snapshot))
+
+        XCTAssertEqual(presentation.severity, .critical)
+        XCTAssertTrue(presentation.isPersistent)
+        XCTAssertTrue(presentation.isRetryable)
+        XCTAssertFalse(presentation.showsProgress)
+    }
+
+    func testHealthyPresentationHasNoBanner() {
+        let snapshot = CaptureHealthSnapshot(
+            phase: .healthy,
+            affectedChannels: [],
+            statusLabel: "Captured"
+        )
+
+        XCTAssertNil(RecordingCaptureHealthPresentation(snapshot: snapshot))
+    }
+
+    func testFailureCopyNamesAffectedSystemChannel() throws {
+        let snapshot = CaptureHealthSnapshot(
+            phase: .failed(message: "Audio capture could not be restored."),
+            affectedChannels: [.system],
+            statusLabel: "Not recording"
+        )
+
+        let presentation = try XCTUnwrap(RecordingCaptureHealthPresentation(snapshot: snapshot))
+
+        XCTAssertEqual(presentation.message, "System audio is not being recorded.")
+        XCTAssertTrue(presentation.accessibilityLabel.lowercased().contains("system audio"))
+    }
+
+    func testFailureCopyNamesWholeAudioStreamWhenBothChannelsAreAffected() throws {
+        let snapshot = CaptureHealthSnapshot(
+            phase: .failed(message: "Audio capture could not be restored."),
+            affectedChannels: [.microphone, .system],
+            statusLabel: "Not recording"
+        )
+
+        let presentation = try XCTUnwrap(RecordingCaptureHealthPresentation(snapshot: snapshot))
+
+        XCTAssertEqual(presentation.message, "Microphone and system audio are not being recorded.")
+        XCTAssertTrue(presentation.accessibilityLabel.lowercased().contains("microphone and system audio"))
     }
 }
