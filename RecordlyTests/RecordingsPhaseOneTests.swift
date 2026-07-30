@@ -224,6 +224,134 @@ final class RecordingsPhaseOneTests: XCTestCase {
         XCTAssertTrue(saved.notes.contains("Capture finalization failed"))
     }
 
+    func testStorePublishesRecoveringCaptureHealth() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = MutableHealthCaptureEngine()
+        let store = makeStore(repository: repository, audioCaptureEngine: captureEngine)
+
+        await store.beginRecording()
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .recovering(attempt: 2),
+            affectedChannels: [.system],
+            statusLabel: "Restoring audio…"
+        )
+        try await waitForMeterTick()
+
+        XCTAssertEqual(store.viewState.runtime.captureHealth, captureEngine.captureHealth)
+    }
+
+    func testStorePublishesFailedCaptureHealth() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = MutableHealthCaptureEngine()
+        let store = makeStore(repository: repository, audioCaptureEngine: captureEngine)
+
+        await store.beginRecording()
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .failed(message: "Audio capture could not be restored."),
+            affectedChannels: [.system],
+            statusLabel: "Not recording"
+        )
+        try await waitForMeterTick()
+
+        XCTAssertEqual(store.viewState.runtime.captureHealth, captureEngine.captureHealth)
+    }
+
+    func testStoreAlertsOnceWhenRecoveryEpisodeFails() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = MutableHealthCaptureEngine()
+        var alertCount = 0
+        let store = makeStore(
+            repository: repository,
+            audioCaptureEngine: captureEngine,
+            captureFailureNotifier: { alertCount += 1 }
+        )
+
+        await store.beginRecording()
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .failed(message: "Audio capture could not be restored."),
+            affectedChannels: [.system],
+            statusLabel: "Not recording"
+        )
+        try await waitForMeterTick()
+        try await waitForMeterTick()
+
+        XCTAssertEqual(alertCount, 1)
+    }
+
+    func testStoreDoesNotAlertWhileRecovering() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = MutableHealthCaptureEngine()
+        var alertCount = 0
+        let store = makeStore(
+            repository: repository,
+            audioCaptureEngine: captureEngine,
+            captureFailureNotifier: { alertCount += 1 }
+        )
+
+        await store.beginRecording()
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .recovering(attempt: 1),
+            affectedChannels: [.system],
+            statusLabel: "Restoring audio…"
+        )
+        try await waitForMeterTick()
+
+        XCTAssertEqual(alertCount, 0)
+    }
+
+    func testStoreCanRequestManualCaptureRetry() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = MutableHealthCaptureEngine()
+        let store = makeStore(repository: repository, audioCaptureEngine: captureEngine)
+
+        await store.beginRecording()
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .failed(message: "Audio capture could not be restored."),
+            affectedChannels: [.system],
+            statusLabel: "Not recording"
+        )
+        try await waitForMeterTick()
+
+        store.retryCaptureNow()
+        try await waitForMeterTick()
+
+        XCTAssertEqual(captureEngine.retryCount, 1)
+        XCTAssertEqual(store.viewState.runtime.captureHealth.phase, .recovering(attempt: 1))
+    }
+
+    func testSecondFailureAfterRecoveryAlertsAgain() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = MutableHealthCaptureEngine()
+        var alertCount = 0
+        let store = makeStore(
+            repository: repository,
+            audioCaptureEngine: captureEngine,
+            captureFailureNotifier: { alertCount += 1 }
+        )
+
+        await store.beginRecording()
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .failed(message: "First failure."),
+            affectedChannels: [.system],
+            statusLabel: "Not recording"
+        )
+        try await waitForMeterTick()
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .healthy,
+            affectedChannels: [],
+            statusLabel: "Captured"
+        )
+        try await waitForMeterTick()
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .failed(message: "Second failure."),
+            affectedChannels: [.system],
+            statusLabel: "Not recording"
+        )
+        try await waitForMeterTick()
+
+        XCTAssertEqual(alertCount, 2)
+    }
+
     private func makeStore(repository: InMemoryRecordingsRepository) -> RecordingsStore {
         let modelManager = ModelManager()
         let fluidProvider = FluidAudioASRModelProvider()
@@ -248,7 +376,8 @@ final class RecordingsPhaseOneTests: XCTestCase {
     private func makeStore(
         repository: InMemoryRecordingsRepository,
         audioCaptureEngine: any AudioCaptureEngine,
-        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000
+        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000,
+        captureFailureNotifier: @escaping @MainActor () -> Void = {}
     ) -> RecordingsStore {
         let modelManager = ModelManager()
         let fluidProvider = FluidAudioASRModelProvider()
@@ -267,7 +396,8 @@ final class RecordingsPhaseOneTests: XCTestCase {
             modelManager: modelManager,
             fluidProvider: fluidProvider,
             diarizationProvider: diarizationProvider,
-            captureFinalizationTimeoutNanoseconds: captureFinalizationTimeoutNanoseconds
+            captureFinalizationTimeoutNanoseconds: captureFinalizationTimeoutNanoseconds,
+            captureFailureNotifier: captureFailureNotifier
         )
     }
 
@@ -280,7 +410,8 @@ final class RecordingsPhaseOneTests: XCTestCase {
         modelManager: ModelManager,
         fluidProvider: any FluidAudioASRModelProviding,
         diarizationProvider: any FluidAudioDiarizationModelProviding,
-        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000
+        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000,
+        captureFailureNotifier: @escaping @MainActor () -> Void = {}
     ) -> RecordingsStore {
         return RecordingsStore(
             audioCaptureEngine: audioCaptureEngine,
@@ -293,8 +424,13 @@ final class RecordingsPhaseOneTests: XCTestCase {
             fluidAudioDiarizationModelProvider: diarizationProvider,
             repository: repository,
             previewMode: false,
-            captureFinalizationTimeoutNanoseconds: captureFinalizationTimeoutNanoseconds
+            captureFinalizationTimeoutNanoseconds: captureFinalizationTimeoutNanoseconds,
+            captureFailureNotifier: captureFailureNotifier
         )
+    }
+
+    private func waitForMeterTick() async throws {
+        try await Task.sleep(nanoseconds: 350_000_000)
     }
 
     private func makeRecording(
@@ -438,6 +574,55 @@ final class RecordingsPhaseOneTests: XCTestCase {
 
         func currentMicrophoneLevel() -> Double { 0 }
         func currentSystemAudioLevel() -> Double { 0 }
+        func recoverPendingSessions(in recordingsDirectory: URL) async {}
+    }
+
+    @MainActor
+    private final class MutableHealthCaptureEngine: AudioCaptureEngine {
+        var systemAudioStatusLabel: String { captureHealth.statusLabel }
+        var captureHealth = CaptureHealthSnapshot(
+            phase: .healthy,
+            affectedChannels: [],
+            statusLabel: "Captured"
+        )
+        private(set) var retryCount = 0
+
+        func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            CaptureArtifacts(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a",
+                mergedCallFile: nil,
+                connectorNotesFile: "capture-session.json",
+                note: "Recording."
+            )
+        }
+
+        func stopCapture() async throws -> CaptureArtifacts {
+            CaptureArtifacts(
+                microphoneFile: "mic.m4a",
+                systemAudioFile: "system.m4a",
+                mergedCallFile: nil,
+                connectorNotesFile: "capture-session.json",
+                note: "Audio saved."
+            )
+        }
+
+        func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+            CaptureArtifacts()
+        }
+
+        func currentMicrophoneLevel() -> Double { 0 }
+        func currentSystemAudioLevel() -> Double { 0 }
+
+        func retryCaptureNow() async {
+            retryCount += 1
+            captureHealth = CaptureHealthSnapshot(
+                phase: .recovering(attempt: 1),
+                affectedChannels: [.microphone, .system],
+                statusLabel: "Restoring audio…"
+            )
+        }
+
         func recoverPendingSessions(in recordingsDirectory: URL) async {}
     }
 }

@@ -78,6 +78,14 @@ final class RecordingWorkflowController {
         audioCaptureEngine.systemAudioStatusLabel
     }
 
+    var currentCaptureHealth: CaptureHealthSnapshot {
+        audioCaptureEngine.captureHealth
+    }
+
+    func retryCaptureNow() async {
+        await audioCaptureEngine.retryCaptureNow()
+    }
+
     func recordingsDirectoryPath() throws -> String {
         try repository.recordingsDirectoryPath()
     }

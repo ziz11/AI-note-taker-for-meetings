@@ -44,7 +44,9 @@ final class RecordingsStore: ObservableObject {
     private let playbackController: PlaybackController
     private let modelManager: ModelManager
     private let modelSettingsViewModel: ModelSettingsViewModel
+    private let captureFailureNotifier: @MainActor () -> Void
     private var meterTimer: Timer?
+    private var captureFailureEpisodeActive = false
     private var lastPublishedRecordingSecond = -1
     private var shareableURLCache: (key: String, url: URL?)?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
@@ -64,10 +66,15 @@ final class RecordingsStore: ObservableObject {
         fluidAudioDiarizationModelProvider: any FluidAudioDiarizationModelProviding,
         repository: RecordingsPersistence = RecordingsRepository(),
         previewMode: Bool = false,
-        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000
+        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000,
+        captureFailureNotifier: @escaping @MainActor () -> Void = {
+            NSSound.beep()
+            NSApp.requestUserAttention(.criticalRequest)
+        }
     ) {
         self.previewMode = previewMode
         self.modelManager = modelManager
+        self.captureFailureNotifier = captureFailureNotifier
         self.modelSettingsViewModel = ModelSettingsViewModel(
             modelManager: modelManager,
             fluidAudioModelProvider: fluidAudioModelProvider,
@@ -281,6 +288,7 @@ final class RecordingsStore: ObservableObject {
             viewState.runtime.activityStatus = "Recording"
             viewState.runtime.sidebarStatus = "Recording"
             viewState.runtime.meterLevels.systemAudioLabel = startResult.systemAudioLabel
+            viewState.runtime.captureHealth = workflow.currentCaptureHealth
             startMeterTimer()
             viewState.runtime.isCaptureTransitionInFlight = false
         } catch {
@@ -300,6 +308,14 @@ final class RecordingsStore: ObservableObject {
             runSummarization: viewState.autoTranscribeEnabled && viewState.autoSummarizeEnabled,
             statusWhenSaved: "Saving"
         )
+    }
+
+    func retryCaptureNow() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await workflow.retryCaptureNow()
+            publishCaptureHealth(workflow.currentCaptureHealth)
+        }
     }
 
     func finalizeActiveRecordingBeforeTermination() async {
@@ -891,6 +907,7 @@ final class RecordingsStore: ObservableObject {
                 let microphoneLevel = (self.workflow.microphoneLevel() * 20).rounded() / 20
                 let systemAudioLevel = (self.workflow.systemAudioLevel() * 20).rounded() / 20
                 let systemAudioLabel = self.workflow.currentSystemAudioStatusLabel
+                let captureHealth = self.workflow.currentCaptureHealth
                 if newRuntime.meterLevels.microphoneLevel != microphoneLevel {
                     newRuntime.meterLevels.microphoneLevel = microphoneLevel
                     changed = true
@@ -903,6 +920,12 @@ final class RecordingsStore: ObservableObject {
                     newRuntime.meterLevels.systemAudioLabel = systemAudioLabel
                     changed = true
                 }
+                if newRuntime.captureHealth != captureHealth {
+                    newRuntime.captureHealth = captureHealth
+                    changed = true
+                }
+
+                self.notifyIfCaptureFailureStarted(captureHealth)
 
                 if changed {
                     self.viewState.runtime = newRuntime
@@ -925,6 +948,8 @@ final class RecordingsStore: ObservableObject {
         viewState.runtime.activeDuration = 0
         viewState.runtime.recordingStartedAt = nil
         viewState.runtime.meterLevels = RecordingMeterLevels()
+        viewState.runtime.captureHealth = .idle
+        captureFailureEpisodeActive = false
         viewState.runtime.transcriptionProgress = nil
         viewState.runtime.transcriptionStageLabel = nil
         viewState.runtime.summarizationProgress = nil
@@ -937,6 +962,26 @@ final class RecordingsStore: ObservableObject {
             viewState.runtime.activityStatus = "Error"
             viewState.runtime.sidebarStatus = "Error"
             stopMeterTimer()
+        }
+    }
+
+    private func publishCaptureHealth(_ captureHealth: CaptureHealthSnapshot) {
+        notifyIfCaptureFailureStarted(captureHealth)
+        guard viewState.runtime.captureHealth != captureHealth else {
+            return
+        }
+        viewState.runtime.captureHealth = captureHealth
+    }
+
+    private func notifyIfCaptureFailureStarted(_ captureHealth: CaptureHealthSnapshot) {
+        if case .failed = captureHealth.phase {
+            guard !captureFailureEpisodeActive else {
+                return
+            }
+            captureFailureEpisodeActive = true
+            captureFailureNotifier()
+        } else {
+            captureFailureEpisodeActive = false
         }
     }
 

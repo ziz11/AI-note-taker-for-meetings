@@ -53,6 +53,7 @@ struct RecordingRuntimeState: Equatable {
     var sidebarStatus = "Ready"
     var activityStatus = "Ready"
     var meterLevels = RecordingMeterLevels()
+    var captureHealth: CaptureHealthSnapshot = .idle
     var transcriptionProgress: Double?
     var transcriptionStageLabel: String?
     var summarizationProgress: Double?
