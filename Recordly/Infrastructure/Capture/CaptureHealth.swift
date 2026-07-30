@@ -320,6 +320,8 @@ final class CaptureHealthRuntime {
     private let onDiagnostic: DiagnosticObserver
     private var forwardedDiagnosticCount = 0
     private var restartTask: Task<Void, Never>?
+    private var nextRestartTaskID: UInt64 = 0
+    private var currentRestartTaskID: UInt64?
 
     var snapshot: CaptureHealthSnapshot {
         coordinator.snapshot
@@ -342,7 +344,6 @@ final class CaptureHealthRuntime {
         at instant: ContinuousClock.Instant
     ) {
         restartTask?.cancel()
-        restartTask = nil
         forwardedDiagnosticCount = 0
         coordinator.start(requiredChannels: requiredChannels, at: instant)
     }
@@ -380,7 +381,6 @@ final class CaptureHealthRuntime {
     func stop() {
         cancelRestart()
         restartTask?.cancel()
-        restartTask = nil
         forwardNewDiagnostics()
         coordinator.stop()
         forwardedDiagnosticCount = 0
@@ -396,23 +396,38 @@ final class CaptureHealthRuntime {
 
         switch action {
         case .restart(let attempt):
-            restartTask?.cancel()
-            restartTask = Task { @MainActor [weak self] in
-                guard let self else {
+            guard restartTask == nil else {
+                coordinator.restartFinished(
+                    attempt: attempt,
+                    error: CancellationError(),
+                    at: instant
+                )
+                break
+            }
+            nextRestartTaskID &+= 1
+            let taskID = nextRestartTaskID
+            currentRestartTaskID = taskID
+            let restart = self.restart
+            restartTask = Task { @MainActor [weak self, restart] in
+                let restartError: Error?
+                do {
+                    try await restart()
+                    restartError = nil
+                } catch {
+                    restartError = error
+                }
+                guard let self,
+                      self.currentRestartTaskID == taskID else {
                     return
                 }
-                do {
-                    try await self.restart()
-                    self.coordinator.restartFinished(attempt: attempt, error: nil, at: instant)
-                } catch {
-                    self.coordinator.restartFinished(attempt: attempt, error: error, at: instant)
-                }
+                self.restartTask = nil
+                self.currentRestartTaskID = nil
+                self.coordinator.restartFinished(attempt: attempt, error: restartError, at: instant)
                 self.forwardNewDiagnostics()
             }
         case .alertFailure:
             cancelRestart()
             restartTask?.cancel()
-            restartTask = nil
         }
         forwardNewDiagnostics()
     }

@@ -929,6 +929,7 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
     private let screenDiscardQueue = DispatchQueue(label: "Recordly.ScreenCaptureDiscard", qos: .utility)
     private(set) var microphoneViaStreamEnabled = false
     private var captureRequested = false
+    private var pendingStreamStopTask: Task<Void, Never>?
     var onUnexpectedStop: (@MainActor (String) -> Void)?
 
     override init() {
@@ -956,6 +957,7 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
     }
 
     func restartCapture() async throws {
+        await drainPendingStreamStops()
         guard captureRequested else {
             throw CancellationError()
         }
@@ -977,19 +979,18 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
     func stopCapture() async throws {
         captureRequested = false
         lifecycle.cancelCaptureRequest()
-        guard let stream else {
-            clearCaptureState()
-            return
+        scheduleCurrentStreamStop()
+        await drainPendingStreamStops()
+        if let stream {
+            lifecycle.markIntentionalStop(for: stream)
+            try await stream.stopCapture()
         }
-        lifecycle.markIntentionalStop(for: stream)
-        defer {
-            clearCaptureState()
-        }
-        try await stream.stopCapture()
+        clearCaptureState()
     }
 
     func cancelPendingRestart() {
         lifecycle.cancelCaptureRequest()
+        scheduleCurrentStreamStop()
     }
 
     func isCurrentStreamGeneration(_ generation: UInt64) -> Bool {
@@ -1077,6 +1078,31 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         router.onSystemSample = nil
         router.onMicrophoneSample = nil
         microphoneViaStreamEnabled = false
+    }
+
+    private func scheduleCurrentStreamStop() {
+        guard let stream else {
+            return
+        }
+        lifecycle.markIntentionalStop(for: stream)
+        let previousStop = pendingStreamStopTask
+        pendingStreamStopTask = Task { @MainActor [weak self] in
+            await previousStop?.value
+            try? await stream.stopCapture()
+            guard let self else {
+                return
+            }
+            if self.stream === stream {
+                self.stream = nil
+            }
+        }
+    }
+
+    private func drainPendingStreamStops() async {
+        while let pendingStreamStopTask {
+            self.pendingStreamStopTask = nil
+            await pendingStreamStopTask.value
+        }
     }
 }
 
@@ -1507,17 +1533,35 @@ final class AudioCaptureService: AudioCaptureEngine {
             }
         }
 
-        try? await exportDurableTrackIfNeeded(
-            from: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneTemporary),
-            to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable),
-            forceReplace: microphoneRequiresDurableExport
-        )
-        if systemAudioFileName != nil {
-            try? await exportDurableTrackIfNeeded(
-                from: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemTemporary),
-                to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable),
-                forceReplace: systemRequiresDurableExport
+        var preferCanonicalMicrophone = false
+        do {
+            try await exportDurableTrackIfNeeded(
+                from: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneTemporary),
+                to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable),
+                forceReplace: microphoneRequiresDurableExport
             )
+        } catch {
+            preferCanonicalMicrophone = true
+            try? await metadataStore.appendNote(
+                "Microphone durable export failed: \(error.localizedDescription)",
+                in: sessionDirectory
+            )
+        }
+        var preferCanonicalSystem = false
+        if systemAudioFileName != nil {
+            do {
+                try await exportDurableTrackIfNeeded(
+                    from: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemTemporary),
+                    to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable),
+                    forceReplace: systemRequiresDurableExport
+                )
+            } catch {
+                preferCanonicalSystem = true
+                try? await metadataStore.appendNote(
+                    "System durable export failed: \(error.localizedDescription)",
+                    in: sessionDirectory
+                )
+            }
         }
 
         try await metadataStore.updateStatus(.readyForMix, in: sessionDirectory)
@@ -1526,11 +1570,13 @@ final class AudioCaptureService: AudioCaptureEngine {
             microphoneFile: preferredUsableTrackFileName(
                 durable: microphoneFileName,
                 canonical: LiveCaptureArtifactNames.microphoneTemporary,
+                preferCanonical: preferCanonicalMicrophone,
                 in: sessionDirectory
             ),
             systemAudioFile: preferredUsableTrackFileName(
                 durable: systemAudioFileName,
                 canonical: LiveCaptureArtifactNames.systemTemporary,
+                preferCanonical: preferCanonicalSystem,
                 in: sessionDirectory
             ),
             mergedCallFile: nil,
@@ -1581,19 +1627,30 @@ final class AudioCaptureService: AudioCaptureEngine {
             throw AudioCaptureError.mixdownFailed
         }
 
-        try await exportSession.export(to: destinationURL, as: .m4a)
-        guard CaptureArtifactValidator.isUsableAudioFile(destinationURL) else {
-            removeInvalidFileIfPresent(destinationURL)
-            throw AudioCaptureError.invalidRecordedFile
+        do {
+            try await exportSession.export(to: destinationURL, as: .m4a)
+            guard CaptureArtifactValidator.isUsableAudioFile(destinationURL) else {
+                throw AudioCaptureError.invalidRecordedFile
+            }
+        } catch {
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try? FileManager.default.removeItem(at: destinationURL)
+            }
+            throw error
         }
     }
 
-    private func preferredUsableTrackFileName(
+    func preferredUsableTrackFileName(
         durable: String?,
         canonical: String,
+        preferCanonical: Bool = false,
         in sessionDirectory: URL
     ) -> String? {
-        CaptureArtifactValidator.usableAudioFileName(durable, in: sessionDirectory)
+        if preferCanonical,
+           let canonical = CaptureArtifactValidator.usableAudioFileName(canonical, in: sessionDirectory) {
+            return canonical
+        }
+        return CaptureArtifactValidator.usableAudioFileName(durable, in: sessionDirectory)
             ?? CaptureArtifactValidator.usableAudioFileName(canonical, in: sessionDirectory)
     }
 

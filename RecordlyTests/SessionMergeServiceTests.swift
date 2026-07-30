@@ -59,7 +59,8 @@ final class SessionMergeServiceTests: XCTestCase {
         fileName: String,
         frames: Int64,
         firstPTS: Double = 0,
-        lastPTS: Double? = nil
+        lastPTS: Double? = nil,
+        diagnostics: [String] = []
     ) async throws {
         try await metadataStore.updateTrack(
             TrackRuntimeStats(
@@ -71,7 +72,7 @@ final class SessionMergeServiceTests: XCTestCase {
                 sampleRate: Self.sampleRate,
                 bufferCount: 1,
                 fallback: false,
-                diagnostics: []
+                diagnostics: diagnostics
             ),
             in: directory
         )
@@ -237,6 +238,33 @@ final class SessionMergeServiceTests: XCTestCase {
         XCTAssertEqual(result.mergeMode, .dualTrack)
         let samples = try readAllSamples(at: directory.appendingPathComponent("merged-call.m4a"))
         assertRegion(samples, from: 0, to: samples.count, equals: 0.5)
+    }
+
+    func testMergePrefersCompleteRawCAFAfterDurableMirrorFailure() async throws {
+        let frames = 48_000
+        try writeAudioFile(named: "mic.raw.caf", frames: frames, value: 0.25)
+        try writeAudioFile(named: "mic.m4a", frames: 4_800, value: 0.75)
+        try await seedTrack(
+            kind: .microphone,
+            fileName: "mic.raw.caf",
+            frames: Int64(frames),
+            diagnostics: ["durable mirror append failed: test"]
+        )
+
+        let service = SessionMergeService(metadataStore: metadataStore)
+        let result = try await service.mergeSession(in: directory)
+
+        XCTAssertEqual(result.mergeMode, .micOnly)
+        let samples = try readAllSamples(at: directory.appendingPathComponent("merged-call.m4a"))
+        assertRegion(samples, from: 0, to: samples.count, equals: 0.25)
+        let mergedFile = try AVAudioFile(
+            forReading: directory.appendingPathComponent("merged-call.m4a")
+        )
+        XCTAssertEqual(
+            Double(mergedFile.length) / mergedFile.processingFormat.sampleRate,
+            1,
+            accuracy: 0.05
+        )
     }
 
     func testMergeFailureSetsMixErrorAndLeavesNoArtifacts() async throws {

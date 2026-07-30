@@ -452,6 +452,21 @@ final class DirectPCMMixServiceTests: XCTestCase {
         XCTAssertEqual(duration, 1, accuracy: 0.05)
     }
 
+    @MainActor
+    func testCanonicalFileIsSelectedAfterDurableExportFailure() throws {
+        _ = try makePCMFile(named: "complete.caf", frames: 48_000, value: 0.25)
+        _ = try makePCMFile(named: "partial.m4a", frames: 4_800, value: 0.25)
+
+        let selected = AudioCaptureService().preferredUsableTrackFileName(
+            durable: "partial.m4a",
+            canonical: "complete.caf",
+            preferCanonical: true,
+            in: directory
+        )
+
+        XCTAssertEqual(selected, "complete.caf")
+    }
+
     func testMixThrowsWhenNoTracksProvided() {
         let outputURL = directory.appendingPathComponent("merged.caf")
 

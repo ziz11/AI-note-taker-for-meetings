@@ -197,7 +197,11 @@ actor SessionMergeService {
         case .durableM4A:
             // Per-track fallback: a missing durable m4a (e.g. failed export) must not
             // drop that track from the merge while its raw capture still exists.
-            candidates = [durableFileName(for: stats.kind), stats.fileName]
+            if stats.diagnostics.contains(where: { $0.contains("durable mirror append failed") }) {
+                candidates = [stats.fileName, durableFileName(for: stats.kind)]
+            } else {
+                candidates = [durableFileName(for: stats.kind), stats.fileName]
+            }
         case .rawCAF:
             candidates = [stats.fileName]
         }

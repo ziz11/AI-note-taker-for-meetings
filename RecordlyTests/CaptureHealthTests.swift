@@ -320,10 +320,15 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
     func testRuntimeDeadlineDoesNotWaitForHungRestart() async {
         let start = clock.now
         var cancelCount = 0
+        var restartCount = 0
+        var restartContinuation: CheckedContinuation<Void, Never>?
         let runtime = CaptureHealthRuntime(
             policy: .production,
             restart: {
-                try await Task.sleep(for: .seconds(60))
+                restartCount += 1
+                await withCheckedContinuation { continuation in
+                    restartContinuation = continuation
+                }
             },
             cancelRestart: {
                 cancelCount += 1
@@ -334,6 +339,7 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
 
         let processStarted = clock.now
         await runtime.process(at: start + .milliseconds(1_500))
+        await Task.yield()
         XCTAssertLessThan(processStarted.duration(to: clock.now), .milliseconds(100))
 
         await runtime.process(at: start + .seconds(7.5))
@@ -343,6 +349,13 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
             .failed(message: "Audio capture could not be restored.")
         )
         XCTAssertEqual(cancelCount, 1)
+
+        await runtime.retryNow(at: start + .seconds(20))
+        await Task.yield()
+        XCTAssertEqual(restartCount, 1)
+
+        restartContinuation?.resume()
+        await Task.yield()
     }
 
     private func makeHealthyCoordinator(at start: ContinuousClock.Instant) -> CaptureHealthCoordinator {
