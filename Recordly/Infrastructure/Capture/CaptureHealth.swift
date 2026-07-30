@@ -311,12 +311,15 @@ final class CaptureHealthCoordinator {
 @MainActor
 final class CaptureHealthRuntime {
     typealias RestartOperation = @MainActor () async throws -> Void
+    typealias CancelRestartOperation = @MainActor () -> Void
     typealias DiagnosticObserver = @MainActor (String) -> Void
 
     private let coordinator: CaptureHealthCoordinator
     private let restart: RestartOperation
+    private let cancelRestart: CancelRestartOperation
     private let onDiagnostic: DiagnosticObserver
     private var forwardedDiagnosticCount = 0
+    private var restartTask: Task<Void, Never>?
 
     var snapshot: CaptureHealthSnapshot {
         coordinator.snapshot
@@ -325,10 +328,12 @@ final class CaptureHealthRuntime {
     init(
         policy: CaptureRecoveryPolicy,
         restart: @escaping RestartOperation,
+        cancelRestart: @escaping CancelRestartOperation = {},
         onDiagnostic: @escaping DiagnosticObserver = { _ in }
     ) {
         coordinator = CaptureHealthCoordinator(policy: policy)
         self.restart = restart
+        self.cancelRestart = cancelRestart
         self.onDiagnostic = onDiagnostic
     }
 
@@ -336,6 +341,8 @@ final class CaptureHealthRuntime {
         requiredChannels: Set<CaptureChannel>,
         at instant: ContinuousClock.Instant
     ) {
+        restartTask?.cancel()
+        restartTask = nil
         forwardedDiagnosticCount = 0
         coordinator.start(requiredChannels: requiredChannels, at: instant)
     }
@@ -355,22 +362,25 @@ final class CaptureHealthRuntime {
     ) async {
         let action = coordinator.receiveUnexpectedStop(reason: reason, at: instant)
         forwardNewDiagnostics()
-        await execute(action, at: instant)
+        execute(action, at: instant)
     }
 
     func process(at instant: ContinuousClock.Instant) async {
         let action = coordinator.nextAction(at: instant)
         forwardNewDiagnostics()
-        await execute(action, at: instant)
+        execute(action, at: instant)
     }
 
     func retryNow(at instant: ContinuousClock.Instant) async {
         let action = coordinator.retryNow(at: instant)
         forwardNewDiagnostics()
-        await execute(action, at: instant)
+        execute(action, at: instant)
     }
 
     func stop() {
+        cancelRestart()
+        restartTask?.cancel()
+        restartTask = nil
         forwardNewDiagnostics()
         coordinator.stop()
         forwardedDiagnosticCount = 0
@@ -379,21 +389,30 @@ final class CaptureHealthRuntime {
     private func execute(
         _ action: CaptureHealthAction?,
         at instant: ContinuousClock.Instant
-    ) async {
+    ) {
         guard let action else {
             return
         }
 
         switch action {
         case .restart(let attempt):
-            do {
-                try await restart()
-                coordinator.restartFinished(attempt: attempt, error: nil, at: instant)
-            } catch {
-                coordinator.restartFinished(attempt: attempt, error: error, at: instant)
+            restartTask?.cancel()
+            restartTask = Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                do {
+                    try await self.restart()
+                    self.coordinator.restartFinished(attempt: attempt, error: nil, at: instant)
+                } catch {
+                    self.coordinator.restartFinished(attempt: attempt, error: error, at: instant)
+                }
+                self.forwardNewDiagnostics()
             }
         case .alertFailure:
-            break
+            cancelRestart()
+            restartTask?.cancel()
+            restartTask = nil
         }
         forwardNewDiagnostics()
     }

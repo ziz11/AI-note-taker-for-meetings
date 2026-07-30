@@ -635,6 +635,8 @@ actor PCMTrackWriter: TrackWriting {
 actor MirroredTrackWriter {
     private let temporary: any TrackWriting
     private let durable: (any TrackWriting)?
+    private var durableMirrorFailed = false
+    private var durableFailureMessage: String?
 
     init(temporary: any TrackWriting, durable: (any TrackWriting)?) {
         self.temporary = temporary
@@ -652,11 +654,16 @@ actor MirroredTrackWriter {
         guard let durable else {
             return nil
         }
+        guard !durableMirrorFailed else {
+            return durableFailureMessage
+        }
         do {
             try await durable.append(sampleBuffer: sampleBuffer)
             return nil
         } catch {
             let message = "durable mirror append failed: \(error.localizedDescription)"
+            durableMirrorFailed = true
+            durableFailureMessage = message
             await temporary.recordDiagnostic(message)
             await durable.recordDiagnostic(message)
             return message
@@ -677,16 +684,26 @@ actor MirroredTrackWriter {
         guard let durable else {
             return nil
         }
+        guard !durableMirrorFailed else {
+            return durableFailureMessage
+        }
         do {
             try await durable.append(pcmBuffer: pcmBuffer, presentationTime: presentationTime)
             return nil
         } catch {
             let message = "durable mirror append failed: \(error.localizedDescription)"
+            durableMirrorFailed = true
+            durableFailureMessage = message
             await temporary.recordDiagnostic(message)
             await durable.recordDiagnostic(message)
             return message
         }
     }
+
+    func requiresDurableExport() -> Bool {
+        durableMirrorFailed
+    }
+
     func finalize() async -> [TrackRuntimeStats] {
         var stats: [TrackRuntimeStats] = []
         stats.append(await temporary.finalize())
@@ -803,12 +820,6 @@ final class ScreenCaptureStreamLifecycle: @unchecked Sendable {
         currentCaptureRequest = nil
     }
 
-    func currentCaptureRequestToken() -> UInt64? {
-        lock.lock()
-        defer { lock.unlock() }
-        return currentCaptureRequest
-    }
-
     func isCurrentCaptureRequest(_ request: UInt64) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -882,6 +893,7 @@ protocol ScreenAudioStreaming: AnyObject {
     ) async throws
     func restartCapture() async throws
     func stopCapture() async throws
+    func cancelPendingRestart()
     func isCurrentStreamGeneration(_ generation: UInt64) -> Bool
 }
 
@@ -947,9 +959,7 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         guard captureRequested else {
             throw CancellationError()
         }
-        guard let request = lifecycle.currentCaptureRequestToken() else {
-            throw CancellationError()
-        }
+        let request = lifecycle.beginCaptureRequest()
         if let stream {
             lifecycle.markIntentionalStop(for: stream)
             try? await stream.stopCapture()
@@ -976,6 +986,10 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
             clearCaptureState()
         }
         try await stream.stopCapture()
+    }
+
+    func cancelPendingRestart() {
+        lifecycle.cancelCaptureRequest()
     }
 
     func isCurrentStreamGeneration(_ generation: UInt64) -> Bool {
@@ -1347,6 +1361,9 @@ final class AudioCaptureService: AudioCaptureEngine {
                     try await self.screenCaptureService.restartCapture()
                 }
             },
+            cancelRestart: { [weak self] in
+                self?.screenCaptureService.cancelPendingRestart()
+            },
             onDiagnostic: { [weak self] diagnostic in
                 self?.persistCaptureDiagnostic(diagnostic, in: sessionDirectory)
             }
@@ -1474,32 +1491,48 @@ final class AudioCaptureService: AudioCaptureEngine {
             )
         }
 
-        if let microphoneWriter,
-           let micStats = await microphoneWriter.finalize().first {
-            try await metadataStore.updateTrack(micStats, in: sessionDirectory)
+        var microphoneRequiresDurableExport = false
+        if let microphoneWriter {
+            microphoneRequiresDurableExport = await microphoneWriter.requiresDurableExport()
+            if let micStats = await microphoneWriter.finalize().first {
+                try await metadataStore.updateTrack(micStats, in: sessionDirectory)
+            }
         }
 
-        if let systemWriter,
-           let systemStats = await systemWriter.finalize().first {
-            try await metadataStore.updateTrack(systemStats, in: sessionDirectory)
+        var systemRequiresDurableExport = false
+        if let systemWriter {
+            systemRequiresDurableExport = await systemWriter.requiresDurableExport()
+            if let systemStats = await systemWriter.finalize().first {
+                try await metadataStore.updateTrack(systemStats, in: sessionDirectory)
+            }
         }
 
         try? await exportDurableTrackIfNeeded(
             from: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneTemporary),
-            to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable)
+            to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable),
+            forceReplace: microphoneRequiresDurableExport
         )
         if systemAudioFileName != nil {
             try? await exportDurableTrackIfNeeded(
                 from: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemTemporary),
-                to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable)
+                to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable),
+                forceReplace: systemRequiresDurableExport
             )
         }
 
         try await metadataStore.updateStatus(.readyForMix, in: sessionDirectory)
 
         return CaptureArtifacts(
-            microphoneFile: CaptureArtifactValidator.usableAudioFileName(microphoneFileName, in: sessionDirectory),
-            systemAudioFile: CaptureArtifactValidator.usableAudioFileName(systemAudioFileName, in: sessionDirectory),
+            microphoneFile: preferredUsableTrackFileName(
+                durable: microphoneFileName,
+                canonical: LiveCaptureArtifactNames.microphoneTemporary,
+                in: sessionDirectory
+            ),
+            systemAudioFile: preferredUsableTrackFileName(
+                durable: systemAudioFileName,
+                canonical: LiveCaptureArtifactNames.systemTemporary,
+                in: sessionDirectory
+            ),
             mergedCallFile: nil,
             connectorNotesFile: "capture-session.json",
             note: "Audio saved. Mixed playback is being prepared."
@@ -1509,12 +1542,14 @@ final class AudioCaptureService: AudioCaptureEngine {
     func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
         let mergeResult = try await mergeService.mergeSession(in: sessionDirectory)
         return CaptureArtifacts(
-            microphoneFile: CaptureArtifactValidator.usableAudioFileName(
-                LiveCaptureArtifactNames.microphoneDurable,
+            microphoneFile: preferredUsableTrackFileName(
+                durable: LiveCaptureArtifactNames.microphoneDurable,
+                canonical: LiveCaptureArtifactNames.microphoneTemporary,
                 in: sessionDirectory
             ),
-            systemAudioFile: CaptureArtifactValidator.usableAudioFileName(
-                LiveCaptureArtifactNames.systemDurable,
+            systemAudioFile: preferredUsableTrackFileName(
+                durable: LiveCaptureArtifactNames.systemDurable,
+                canonical: LiveCaptureArtifactNames.systemTemporary,
                 in: sessionDirectory
             ),
             mergedCallFile: mergeResult.mergedM4AFileName,
@@ -1523,17 +1558,23 @@ final class AudioCaptureService: AudioCaptureEngine {
         )
     }
 
-    private func exportDurableTrackIfNeeded(from sourceURL: URL, to destinationURL: URL) async throws {
+    func exportDurableTrackIfNeeded(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        forceReplace: Bool = false
+    ) async throws {
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
             return
         }
         let signposter = OSSignposter(subsystem: "com.recordly.capture", category: "export")
         let signpostState = signposter.beginInterval("capture.durableExport")
         defer { signposter.endInterval("capture.durableExport", signpostState) }
-        guard CaptureArtifactValidator.shouldReplaceDestination(at: destinationURL) else {
+        guard forceReplace || CaptureArtifactValidator.shouldReplaceDestination(at: destinationURL) else {
             return
         }
-        removeInvalidFileIfPresent(destinationURL)
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
 
         let asset = AVURLAsset(url: sourceURL)
         guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
@@ -1545,6 +1586,15 @@ final class AudioCaptureService: AudioCaptureEngine {
             removeInvalidFileIfPresent(destinationURL)
             throw AudioCaptureError.invalidRecordedFile
         }
+    }
+
+    private func preferredUsableTrackFileName(
+        durable: String?,
+        canonical: String,
+        in sessionDirectory: URL
+    ) -> String? {
+        CaptureArtifactValidator.usableAudioFileName(durable, in: sessionDirectory)
+            ?? CaptureArtifactValidator.usableAudioFileName(canonical, in: sessionDirectory)
     }
 
     private func removeInvalidFileIfPresent(_ url: URL) {

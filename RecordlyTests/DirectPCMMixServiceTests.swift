@@ -7,12 +7,15 @@ final class DirectPCMMixServiceTests: XCTestCase {
         private enum Failure: Error {
             case appendFailed
         }
+        private var appendCount = 0
 
         func append(sampleBuffer: CMSampleBuffer) throws {
+            appendCount += 1
             throw Failure.appendFailed
         }
 
         func append(pcmBuffer: AVAudioPCMBuffer, presentationTime: CMTime?) throws {
+            appendCount += 1
             throw Failure.appendFailed
         }
 
@@ -31,6 +34,10 @@ final class DirectPCMMixServiceTests: XCTestCase {
         }
 
         func recordDiagnostic(_ diagnostic: String) {}
+
+        func attemptedAppendCount() -> Int {
+            appendCount
+        }
     }
 
     private var directory: URL!
@@ -401,17 +408,48 @@ final class DirectPCMMixServiceTests: XCTestCase {
             fileName: "canonical.caf",
             fileURL: canonicalURL
         )
+        let failingDurable = FailingTrackWriter()
         let mirrored = MirroredTrackWriter(
             temporary: canonical,
-            durable: FailingTrackWriter()
+            durable: failingDurable
         )
 
         let durableFailure = try await mirrored.appendPreservingCanonical(pcmBuffer: buffer)
+        _ = try await mirrored.appendPreservingCanonical(pcmBuffer: buffer)
+        _ = try await mirrored.appendPreservingCanonical(pcmBuffer: buffer)
+        let requiresExport = await mirrored.requiresDurableExport()
+        let durableAppendCount = await failingDurable.attemptedAppendCount()
         let stats = await mirrored.finalize()
 
         XCTAssertNotNil(durableFailure)
-        XCTAssertEqual(stats.first?.framesWritten, Int64(frames))
+        XCTAssertTrue(requiresExport)
+        XCTAssertEqual(durableAppendCount, 1)
+        XCTAssertEqual(stats.first?.framesWritten, Int64(frames * 3))
         XCTAssertTrue(CaptureArtifactValidator.isUsableAudioFile(canonicalURL))
+    }
+
+    @MainActor
+    func testForcedDurableExportReplacesReadableButTruncatedM4A() async throws {
+        let sourceURL = try makePCMFile(
+            named: "complete.caf",
+            frames: 48_000,
+            value: 0.25
+        )
+        let destinationURL = try makePCMFile(
+            named: "partial.m4a",
+            frames: 4_800,
+            value: 0.25
+        )
+
+        try await AudioCaptureService().exportDurableTrackIfNeeded(
+            from: sourceURL,
+            to: destinationURL,
+            forceReplace: true
+        )
+
+        let exported = try AVAudioFile(forReading: destinationURL)
+        let duration = Double(exported.length) / exported.processingFormat.sampleRate
+        XCTAssertEqual(duration, 1, accuracy: 0.05)
     }
 
     func testMixThrowsWhenNoTracksProvided() {

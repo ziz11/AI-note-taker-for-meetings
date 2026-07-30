@@ -207,6 +207,7 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         runtime.receiveHeartbeat(for: .system, level: 0, at: start)
 
         await runtime.receiveUnexpectedStop(reason: "stream stopped", at: start + .seconds(1))
+        await Task.yield()
 
         XCTAssertEqual(restartCount, 1)
         XCTAssertEqual(runtime.snapshot.phase, .recovering(attempt: 1))
@@ -224,6 +225,7 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         runtime.start(requiredChannels: [.system], at: start)
 
         await runtime.process(at: start + .seconds(3))
+        await Task.yield()
 
         XCTAssertEqual(restartCount, 1)
         XCTAssertEqual(runtime.snapshot.phase, .recovering(attempt: 1))
@@ -237,6 +239,7 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         runtime.receiveHeartbeat(for: .system, level: 0, at: start)
 
         await runtime.receiveUnexpectedStop(reason: "stream stopped", at: start + .seconds(1))
+        await Task.yield()
         runtime.receiveHeartbeat(for: .system, level: 0, at: start + .seconds(1.1))
         XCTAssertEqual(runtime.snapshot.phase, .recovering(attempt: 1))
 
@@ -278,6 +281,7 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         runtime.receiveHeartbeat(for: .system, level: 0, at: start)
 
         await runtime.receiveUnexpectedStop(reason: "stream stopped", at: start)
+        await Task.yield()
         await runtime.process(at: start + .seconds(1))
         await runtime.process(at: start + .seconds(1))
 
@@ -304,12 +308,41 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         runtime.start(requiredChannels: [.system], at: start)
         runtime.receiveHeartbeat(for: .system, level: 0, at: start)
         await runtime.receiveUnexpectedStop(reason: "stream stopped", at: start)
+        await Task.yield()
 
         runtime.stop()
         await runtime.process(at: start + .seconds(20))
 
         XCTAssertEqual(runtime.snapshot, .idle)
         XCTAssertEqual(restartCount, 1)
+    }
+
+    func testRuntimeDeadlineDoesNotWaitForHungRestart() async {
+        let start = clock.now
+        var cancelCount = 0
+        let runtime = CaptureHealthRuntime(
+            policy: .production,
+            restart: {
+                try await Task.sleep(for: .seconds(60))
+            },
+            cancelRestart: {
+                cancelCount += 1
+            }
+        )
+        runtime.start(requiredChannels: [.system], at: start)
+        runtime.receiveHeartbeat(for: .system, level: 0, at: start)
+
+        let processStarted = clock.now
+        await runtime.process(at: start + .milliseconds(1_500))
+        XCTAssertLessThan(processStarted.duration(to: clock.now), .milliseconds(100))
+
+        await runtime.process(at: start + .seconds(7.5))
+
+        XCTAssertEqual(
+            runtime.snapshot.phase,
+            .failed(message: "Audio capture could not be restored.")
+        )
+        XCTAssertEqual(cancelCount, 1)
     }
 
     private func makeHealthyCoordinator(at start: ContinuousClock.Instant) -> CaptureHealthCoordinator {
