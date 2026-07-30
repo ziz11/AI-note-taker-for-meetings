@@ -120,6 +120,35 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.snapshot.phase, .recovering(attempt: 1))
     }
 
+    func testUnexpectedCurrentStreamStopIsForwardedOnce() {
+        let lifecycle = ScreenCaptureStreamLifecycle()
+        let stream = NSObject()
+        lifecycle.install(stream)
+
+        XCTAssertTrue(lifecycle.shouldForwardStop(for: stream))
+        XCTAssertFalse(lifecycle.shouldForwardStop(for: stream))
+    }
+
+    func testIntentionalStopIsNotForwardedAsFailure() {
+        let lifecycle = ScreenCaptureStreamLifecycle()
+        let stream = NSObject()
+        lifecycle.install(stream)
+        lifecycle.markIntentionalStop(for: stream)
+
+        XCTAssertFalse(lifecycle.shouldForwardStop(for: stream))
+    }
+
+    func testLateStopFromReplacedStreamIsIgnored() {
+        let lifecycle = ScreenCaptureStreamLifecycle()
+        let oldStream = NSObject()
+        let replacement = NSObject()
+        lifecycle.install(oldStream)
+        lifecycle.install(replacement)
+
+        XCTAssertFalse(lifecycle.shouldForwardStop(for: oldStream))
+        XCTAssertTrue(lifecycle.shouldForwardStop(for: replacement))
+    }
+
     private func makeHealthyCoordinator(at start: ContinuousClock.Instant) -> CaptureHealthCoordinator {
         let coordinator = CaptureHealthCoordinator(policy: .production)
         coordinator.start(requiredChannels: [.microphone, .system], at: start)

@@ -734,7 +734,51 @@ final class FallbackMicrophoneRecorder: NSObject, AVAudioRecorderDelegate {
     }
 }
 
-final class ScreenCaptureAudioService: NSObject {
+final class ScreenCaptureStreamLifecycle {
+    private let lock = NSLock()
+    private var currentStreamID: ObjectIdentifier?
+    private var intentionalStops: Set<ObjectIdentifier> = []
+    private var forwardedStops: Set<ObjectIdentifier> = []
+
+    func install(_ stream: AnyObject) {
+        lock.lock()
+        defer { lock.unlock() }
+        currentStreamID = ObjectIdentifier(stream)
+    }
+
+    func markIntentionalStop(for stream: AnyObject) {
+        lock.lock()
+        defer { lock.unlock() }
+        intentionalStops.insert(ObjectIdentifier(stream))
+    }
+
+    func shouldForwardStop(for stream: AnyObject) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let streamID = ObjectIdentifier(stream)
+        guard currentStreamID == streamID,
+              !intentionalStops.contains(streamID),
+              !forwardedStops.contains(streamID) else {
+            return false
+        }
+        forwardedStops.insert(streamID)
+        return true
+    }
+}
+
+protocol ScreenAudioStreaming: AnyObject {
+    var microphoneViaStreamEnabled: Bool { get }
+    var onUnexpectedStop: ((String) -> Void)? { get set }
+
+    func startCapture(
+        onSystemSample: @escaping (CMSampleBuffer) -> Void,
+        onMicrophoneSample: @escaping (CMSampleBuffer) -> Void
+    ) async throws
+    func restartCapture() async throws
+    func stopCapture() async throws
+}
+
+final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioStreaming {
     private final class OutputRouter: NSObject, SCStreamOutput {
         var onSystemSample: ((CMSampleBuffer) -> Void)?
         var onMicrophoneSample: ((CMSampleBuffer) -> Void)?
@@ -756,14 +800,50 @@ final class ScreenCaptureAudioService: NSObject {
 
     private var stream: SCStream?
     private let router = OutputRouter()
+    private let lifecycle = ScreenCaptureStreamLifecycle()
     private let sampleQueue = DispatchQueue(label: "Recordly.ScreenCaptureSamples", qos: .userInitiated)
     private let screenDiscardQueue = DispatchQueue(label: "Recordly.ScreenCaptureDiscard", qos: .utility)
     private(set) var microphoneViaStreamEnabled = false
+    var onUnexpectedStop: ((String) -> Void)?
 
     func startCapture(
         onSystemSample: @escaping (CMSampleBuffer) -> Void,
         onMicrophoneSample: @escaping (CMSampleBuffer) -> Void
     ) async throws {
+        router.onSystemSample = onSystemSample
+        router.onMicrophoneSample = onMicrophoneSample
+        try await startNewStream()
+    }
+
+    func restartCapture() async throws {
+        if let stream {
+            lifecycle.markIntentionalStop(for: stream)
+            try? await stream.stopCapture()
+            self.stream = nil
+        }
+        try await startNewStream()
+    }
+
+    func stopCapture() async throws {
+        guard let stream else { return }
+        lifecycle.markIntentionalStop(for: stream)
+        defer {
+            self.stream = nil
+            self.router.onSystemSample = nil
+            self.router.onMicrophoneSample = nil
+            self.microphoneViaStreamEnabled = false
+        }
+        try await stream.stopCapture()
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        guard lifecycle.shouldForwardStop(for: stream) else {
+            return
+        }
+        onUnexpectedStop?(error.localizedDescription)
+    }
+
+    private func startNewStream() async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first else {
             throw AudioCaptureError.noScreenToCapture
@@ -785,9 +865,7 @@ final class ScreenCaptureAudioService: NSObject {
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         config.showsCursor = false
 
-        let stream = SCStream(filter: filter, configuration: config, delegate: nil)
-        router.onSystemSample = onSystemSample
-        router.onMicrophoneSample = onMicrophoneSample
+        let stream = SCStream(filter: filter, configuration: config, delegate: self)
 
         try stream.addStreamOutput(router, type: .audio, sampleHandlerQueue: sampleQueue)
 
@@ -805,18 +883,8 @@ final class ScreenCaptureAudioService: NSObject {
         }
 
         self.stream = stream
+        lifecycle.install(stream)
         try await stream.startCapture()
-    }
-
-    func stopCapture() async throws {
-        guard let stream else { return }
-        defer {
-            self.stream = nil
-            self.router.onSystemSample = nil
-            self.router.onMicrophoneSample = nil
-            self.microphoneViaStreamEnabled = false
-        }
-        try await stream.stopCapture()
     }
 }
 
