@@ -338,7 +338,14 @@ enum PCMWriterError: Error {
     case conversionFailed
 }
 
-actor PCMTrackWriter {
+protocol TrackWriting: Actor {
+    func append(sampleBuffer: CMSampleBuffer) throws
+    func append(pcmBuffer: AVAudioPCMBuffer, presentationTime: CMTime?) throws
+    func finalize() -> TrackRuntimeStats
+    func recordDiagnostic(_ diagnostic: String)
+}
+
+actor PCMTrackWriter: TrackWriting {
     static let canonicalSampleRate: Double = 48_000
     static let canonicalChannels: AVAudioChannelCount = 1
     static let durableAACBitRate = 96_000
@@ -626,10 +633,10 @@ actor PCMTrackWriter {
 }
 
 actor MirroredTrackWriter {
-    private let temporary: PCMTrackWriter
-    private let durable: PCMTrackWriter?
+    private let temporary: any TrackWriting
+    private let durable: (any TrackWriting)?
 
-    init(temporary: PCMTrackWriter, durable: PCMTrackWriter?) {
+    init(temporary: any TrackWriting, durable: (any TrackWriting)?) {
         self.temporary = temporary
         self.durable = durable
     }
@@ -639,11 +646,47 @@ actor MirroredTrackWriter {
         try await durable?.append(sampleBuffer: sampleBuffer)
     }
 
+    @discardableResult
+    func appendPreservingCanonical(sampleBuffer: CMSampleBuffer) async throws -> String? {
+        try await temporary.append(sampleBuffer: sampleBuffer)
+        guard let durable else {
+            return nil
+        }
+        do {
+            try await durable.append(sampleBuffer: sampleBuffer)
+            return nil
+        } catch {
+            let message = "durable mirror append failed: \(error.localizedDescription)"
+            await temporary.recordDiagnostic(message)
+            await durable.recordDiagnostic(message)
+            return message
+        }
+    }
+
     func append(pcmBuffer: AVAudioPCMBuffer, presentationTime: CMTime? = nil) async throws {
         try await temporary.append(pcmBuffer: pcmBuffer, presentationTime: presentationTime)
         try await durable?.append(pcmBuffer: pcmBuffer, presentationTime: presentationTime)
     }
 
+    @discardableResult
+    func appendPreservingCanonical(
+        pcmBuffer: AVAudioPCMBuffer,
+        presentationTime: CMTime? = nil
+    ) async throws -> String? {
+        try await temporary.append(pcmBuffer: pcmBuffer, presentationTime: presentationTime)
+        guard let durable else {
+            return nil
+        }
+        do {
+            try await durable.append(pcmBuffer: pcmBuffer, presentationTime: presentationTime)
+            return nil
+        } catch {
+            let message = "durable mirror append failed: \(error.localizedDescription)"
+            await temporary.recordDiagnostic(message)
+            await durable.recordDiagnostic(message)
+            return message
+        }
+    }
     func finalize() async -> [TrackRuntimeStats] {
         var stats: [TrackRuntimeStats] = []
         stats.append(await temporary.finalize())
@@ -736,20 +779,82 @@ final class FallbackMicrophoneRecorder: NSObject, AVAudioRecorderDelegate {
 
 final class ScreenCaptureStreamLifecycle: @unchecked Sendable {
     private let lock = NSLock()
+    private var nextCaptureRequest: UInt64 = 0
+    private var currentCaptureRequest: UInt64?
+    private var nextStreamGeneration: UInt64 = 0
     private var currentStreamID: ObjectIdentifier?
+    private var currentStreamGeneration: UInt64?
+    private var streamGenerations: [ObjectIdentifier: UInt64] = [:]
     private var intentionalStops: Set<ObjectIdentifier> = []
     private var forwardedStops: Set<ObjectIdentifier> = []
 
-    func install(_ stream: AnyObject) {
+    func beginCaptureRequest() -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
+        nextCaptureRequest &+= 1
+        currentCaptureRequest = nextCaptureRequest
+        return nextCaptureRequest
+    }
+
+    func cancelCaptureRequest() {
+        lock.lock()
+        defer { lock.unlock() }
+        nextCaptureRequest &+= 1
+        currentCaptureRequest = nil
+    }
+
+    func currentCaptureRequestToken() -> UInt64? {
+        lock.lock()
+        defer { lock.unlock() }
+        return currentCaptureRequest
+    }
+
+    func isCurrentCaptureRequest(_ request: UInt64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return currentCaptureRequest == request
+    }
+
+    @discardableResult
+    func install(_ stream: AnyObject) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        if let currentStreamID {
+            streamGenerations[currentStreamID] = nil
+        }
+        nextStreamGeneration &+= 1
+        let generation = nextStreamGeneration
+        let streamID = ObjectIdentifier(stream)
+        intentionalStops.remove(streamID)
+        forwardedStops.remove(streamID)
+        streamGenerations[streamID] = generation
         currentStreamID = ObjectIdentifier(stream)
+        currentStreamGeneration = generation
+        return generation
+    }
+
+    func generation(for stream: AnyObject) -> UInt64? {
+        lock.lock()
+        defer { lock.unlock() }
+        return streamGenerations[ObjectIdentifier(stream)]
+    }
+
+    func isCurrentStreamGeneration(_ generation: UInt64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return currentStreamGeneration == generation
     }
 
     func markIntentionalStop(for stream: AnyObject) {
         lock.lock()
         defer { lock.unlock() }
-        intentionalStops.insert(ObjectIdentifier(stream))
+        let streamID = ObjectIdentifier(stream)
+        intentionalStops.insert(streamID)
+        streamGenerations[streamID] = nil
+        if currentStreamID == streamID {
+            currentStreamID = nil
+            currentStreamGeneration = nil
+        }
     }
 
     func shouldForwardStop(for stream: AnyObject) -> Bool {
@@ -772,26 +877,31 @@ protocol ScreenAudioStreaming: AnyObject {
     var onUnexpectedStop: (@MainActor (String) -> Void)? { get set }
 
     func startCapture(
-        onSystemSample: @escaping (CMSampleBuffer) -> Void,
-        onMicrophoneSample: @escaping (CMSampleBuffer) -> Void
+        onSystemSample: @escaping (CMSampleBuffer, UInt64) -> Void,
+        onMicrophoneSample: @escaping (CMSampleBuffer, UInt64) -> Void
     ) async throws
     func restartCapture() async throws
     func stopCapture() async throws
+    func isCurrentStreamGeneration(_ generation: UInt64) -> Bool
 }
 
 @MainActor
 final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioStreaming {
     private final class OutputRouter: NSObject, SCStreamOutput {
-        var onSystemSample: ((CMSampleBuffer) -> Void)?
-        var onMicrophoneSample: ((CMSampleBuffer) -> Void)?
+        var generationForStream: ((SCStream) -> UInt64?)?
+        var onSystemSample: ((CMSampleBuffer, UInt64) -> Void)?
+        var onMicrophoneSample: ((CMSampleBuffer, UInt64) -> Void)?
 
         func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
-            guard sampleBuffer.isValid else { return }
+            guard sampleBuffer.isValid,
+                  let generation = generationForStream?(stream) else {
+                return
+            }
             switch outputType {
             case .audio:
-                onSystemSample?(sampleBuffer)
+                onSystemSample?(sampleBuffer, generation)
             case .microphone:
-                onMicrophoneSample?(sampleBuffer)
+                onMicrophoneSample?(sampleBuffer, generation)
             case .screen:
                 break
             @unknown default:
@@ -809,17 +919,26 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
     private var captureRequested = false
     var onUnexpectedStop: (@MainActor (String) -> Void)?
 
+    override init() {
+        super.init()
+        router.generationForStream = { [lifecycle] stream in
+            lifecycle.generation(for: stream)
+        }
+    }
+
     func startCapture(
-        onSystemSample: @escaping (CMSampleBuffer) -> Void,
-        onMicrophoneSample: @escaping (CMSampleBuffer) -> Void
+        onSystemSample: @escaping (CMSampleBuffer, UInt64) -> Void,
+        onMicrophoneSample: @escaping (CMSampleBuffer, UInt64) -> Void
     ) async throws {
         captureRequested = true
+        let request = lifecycle.beginCaptureRequest()
         router.onSystemSample = onSystemSample
         router.onMicrophoneSample = onMicrophoneSample
         do {
-            try await startNewStream()
+            try await startNewStream(for: request)
         } catch {
             captureRequested = false
+            lifecycle.cancelCaptureRequest()
             throw error
         }
     }
@@ -828,19 +947,26 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         guard captureRequested else {
             throw CancellationError()
         }
+        guard let request = lifecycle.currentCaptureRequestToken() else {
+            throw CancellationError()
+        }
         if let stream {
             lifecycle.markIntentionalStop(for: stream)
             try? await stream.stopCapture()
-            self.stream = nil
+            if self.stream === stream {
+                self.stream = nil
+            }
         }
-        guard captureRequested else {
+        guard captureRequested,
+              lifecycle.isCurrentCaptureRequest(request) else {
             throw CancellationError()
         }
-        try await startNewStream()
+        try await startNewStream(for: request)
     }
 
     func stopCapture() async throws {
         captureRequested = false
+        lifecycle.cancelCaptureRequest()
         guard let stream else {
             clearCaptureState()
             return
@@ -850,6 +976,10 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
             clearCaptureState()
         }
         try await stream.stopCapture()
+    }
+
+    func isCurrentStreamGeneration(_ generation: UInt64) -> Bool {
+        lifecycle.isCurrentStreamGeneration(generation)
     }
 
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -862,8 +992,12 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         }
     }
 
-    private func startNewStream() async throws {
+    private func startNewStream(for request: UInt64) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard captureRequested,
+              lifecycle.isCurrentCaptureRequest(request) else {
+            throw CancellationError()
+        }
         guard let display = content.displays.first else {
             throw AudioCaptureError.noScreenToCapture
         }
@@ -901,9 +1035,27 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
             microphoneViaStreamEnabled = false
         }
 
-        self.stream = stream
         lifecycle.install(stream)
-        try await stream.startCapture()
+        self.stream = stream
+        do {
+            try await stream.startCapture()
+        } catch {
+            lifecycle.markIntentionalStop(for: stream)
+            if self.stream === stream {
+                self.stream = nil
+            }
+            throw error
+        }
+
+        guard captureRequested,
+              lifecycle.isCurrentCaptureRequest(request) else {
+            lifecycle.markIntentionalStop(for: stream)
+            try? await stream.stopCapture()
+            if self.stream === stream {
+                self.stream = nil
+            }
+            throw CancellationError()
+        }
     }
 
     private func clearCaptureState() {
@@ -916,6 +1068,11 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
 
 @MainActor
 final class AudioCaptureService: AudioCaptureEngine {
+    private struct GenerationTaggedSample: @unchecked Sendable {
+        var buffer: CMSampleBuffer
+        var generation: UInt64
+    }
+
     private let metadataStore = SessionMetadataStore()
     private lazy var mergeService = SessionMergeService(metadataStore: metadataStore)
     private let screenCaptureService: any ScreenAudioStreaming
@@ -936,10 +1093,11 @@ final class AudioCaptureService: AudioCaptureEngine {
     private var microphoneLevelValue: Double = 0
     private var systemLevelValue: Double = 0
     private var systemStatusLabelValue = "Idle"
-    private var systemSamplePipeline: CaptureSamplePipeline<CMSampleBuffer>?
-    private var microphoneSamplePipeline: CaptureSamplePipeline<CMSampleBuffer>?
+    private var systemSamplePipeline: CaptureSamplePipeline<GenerationTaggedSample>?
+    private var microphoneSamplePipeline: CaptureSamplePipeline<GenerationTaggedSample>?
     private var healthRuntime: CaptureHealthRuntime?
     private var healthWatchdogTask: Task<Void, Never>?
+    private var healthUnexpectedStopTask: Task<Void, Never>?
     private var diagnosticPersistenceTask: Task<Void, Never>?
     private let screenCaptureStartupTimeoutNanos: UInt64 = 2_000_000_000
 
@@ -1014,12 +1172,15 @@ final class AudioCaptureService: AudioCaptureEngine {
                 // Buffers flow through single-consumer pipelines off the main actor;
                 // UI/metering state hops back to MainActor at most every 100 ms.
                 let systemMeter = MeteringThrottle()
-                let systemPipeline = CaptureSamplePipeline<CMSampleBuffer>(bufferLimit: 64) { [weak self] sampleBuffer in
+                let systemPipeline = CaptureSamplePipeline<GenerationTaggedSample>(bufferLimit: 64) { [weak self] sample in
                     do {
-                        try await streamSysWriter.append(sampleBuffer: sampleBuffer)
-                        let level = sampleBuffer.normalizedLevel
+                        _ = try await streamSysWriter.appendPreservingCanonical(sampleBuffer: sample.buffer)
+                        let level = sample.buffer.normalizedLevel
                         guard let self else { return }
                         await MainActor.run {
+                            guard self.screenCaptureService.isCurrentStreamGeneration(sample.generation) else {
+                                return
+                            }
                             self.healthRuntime?.receiveHeartbeat(
                                 for: .system,
                                 level: level,
@@ -1038,12 +1199,15 @@ final class AudioCaptureService: AudioCaptureEngine {
                     }
                 }
                 let microphoneMeter = MeteringThrottle()
-                let microphonePipeline = CaptureSamplePipeline<CMSampleBuffer>(bufferLimit: 64) { [weak self] sampleBuffer in
+                let microphonePipeline = CaptureSamplePipeline<GenerationTaggedSample>(bufferLimit: 64) { [weak self] sample in
                     do {
-                        try await streamMicWriter.append(sampleBuffer: sampleBuffer)
-                        let level = sampleBuffer.normalizedLevel
+                        _ = try await streamMicWriter.appendPreservingCanonical(sampleBuffer: sample.buffer)
+                        let level = sample.buffer.normalizedLevel
                         guard let self else { return }
                         await MainActor.run {
+                            guard self.screenCaptureService.isCurrentStreamGeneration(sample.generation) else {
+                                return
+                            }
                             self.healthRuntime?.receiveHeartbeat(
                                 for: .microphone,
                                 level: level,
@@ -1063,11 +1227,15 @@ final class AudioCaptureService: AudioCaptureEngine {
                 do {
                     try await withStartupTimeout { [self] in
                         try await self.screenCaptureService.startCapture(
-                            onSystemSample: { sampleBuffer in
-                                systemPipeline.submit(sampleBuffer)
+                            onSystemSample: { sampleBuffer, generation in
+                                systemPipeline.submit(
+                                    GenerationTaggedSample(buffer: sampleBuffer, generation: generation)
+                                )
                             },
-                            onMicrophoneSample: { sampleBuffer in
-                                microphonePipeline.submit(sampleBuffer)
+                            onMicrophoneSample: { sampleBuffer, generation in
+                                microphonePipeline.submit(
+                                    GenerationTaggedSample(buffer: sampleBuffer, generation: generation)
+                                )
                             }
                         )
                     }
@@ -1121,7 +1289,11 @@ final class AudioCaptureService: AudioCaptureEngine {
                     at: clock.now
                 )
                 screenCaptureService.onUnexpectedStop = { [weak self] reason in
-                    Task { @MainActor [weak self] in
+                    guard let self else {
+                        return
+                    }
+                    self.healthUnexpectedStopTask?.cancel()
+                    self.healthUnexpectedStopTask = Task { @MainActor [weak self] in
                         guard let self, let runtime = self.healthRuntime else {
                             return
                         }
@@ -1153,6 +1325,8 @@ final class AudioCaptureService: AudioCaptureEngine {
             self.systemAudioFileName = nil
             self.healthWatchdogTask?.cancel()
             self.healthWatchdogTask = nil
+            self.healthUnexpectedStopTask?.cancel()
+            self.healthUnexpectedStopTask = nil
             self.healthRuntime?.stop()
             self.healthRuntime = nil
             self.screenCaptureService.onUnexpectedStop = nil
@@ -1245,10 +1419,25 @@ final class AudioCaptureService: AudioCaptureEngine {
             throw AudioCaptureError.noActiveCapture
         }
 
+        let watchdogTask = healthWatchdogTask
+        let unexpectedStopTask = healthUnexpectedStopTask
         healthWatchdogTask?.cancel()
         healthWatchdogTask = nil
+        healthUnexpectedStopTask?.cancel()
+        healthUnexpectedStopTask = nil
         healthRuntime?.stop()
         screenCaptureService.onUnexpectedStop = nil
+
+        do {
+            try await screenCaptureService.stopCapture()
+        } catch {
+            try? await metadataStore.appendNote(
+                "ScreenCaptureKit stop failed: \(error.localizedDescription). Continuing finalization.",
+                in: sessionDirectory
+            )
+        }
+        await watchdogTask?.value
+        await unexpectedStopTask?.value
         await diagnosticPersistenceTask?.value
 
         defer {
@@ -1267,15 +1456,6 @@ final class AudioCaptureService: AudioCaptureEngine {
         }
 
         try await metadataStore.updateStatus(.finalizingTracks, in: sessionDirectory)
-
-        do {
-            try await screenCaptureService.stopCapture()
-        } catch {
-            try? await metadataStore.appendNote(
-                "ScreenCaptureKit stop failed: \(error.localizedDescription). Continuing finalization.",
-                in: sessionDirectory
-            )
-        }
         try? await fallbackMicrophoneRecorder.stopRecording()
 
         // Drain buffered samples before finalizing so tail audio isn't lost.

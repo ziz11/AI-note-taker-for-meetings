@@ -353,6 +353,37 @@ final class RecordingsPhaseOneTests: XCTestCase {
         XCTAssertEqual(alertCount, 2)
     }
 
+    func testManualRetryDoesNotAlertAgainWithoutSuccessfulRecovery() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = MutableHealthCaptureEngine()
+        var alertCount = 0
+        let store = makeStore(
+            repository: repository,
+            audioCaptureEngine: captureEngine,
+            captureFailureNotifier: { alertCount += 1 }
+        )
+
+        await store.beginRecording()
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .failed(message: "First failure."),
+            affectedChannels: [.system],
+            statusLabel: "Not recording"
+        )
+        store.refreshCaptureHealth()
+
+        store.retryCaptureNow()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        store.refreshCaptureHealth()
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .failed(message: "Retry failed."),
+            affectedChannels: [.system],
+            statusLabel: "Not recording"
+        )
+        store.refreshCaptureHealth()
+
+        XCTAssertEqual(alertCount, 1)
+    }
+
     private func makeStore(repository: InMemoryRecordingsRepository) -> RecordingsStore {
         let modelManager = ModelManager()
         let fluidProvider = FluidAudioASRModelProvider()

@@ -31,9 +31,9 @@ struct CaptureRecoveryPolicy: Equatable, Sendable {
     var failureDeadline: Duration
 
     static let production = CaptureRecoveryPolicy(
-        heartbeatTimeout: .seconds(3),
+        heartbeatTimeout: .milliseconds(1_500),
         attemptOffsets: [.zero, .seconds(2), .seconds(5)],
-        failureDeadline: .seconds(8)
+        failureDeadline: .seconds(6)
     )
 }
 

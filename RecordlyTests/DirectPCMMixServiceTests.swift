@@ -3,6 +3,36 @@ import XCTest
 @testable import Recordly
 
 final class DirectPCMMixServiceTests: XCTestCase {
+    private actor FailingTrackWriter: TrackWriting {
+        private enum Failure: Error {
+            case appendFailed
+        }
+
+        func append(sampleBuffer: CMSampleBuffer) throws {
+            throw Failure.appendFailed
+        }
+
+        func append(pcmBuffer: AVAudioPCMBuffer, presentationTime: CMTime?) throws {
+            throw Failure.appendFailed
+        }
+
+        func finalize() -> TrackRuntimeStats {
+            TrackRuntimeStats(
+                kind: .system,
+                fileName: "durable.m4a",
+                firstPTS: nil,
+                lastPTS: nil,
+                framesWritten: 0,
+                sampleRate: PCMTrackWriter.canonicalSampleRate,
+                bufferCount: 0,
+                fallback: false,
+                diagnostics: []
+            )
+        }
+
+        func recordDiagnostic(_ diagnostic: String) {}
+    }
+
     private var directory: URL!
 
     override func setUpWithError() throws {
@@ -360,6 +390,28 @@ final class DirectPCMMixServiceTests: XCTestCase {
 
         let file = try AVAudioFile(forReading: url)
         XCTAssertEqual(file.fileFormat.settings[AVFormatIDKey] as? UInt32, kAudioFormatMPEG4AAC)
+    }
+
+    func testMirroredWriterReportsDurableFailureAfterCanonicalCAFWriteSucceeds() async throws {
+        let frames = 4_800
+        let canonicalURL = directory.appendingPathComponent("canonical.caf")
+        let buffer = try makeSourceBuffer(frames: frames) { _ in 0.25 }
+        let canonical = try PCMTrackWriter(
+            kind: .system,
+            fileName: "canonical.caf",
+            fileURL: canonicalURL
+        )
+        let mirrored = MirroredTrackWriter(
+            temporary: canonical,
+            durable: FailingTrackWriter()
+        )
+
+        let durableFailure = try await mirrored.appendPreservingCanonical(pcmBuffer: buffer)
+        let stats = await mirrored.finalize()
+
+        XCTAssertNotNil(durableFailure)
+        XCTAssertEqual(stats.first?.framesWritten, Int64(frames))
+        XCTAssertTrue(CaptureArtifactValidator.isUsableAudioFile(canonicalURL))
     }
 
     func testMixThrowsWhenNoTracksProvided() {

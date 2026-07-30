@@ -978,14 +978,17 @@ final class RecordingsStore: ObservableObject {
     }
 
     private func notifyIfCaptureFailureStarted(_ captureHealth: CaptureHealthSnapshot) {
-        if case .failed = captureHealth.phase {
+        switch captureHealth.phase {
+        case .failed:
             guard !captureFailureEpisodeActive else {
                 return
             }
             captureFailureEpisodeActive = true
             captureFailureNotifier()
-        } else {
+        case .healthy, .idle:
             captureFailureEpisodeActive = false
+        case .starting, .recovering:
+            break
         }
     }
 

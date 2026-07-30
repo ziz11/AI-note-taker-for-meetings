@@ -5,12 +5,31 @@ import XCTest
 final class CaptureHealthCoordinatorTests: XCTestCase {
     private let clock = ContinuousClock()
 
-    func testProductionPolicyUsesThreeAttemptsWithinEightSeconds() {
+    func testProductionPolicyUsesThreeAttemptsAndAlertsWithinEightSecondsOfLastHeartbeat() {
+        XCTAssertEqual(CaptureRecoveryPolicy.production.heartbeatTimeout, .milliseconds(1_500))
         XCTAssertEqual(
             CaptureRecoveryPolicy.production.attemptOffsets,
             [.zero, .seconds(2), .seconds(5)]
         )
-        XCTAssertEqual(CaptureRecoveryPolicy.production.failureDeadline, .seconds(8))
+        XCTAssertEqual(CaptureRecoveryPolicy.production.failureDeadline, .seconds(6))
+    }
+
+    func testSilentStallAlertsWithinEightSecondsOfLastHeartbeat() {
+        let start = clock.now
+        let coordinator = makeHealthyCoordinator(at: start)
+
+        XCTAssertEqual(
+            coordinator.nextAction(at: start + .milliseconds(1_500)),
+            .restart(attempt: 1)
+        )
+        coordinator.restartFinished(attempt: 1, error: TestError.failed, at: start + .milliseconds(1_500))
+        XCTAssertEqual(coordinator.nextAction(at: start + .seconds(3.5)), .restart(attempt: 2))
+        coordinator.restartFinished(attempt: 2, error: TestError.failed, at: start + .seconds(3.5))
+        XCTAssertEqual(coordinator.nextAction(at: start + .seconds(6.5)), .restart(attempt: 3))
+        coordinator.restartFinished(attempt: 3, error: TestError.failed, at: start + .seconds(6.5))
+
+        XCTAssertNil(coordinator.nextAction(at: start + .seconds(7.49)))
+        XCTAssertEqual(coordinator.nextAction(at: start + .seconds(7.5)), .alertFailure)
     }
 
     func testSilentBuffersRemainHealthy() {
@@ -26,7 +45,7 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.snapshot.phase, .healthy)
         XCTAssertEqual(coordinator.snapshot.statusLabel, "Captured")
-        XCTAssertNil(coordinator.nextAction(at: start + .seconds(2)))
+        XCTAssertNil(coordinator.nextAction(at: start + .seconds(1)))
     }
 
     func testUnexpectedStopStartsOneRecoveryEpisode() {
@@ -77,7 +96,7 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.snapshot.affectedChannels, [])
     }
 
-    func testAllAttemptsFailAtEightSecondDeadline() {
+    func testAllAttemptsFailAtSixSecondRecoveryDeadline() {
         let start = clock.now
         let coordinator = makeHealthyCoordinator(at: start)
         _ = coordinator.receiveUnexpectedStop(reason: "stopped", at: start)
@@ -88,8 +107,8 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.nextAction(at: start + .seconds(5)), .restart(attempt: 3))
         coordinator.restartFinished(attempt: 3, error: TestError.failed, at: start + .seconds(5))
 
-        XCTAssertEqual(coordinator.nextAction(at: start + .seconds(7.9)), nil)
-        XCTAssertEqual(coordinator.nextAction(at: start + .seconds(8)), .alertFailure)
+        XCTAssertEqual(coordinator.nextAction(at: start + .seconds(5.9)), nil)
+        XCTAssertEqual(coordinator.nextAction(at: start + .seconds(6)), .alertFailure)
         XCTAssertEqual(
             coordinator.snapshot.phase,
             .failed(message: "Audio capture could not be restored.")
@@ -147,6 +166,31 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
 
         XCTAssertFalse(lifecycle.shouldForwardStop(for: oldStream))
         XCTAssertTrue(lifecycle.shouldForwardStop(for: replacement))
+    }
+
+    func testStoppingInvalidatesPendingCaptureRequest() {
+        let lifecycle = ScreenCaptureStreamLifecycle()
+        let request = lifecycle.beginCaptureRequest()
+
+        XCTAssertTrue(lifecycle.isCurrentCaptureRequest(request))
+
+        lifecycle.cancelCaptureRequest()
+
+        XCTAssertFalse(lifecycle.isCurrentCaptureRequest(request))
+    }
+
+    func testOldStreamGenerationCannotConfirmReplacementHealth() {
+        let lifecycle = ScreenCaptureStreamLifecycle()
+        let oldStream = NSObject()
+        let oldGeneration = lifecycle.install(oldStream)
+
+        lifecycle.markIntentionalStop(for: oldStream)
+        let replacement = NSObject()
+        let replacementGeneration = lifecycle.install(replacement)
+
+        XCTAssertNotEqual(oldGeneration, replacementGeneration)
+        XCTAssertFalse(lifecycle.isCurrentStreamGeneration(oldGeneration))
+        XCTAssertTrue(lifecycle.isCurrentStreamGeneration(replacementGeneration))
     }
 
     func testRuntimeDelegateStopRestartsTheStream() async {
