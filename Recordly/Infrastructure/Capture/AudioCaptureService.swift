@@ -734,7 +734,7 @@ final class FallbackMicrophoneRecorder: NSObject, AVAudioRecorderDelegate {
     }
 }
 
-final class ScreenCaptureStreamLifecycle {
+final class ScreenCaptureStreamLifecycle: @unchecked Sendable {
     private let lock = NSLock()
     private var currentStreamID: ObjectIdentifier?
     private var intentionalStops: Set<ObjectIdentifier> = []
@@ -766,9 +766,10 @@ final class ScreenCaptureStreamLifecycle {
     }
 }
 
+@MainActor
 protocol ScreenAudioStreaming: AnyObject {
     var microphoneViaStreamEnabled: Bool { get }
-    var onUnexpectedStop: ((String) -> Void)? { get set }
+    var onUnexpectedStop: (@MainActor (String) -> Void)? { get set }
 
     func startCapture(
         onSystemSample: @escaping (CMSampleBuffer) -> Void,
@@ -778,6 +779,7 @@ protocol ScreenAudioStreaming: AnyObject {
     func stopCapture() async throws
 }
 
+@MainActor
 final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioStreaming {
     private final class OutputRouter: NSObject, SCStreamOutput {
         var onSystemSample: ((CMSampleBuffer) -> Void)?
@@ -804,43 +806,60 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
     private let sampleQueue = DispatchQueue(label: "Recordly.ScreenCaptureSamples", qos: .userInitiated)
     private let screenDiscardQueue = DispatchQueue(label: "Recordly.ScreenCaptureDiscard", qos: .utility)
     private(set) var microphoneViaStreamEnabled = false
-    var onUnexpectedStop: ((String) -> Void)?
+    private var captureRequested = false
+    var onUnexpectedStop: (@MainActor (String) -> Void)?
 
     func startCapture(
         onSystemSample: @escaping (CMSampleBuffer) -> Void,
         onMicrophoneSample: @escaping (CMSampleBuffer) -> Void
     ) async throws {
+        captureRequested = true
         router.onSystemSample = onSystemSample
         router.onMicrophoneSample = onMicrophoneSample
-        try await startNewStream()
+        do {
+            try await startNewStream()
+        } catch {
+            captureRequested = false
+            throw error
+        }
     }
 
     func restartCapture() async throws {
+        guard captureRequested else {
+            throw CancellationError()
+        }
         if let stream {
             lifecycle.markIntentionalStop(for: stream)
             try? await stream.stopCapture()
             self.stream = nil
         }
+        guard captureRequested else {
+            throw CancellationError()
+        }
         try await startNewStream()
     }
 
     func stopCapture() async throws {
-        guard let stream else { return }
+        captureRequested = false
+        guard let stream else {
+            clearCaptureState()
+            return
+        }
         lifecycle.markIntentionalStop(for: stream)
         defer {
-            self.stream = nil
-            self.router.onSystemSample = nil
-            self.router.onMicrophoneSample = nil
-            self.microphoneViaStreamEnabled = false
+            clearCaptureState()
         }
         try await stream.stopCapture()
     }
 
-    func stream(_ stream: SCStream, didStopWithError error: Error) {
+    nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
         guard lifecycle.shouldForwardStop(for: stream) else {
             return
         }
-        onUnexpectedStop?(error.localizedDescription)
+        let message = error.localizedDescription
+        Task { @MainActor [weak self] in
+            self?.onUnexpectedStop?(message)
+        }
     }
 
     private func startNewStream() async throws {
@@ -886,15 +905,24 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         lifecycle.install(stream)
         try await stream.startCapture()
     }
+
+    private func clearCaptureState() {
+        stream = nil
+        router.onSystemSample = nil
+        router.onMicrophoneSample = nil
+        microphoneViaStreamEnabled = false
+    }
 }
 
 @MainActor
 final class AudioCaptureService: AudioCaptureEngine {
     private let metadataStore = SessionMetadataStore()
     private lazy var mergeService = SessionMergeService(metadataStore: metadataStore)
-    private let screenCaptureService = ScreenCaptureAudioService()
+    private let screenCaptureService: any ScreenAudioStreaming
+    private let recoveryPolicy: CaptureRecoveryPolicy
     private let screenCapturePermissionCoordinator = ScreenCapturePermissionCoordinator()
     private let fallbackMicrophoneRecorder = FallbackMicrophoneRecorder()
+    private let clock = ContinuousClock()
 
     private var isRunning = false
     private var microphoneFileName: String?
@@ -908,12 +936,20 @@ final class AudioCaptureService: AudioCaptureEngine {
     private var microphoneLevelValue: Double = 0
     private var systemLevelValue: Double = 0
     private var systemStatusLabelValue = "Idle"
-    private var lastSystemSampleAt: Date?
-    private var systemAppendErrorCount = 0
     private var systemSamplePipeline: CaptureSamplePipeline<CMSampleBuffer>?
     private var microphoneSamplePipeline: CaptureSamplePipeline<CMSampleBuffer>?
+    private var healthRuntime: CaptureHealthRuntime?
+    private var healthWatchdogTask: Task<Void, Never>?
+    private var diagnosticPersistenceTask: Task<Void, Never>?
     private let screenCaptureStartupTimeoutNanos: UInt64 = 2_000_000_000
-    private let systemAudioSilenceTimeout: TimeInterval = 3
+
+    init(
+        screenCaptureService: (any ScreenAudioStreaming)? = nil,
+        recoveryPolicy: CaptureRecoveryPolicy = .production
+    ) {
+        self.screenCaptureService = screenCaptureService ?? ScreenCaptureAudioService()
+        self.recoveryPolicy = recoveryPolicy
+    }
 
     func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
         guard !isRunning else {
@@ -981,20 +1017,23 @@ final class AudioCaptureService: AudioCaptureEngine {
                 let systemPipeline = CaptureSamplePipeline<CMSampleBuffer>(bufferLimit: 64) { [weak self] sampleBuffer in
                     do {
                         try await streamSysWriter.append(sampleBuffer: sampleBuffer)
-                        guard let self, systemMeter.due() else { return }
                         let level = sampleBuffer.normalizedLevel
+                        guard let self else { return }
                         await MainActor.run {
-                            self.systemLevelValue = level
-                            self.lastSystemSampleAt = Date()
-                            self.systemAppendErrorCount = 0
-                            self.systemStatusLabelValue = "Captured"
+                            self.healthRuntime?.receiveHeartbeat(
+                                for: .system,
+                                level: level,
+                                at: self.clock.now
+                            )
+                            if systemMeter.due() {
+                                self.systemLevelValue = level
+                            }
                         }
                     } catch {
                         await streamSysWriter.recordDiagnostic("system append failed: \(error.localizedDescription)")
                         guard let self else { return }
                         await MainActor.run {
-                            self.systemAppendErrorCount += 1
-                            self.systemStatusLabelValue = "System write error"
+                            self.systemLevelValue = 0
                         }
                     }
                 }
@@ -1002,10 +1041,17 @@ final class AudioCaptureService: AudioCaptureEngine {
                 let microphonePipeline = CaptureSamplePipeline<CMSampleBuffer>(bufferLimit: 64) { [weak self] sampleBuffer in
                     do {
                         try await streamMicWriter.append(sampleBuffer: sampleBuffer)
-                        guard let self, microphoneMeter.due() else { return }
                         let level = sampleBuffer.normalizedLevel
+                        guard let self else { return }
                         await MainActor.run {
-                            self.microphoneLevelValue = level
+                            self.healthRuntime?.receiveHeartbeat(
+                                for: .microphone,
+                                level: level,
+                                at: self.clock.now
+                            )
+                            if microphoneMeter.due() {
+                                self.microphoneLevelValue = level
+                            }
                         }
                     } catch {
                         // Keep recording alive if one buffer fails to convert.
@@ -1065,6 +1111,26 @@ final class AudioCaptureService: AudioCaptureEngine {
             self.systemAudioFileName = didStartStreamCapture ? LiveCaptureArtifactNames.systemDurable : nil
             self.isRunning = true
 
+            if didStartStreamCapture {
+                let runtime = makeCaptureHealthRuntime(sessionDirectory: sessionDirectory)
+                self.healthRuntime = runtime
+                runtime.start(
+                    requiredChannels: screenCaptureService.microphoneViaStreamEnabled
+                        ? [.microphone, .system]
+                        : [.system],
+                    at: clock.now
+                )
+                screenCaptureService.onUnexpectedStop = { [weak self] reason in
+                    Task { @MainActor [weak self] in
+                        guard let self, let runtime = self.healthRuntime else {
+                            return
+                        }
+                        await runtime.receiveUnexpectedStop(reason: reason, at: self.clock.now)
+                    }
+                }
+                startHealthWatchdog()
+            }
+
             return CaptureArtifacts(
                 microphoneFile: LiveCaptureArtifactNames.microphoneDurable,
                 systemAudioFile: didStartStreamCapture ? LiveCaptureArtifactNames.systemDurable : nil,
@@ -1085,9 +1151,63 @@ final class AudioCaptureService: AudioCaptureEngine {
             self.activeSessionID = nil
             self.microphoneFileName = nil
             self.systemAudioFileName = nil
-            self.lastSystemSampleAt = nil
-            self.systemAppendErrorCount = 0
+            self.healthWatchdogTask?.cancel()
+            self.healthWatchdogTask = nil
+            self.healthRuntime?.stop()
+            self.healthRuntime = nil
+            self.screenCaptureService.onUnexpectedStop = nil
             throw error
+        }
+    }
+
+    private func makeCaptureHealthRuntime(
+        sessionDirectory: URL
+    ) -> CaptureHealthRuntime {
+        CaptureHealthRuntime(
+            policy: recoveryPolicy,
+            restart: { [weak self] in
+                guard let self else {
+                    throw CancellationError()
+                }
+                try await self.withStartupTimeout {
+                    try await self.screenCaptureService.restartCapture()
+                }
+            },
+            onDiagnostic: { [weak self] diagnostic in
+                self?.persistCaptureDiagnostic(diagnostic, in: sessionDirectory)
+            }
+        )
+    }
+
+    private func startHealthWatchdog() {
+        healthWatchdogTask?.cancel()
+        healthWatchdogTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(250))
+                } catch {
+                    return
+                }
+                guard let self,
+                      self.isRunning,
+                      let runtime = self.healthRuntime else {
+                    return
+                }
+                await runtime.process(at: self.clock.now)
+            }
+        }
+    }
+
+    private func persistCaptureDiagnostic(
+        _ diagnostic: String,
+        in sessionDirectory: URL
+    ) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let note = "[capture-health \(timestamp)] \(diagnostic)"
+        let previousTask = diagnosticPersistenceTask
+        diagnosticPersistenceTask = Task { [metadataStore] in
+            await previousTask?.value
+            try? await metadataStore.appendNote(note, in: sessionDirectory)
         }
     }
 
@@ -1125,6 +1245,12 @@ final class AudioCaptureService: AudioCaptureEngine {
             throw AudioCaptureError.noActiveCapture
         }
 
+        healthWatchdogTask?.cancel()
+        healthWatchdogTask = nil
+        healthRuntime?.stop()
+        screenCaptureService.onUnexpectedStop = nil
+        await diagnosticPersistenceTask?.value
+
         defer {
             isRunning = false
             microphoneWriter = nil
@@ -1136,8 +1262,8 @@ final class AudioCaptureService: AudioCaptureEngine {
             microphoneLevelValue = 0
             systemLevelValue = 0
             systemStatusLabelValue = "Idle"
-            lastSystemSampleAt = nil
-            systemAppendErrorCount = 0
+            healthRuntime = nil
+            diagnosticPersistenceTask = nil
         }
 
         try await metadataStore.updateStatus(.finalizingTracks, in: sessionDirectory)
@@ -1254,31 +1380,32 @@ final class AudioCaptureService: AudioCaptureEngine {
     }
 
     func currentSystemAudioLevel() -> Double {
-        refreshSystemAudioHealth()
+        switch captureHealth.phase {
+        case .recovering, .failed:
+            return 0
+        case .idle, .starting, .healthy:
+            break
+        }
         return systemLevelValue
     }
 
     var systemAudioStatusLabel: String {
-        refreshSystemAudioHealth()
-        return systemStatusLabelValue
+        healthRuntime?.snapshot.statusLabel ?? systemStatusLabelValue
     }
 
-    private func refreshSystemAudioHealth(now: Date = Date()) {
-        guard isRunning, systemWriter != nil else {
+    var captureHealth: CaptureHealthSnapshot {
+        healthRuntime?.snapshot ?? CaptureHealthSnapshot(
+            phase: .idle,
+            affectedChannels: [],
+            statusLabel: systemStatusLabelValue
+        )
+    }
+
+    func retryCaptureNow() async {
+        guard let healthRuntime else {
             return
         }
-        guard systemAppendErrorCount == 0 else {
-            systemLevelValue = 0
-            systemStatusLabelValue = "System write error"
-            return
-        }
-        guard let lastSystemSampleAt else {
-            return
-        }
-        if now.timeIntervalSince(lastSystemSampleAt) > systemAudioSilenceTimeout {
-            systemLevelValue = 0
-            systemStatusLabelValue = "System silent"
-        }
+        await healthRuntime.retryNow(at: clock.now)
     }
 
     func recoverPendingSessions(in recordingsDirectory: URL) async {

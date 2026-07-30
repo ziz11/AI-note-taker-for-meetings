@@ -149,6 +149,125 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         XCTAssertTrue(lifecycle.shouldForwardStop(for: replacement))
     }
 
+    func testRuntimeDelegateStopRestartsTheStream() async {
+        let start = clock.now
+        var restartCount = 0
+        let runtime = CaptureHealthRuntime(
+            policy: .production,
+            restart: {
+                restartCount += 1
+            }
+        )
+        runtime.start(requiredChannels: [.microphone, .system], at: start)
+        runtime.receiveHeartbeat(for: .microphone, level: 0.2, at: start)
+        runtime.receiveHeartbeat(for: .system, level: 0, at: start)
+
+        await runtime.receiveUnexpectedStop(reason: "stream stopped", at: start + .seconds(1))
+
+        XCTAssertEqual(restartCount, 1)
+        XCTAssertEqual(runtime.snapshot.phase, .recovering(attempt: 1))
+    }
+
+    func testRuntimeMissingHeartbeatRestartsTheStream() async {
+        let start = clock.now
+        var restartCount = 0
+        let runtime = CaptureHealthRuntime(
+            policy: .production,
+            restart: {
+                restartCount += 1
+            }
+        )
+        runtime.start(requiredChannels: [.system], at: start)
+
+        await runtime.process(at: start + .seconds(3))
+
+        XCTAssertEqual(restartCount, 1)
+        XCTAssertEqual(runtime.snapshot.phase, .recovering(attempt: 1))
+    }
+
+    func testRuntimeRestartNeedsFreshRequiredHeartbeats() async {
+        let start = clock.now
+        let runtime = CaptureHealthRuntime(policy: .production, restart: {})
+        runtime.start(requiredChannels: [.microphone, .system], at: start)
+        runtime.receiveHeartbeat(for: .microphone, level: 0.2, at: start)
+        runtime.receiveHeartbeat(for: .system, level: 0, at: start)
+
+        await runtime.receiveUnexpectedStop(reason: "stream stopped", at: start + .seconds(1))
+        runtime.receiveHeartbeat(for: .system, level: 0, at: start + .seconds(1.1))
+        XCTAssertEqual(runtime.snapshot.phase, .recovering(attempt: 1))
+
+        runtime.receiveHeartbeat(for: .microphone, level: 0, at: start + .seconds(1.1))
+        XCTAssertEqual(runtime.snapshot.phase, .healthy)
+    }
+
+    func testRuntimeFailedRecoveryExposesTypedHealthAtDeadline() async {
+        let start = clock.now
+        let runtime = CaptureHealthRuntime(
+            policy: .production,
+            restart: {
+                throw TestError.failed
+            }
+        )
+        runtime.start(requiredChannels: [.system], at: start)
+        runtime.receiveHeartbeat(for: .system, level: 0, at: start)
+
+        await runtime.receiveUnexpectedStop(reason: "stream stopped", at: start)
+        await runtime.process(at: start + .seconds(2))
+        await runtime.process(at: start + .seconds(5))
+        await runtime.process(at: start + .seconds(8))
+
+        XCTAssertEqual(
+            runtime.snapshot.phase,
+            .failed(message: "Audio capture could not be restored.")
+        )
+    }
+
+    func testRuntimeForwardsEachDiagnosticOnlyOnce() async {
+        let start = clock.now
+        var diagnostics: [String] = []
+        let runtime = CaptureHealthRuntime(
+            policy: .production,
+            restart: {},
+            onDiagnostic: { diagnostics.append($0) }
+        )
+        runtime.start(requiredChannels: [.system], at: start)
+        runtime.receiveHeartbeat(for: .system, level: 0, at: start)
+
+        await runtime.receiveUnexpectedStop(reason: "stream stopped", at: start)
+        await runtime.process(at: start + .seconds(1))
+        await runtime.process(at: start + .seconds(1))
+
+        XCTAssertEqual(
+            diagnostics.filter { $0.contains("Unexpected capture stop") }.count,
+            1
+        )
+        XCTAssertEqual(
+            diagnostics.filter { $0.contains("restart attempt 1") }.count,
+            2
+        )
+    }
+
+    func testRuntimeStopCancelsFurtherRecoveryActions() async {
+        let start = clock.now
+        var restartCount = 0
+        let runtime = CaptureHealthRuntime(
+            policy: .production,
+            restart: {
+                restartCount += 1
+                throw TestError.failed
+            }
+        )
+        runtime.start(requiredChannels: [.system], at: start)
+        runtime.receiveHeartbeat(for: .system, level: 0, at: start)
+        await runtime.receiveUnexpectedStop(reason: "stream stopped", at: start)
+
+        runtime.stop()
+        await runtime.process(at: start + .seconds(20))
+
+        XCTAssertEqual(runtime.snapshot, .idle)
+        XCTAssertEqual(restartCount, 1)
+    }
+
     private func makeHealthyCoordinator(at start: ContinuousClock.Instant) -> CaptureHealthCoordinator {
         let coordinator = CaptureHealthCoordinator(policy: .production)
         coordinator.start(requiredChannels: [.microphone, .system], at: start)

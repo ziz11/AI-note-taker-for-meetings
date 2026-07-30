@@ -101,7 +101,8 @@ final class CaptureHealthCoordinator {
             }
             markHealthy()
         case .recovering:
-            guard hasFreshHeartbeats(since: lastRestartStartedAt) else {
+            guard !restartInFlight,
+                  hasFreshHeartbeats(since: lastRestartStartedAt) else {
                 return
             }
             let interruption = recoveryStartedAt.map { $0.duration(to: instant) }
@@ -304,5 +305,107 @@ final class CaptureHealthCoordinator {
             .map(\.rawValue)
             .sorted()
             .joined(separator: ", ")
+    }
+}
+
+@MainActor
+final class CaptureHealthRuntime {
+    typealias RestartOperation = @MainActor () async throws -> Void
+    typealias DiagnosticObserver = @MainActor (String) -> Void
+
+    private let coordinator: CaptureHealthCoordinator
+    private let restart: RestartOperation
+    private let onDiagnostic: DiagnosticObserver
+    private var forwardedDiagnosticCount = 0
+
+    var snapshot: CaptureHealthSnapshot {
+        coordinator.snapshot
+    }
+
+    init(
+        policy: CaptureRecoveryPolicy,
+        restart: @escaping RestartOperation,
+        onDiagnostic: @escaping DiagnosticObserver = { _ in }
+    ) {
+        coordinator = CaptureHealthCoordinator(policy: policy)
+        self.restart = restart
+        self.onDiagnostic = onDiagnostic
+    }
+
+    func start(
+        requiredChannels: Set<CaptureChannel>,
+        at instant: ContinuousClock.Instant
+    ) {
+        forwardedDiagnosticCount = 0
+        coordinator.start(requiredChannels: requiredChannels, at: instant)
+    }
+
+    func receiveHeartbeat(
+        for channel: CaptureChannel,
+        level: Double,
+        at instant: ContinuousClock.Instant
+    ) {
+        coordinator.receiveHeartbeat(for: channel, level: level, at: instant)
+        forwardNewDiagnostics()
+    }
+
+    func receiveUnexpectedStop(
+        reason: String,
+        at instant: ContinuousClock.Instant
+    ) async {
+        let action = coordinator.receiveUnexpectedStop(reason: reason, at: instant)
+        forwardNewDiagnostics()
+        await execute(action, at: instant)
+    }
+
+    func process(at instant: ContinuousClock.Instant) async {
+        let action = coordinator.nextAction(at: instant)
+        forwardNewDiagnostics()
+        await execute(action, at: instant)
+    }
+
+    func retryNow(at instant: ContinuousClock.Instant) async {
+        let action = coordinator.retryNow(at: instant)
+        forwardNewDiagnostics()
+        await execute(action, at: instant)
+    }
+
+    func stop() {
+        forwardNewDiagnostics()
+        coordinator.stop()
+        forwardedDiagnosticCount = 0
+    }
+
+    private func execute(
+        _ action: CaptureHealthAction?,
+        at instant: ContinuousClock.Instant
+    ) async {
+        guard let action else {
+            return
+        }
+
+        switch action {
+        case .restart(let attempt):
+            do {
+                try await restart()
+                coordinator.restartFinished(attempt: attempt, error: nil, at: instant)
+            } catch {
+                coordinator.restartFinished(attempt: attempt, error: error, at: instant)
+            }
+        case .alertFailure:
+            break
+        }
+        forwardNewDiagnostics()
+    }
+
+    private func forwardNewDiagnostics() {
+        let diagnostics = coordinator.diagnostics
+        guard forwardedDiagnosticCount < diagnostics.count else {
+            return
+        }
+        for diagnostic in diagnostics[forwardedDiagnosticCount...] {
+            onDiagnostic(diagnostic)
+        }
+        forwardedDiagnosticCount = diagnostics.count
     }
 }
