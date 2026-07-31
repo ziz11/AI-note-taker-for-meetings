@@ -804,6 +804,7 @@ final class ScreenCaptureStreamLifecycle: @unchecked Sendable {
     private var streamGenerations: [ObjectIdentifier: UInt64] = [:]
     private var intentionalStops: Set<ObjectIdentifier> = []
     private var forwardedStops: Set<ObjectIdentifier> = []
+    private var pendingStops: Set<ObjectIdentifier> = []
 
     func beginCaptureRequest() -> UInt64 {
         lock.lock()
@@ -866,6 +867,18 @@ final class ScreenCaptureStreamLifecycle: @unchecked Sendable {
             currentStreamID = nil
             currentStreamGeneration = nil
         }
+    }
+
+    func beginPendingStop(for stream: AnyObject) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return pendingStops.insert(ObjectIdentifier(stream)).inserted
+    }
+
+    func finishPendingStop(for stream: AnyObject) {
+        lock.lock()
+        defer { lock.unlock() }
+        pendingStops.remove(ObjectIdentifier(stream))
     }
 
     func shouldForwardStop(for stream: AnyObject) -> Bool {
@@ -1084,9 +1097,15 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         guard let stream else {
             return
         }
+        guard lifecycle.beginPendingStop(for: stream) else {
+            return
+        }
         lifecycle.markIntentionalStop(for: stream)
         let previousStop = pendingStreamStopTask
-        pendingStreamStopTask = Task { @MainActor [weak self] in
+        pendingStreamStopTask = Task { @MainActor [weak self, lifecycle] in
+            defer {
+                lifecycle.finishPendingStop(for: stream)
+            }
             await previousStop?.value
             try? await stream.stopCapture()
             guard let self else {

@@ -179,6 +179,18 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         XCTAssertFalse(lifecycle.isCurrentCaptureRequest(request))
     }
 
+    func testPendingStreamStopIsScheduledOnlyOnceUntilFinished() {
+        let lifecycle = ScreenCaptureStreamLifecycle()
+        let stream = NSObject()
+
+        XCTAssertTrue(lifecycle.beginPendingStop(for: stream))
+        XCTAssertFalse(lifecycle.beginPendingStop(for: stream))
+
+        lifecycle.finishPendingStop(for: stream)
+
+        XCTAssertTrue(lifecycle.beginPendingStop(for: stream))
+    }
+
     func testOldStreamGenerationCannotConfirmReplacementHealth() {
         let lifecycle = ScreenCaptureStreamLifecycle()
         let oldStream = NSObject()
