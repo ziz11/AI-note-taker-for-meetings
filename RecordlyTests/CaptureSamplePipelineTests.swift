@@ -35,6 +35,28 @@ final class CaptureSamplePipelineTests: XCTestCase {
         XCTAssertGreaterThan(pipeline.droppedCount, 0)
     }
 
+    func testSubmitObserverRunsBeforeBlockedWriterHandlerCompletes() async {
+        let events = LockedBox<[String]>([])
+        let gate = AsyncGate()
+        let pipeline = CaptureSamplePipeline<Int>(
+            bufferLimit: 8,
+            onSubmit: { _ in
+                events.mutate { $0.append("arrived") }
+            },
+            handler: { _ in
+                await gate.wait()
+                events.mutate { $0.append("written") }
+            }
+        )
+
+        pipeline.submit(1)
+
+        XCTAssertEqual(events.value, ["arrived"])
+        await gate.open()
+        await pipeline.finish()
+        XCTAssertEqual(events.value, ["arrived", "written"])
+    }
+
     func testMeteringThrottleLimitsRate() {
         let throttle = MeteringThrottle(interval: 60)
         XCTAssertTrue(throttle.due())

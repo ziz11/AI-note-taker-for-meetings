@@ -362,6 +362,7 @@ actor PCMTrackWriter: TrackWriting {
 
     private var firstPTS: Double?
     private var lastPTS: Double?
+    private var nextExpectedPTS: Double?
     private var framesWritten: Int64 = 0
     private var bufferCount = 0
     private let fallback: Bool
@@ -439,18 +440,37 @@ actor PCMTrackWriter: TrackWriting {
     }
 
     func append(pcmBuffer: AVAudioPCMBuffer, presentationTime: CMTime? = nil) throws {
+        let presentationSeconds: Double?
         if let presentationTime, presentationTime.isValid {
+            presentationSeconds = presentationTime.seconds
             let seconds = presentationTime.seconds
             if firstPTS == nil {
                 firstPTS = seconds
             }
             lastPTS = seconds
+        } else {
+            presentationSeconds = nil
         }
 
         let renderedBuffer = try convertIfNeeded(pcmBuffer)
         guard renderedBuffer.frameLength > 0 else { return }
 
+        if let presentationSeconds, let nextExpectedPTS {
+            let gapFrames = Int64(
+                ((presentationSeconds - nextExpectedPTS) * outputFormat.sampleRate).rounded()
+            )
+            if gapFrames > 0 {
+                try stageSilence(frames: gapFrames)
+                diagnostics.append("Inserted \(gapFrames) silence frames for capture timeline gap.")
+            }
+        }
         try stage(renderedBuffer)
+        let renderedDuration = Double(renderedBuffer.frameLength) / outputFormat.sampleRate
+        if let presentationSeconds {
+            nextExpectedPTS = presentationSeconds + renderedDuration
+        } else if let nextExpectedPTS {
+            self.nextExpectedPTS = nextExpectedPTS + renderedDuration
+        }
         bufferCount += 1
     }
 
@@ -514,6 +534,25 @@ actor PCMTrackWriter: TrackWriting {
 
         if stagedFrames >= flushThresholdFrames {
             try flushStagingBufferThrowing()
+        }
+    }
+
+    private func stageSilence(frames: Int64) throws {
+        var remaining = frames
+        while remaining > 0 {
+            let chunkFrames = AVAudioFrameCount(
+                min(remaining, Int64(flushThresholdFrames))
+            )
+            guard let silence = AVAudioPCMBuffer(
+                pcmFormat: outputFormat,
+                frameCapacity: chunkFrames
+            ), let channel = silence.floatChannelData?[0] else {
+                throw PCMWriterError.conversionFailed
+            }
+            silence.frameLength = chunkFrames
+            vDSP_vclr(channel, 1, vDSP_Length(chunkFrames))
+            try stage(silence)
+            remaining -= Int64(chunkFrames)
         }
     }
 
@@ -896,6 +935,45 @@ final class ScreenCaptureStreamLifecycle: @unchecked Sendable {
 }
 
 @MainActor
+final class PendingStreamStopQueue {
+    typealias Operation = @MainActor () async throws -> Void
+
+    private var tail: Task<Result<Void, Error>, Never>?
+    private var pending: [Task<Result<Void, Error>, Never>] = []
+
+    func schedule(_ operation: @escaping Operation) {
+        let previous = tail
+        let task = Task<Result<Void, Error>, Never> { @MainActor in
+            if let previous {
+                _ = await previous.value
+            }
+            do {
+                try await operation()
+                return Result<Void, Error>.success(())
+            } catch {
+                return Result<Void, Error>.failure(error)
+            }
+        }
+        tail = task
+        pending.append(task)
+    }
+
+    func drain() async throws {
+        var firstError: Error?
+        while !pending.isEmpty {
+            let task = pending.removeFirst()
+            if case .failure(let error) = await task.value, firstError == nil {
+                firstError = error
+            }
+        }
+        tail = nil
+        if let firstError {
+            throw firstError
+        }
+    }
+}
+
+@MainActor
 protocol ScreenAudioStreaming: AnyObject {
     var microphoneViaStreamEnabled: Bool { get }
     var onUnexpectedStop: (@MainActor (String) -> Void)? { get set }
@@ -940,9 +1018,9 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
     private let lifecycle = ScreenCaptureStreamLifecycle()
     private let sampleQueue = DispatchQueue(label: "Recordly.ScreenCaptureSamples", qos: .userInitiated)
     private let screenDiscardQueue = DispatchQueue(label: "Recordly.ScreenCaptureDiscard", qos: .utility)
+    private let pendingStopQueue = PendingStreamStopQueue()
     private(set) var microphoneViaStreamEnabled = false
     private var captureRequested = false
-    private var pendingStreamStopTask: Task<Void, Never>?
     var onUnexpectedStop: (@MainActor (String) -> Void)?
 
     override init() {
@@ -956,6 +1034,8 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         onSystemSample: @escaping (CMSampleBuffer, UInt64) -> Void,
         onMicrophoneSample: @escaping (CMSampleBuffer, UInt64) -> Void
     ) async throws {
+        try await drainPendingStreamStops()
+        try await stopCurrentStreamIfPresent()
         captureRequested = true
         let request = lifecycle.beginCaptureRequest()
         router.onSystemSample = onSystemSample
@@ -970,18 +1050,12 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
     }
 
     func restartCapture() async throws {
-        await drainPendingStreamStops()
+        try await drainPendingStreamStops()
         guard captureRequested else {
             throw CancellationError()
         }
         let request = lifecycle.beginCaptureRequest()
-        if let stream {
-            lifecycle.markIntentionalStop(for: stream)
-            try? await stream.stopCapture()
-            if self.stream === stream {
-                self.stream = nil
-            }
-        }
+        try await stopCurrentStreamIfPresent()
         guard captureRequested,
               lifecycle.isCurrentCaptureRequest(request) else {
             throw CancellationError()
@@ -993,11 +1067,8 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         captureRequested = false
         lifecycle.cancelCaptureRequest()
         scheduleCurrentStreamStop()
-        await drainPendingStreamStops()
-        if let stream {
-            lifecycle.markIntentionalStop(for: stream)
-            try await stream.stopCapture()
-        }
+        try await drainPendingStreamStops()
+        try await stopCurrentStreamIfPresent()
         clearCaptureState()
     }
 
@@ -1078,7 +1149,7 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         guard captureRequested,
               lifecycle.isCurrentCaptureRequest(request) else {
             lifecycle.markIntentionalStop(for: stream)
-            try? await stream.stopCapture()
+            try await stream.stopCapture()
             if self.stream === stream {
                 self.stream = nil
             }
@@ -1093,6 +1164,17 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         microphoneViaStreamEnabled = false
     }
 
+    private func stopCurrentStreamIfPresent() async throws {
+        guard let stream else {
+            return
+        }
+        lifecycle.markIntentionalStop(for: stream)
+        try await stream.stopCapture()
+        if self.stream === stream {
+            self.stream = nil
+        }
+    }
+
     private func scheduleCurrentStreamStop() {
         guard let stream else {
             return
@@ -1101,13 +1183,11 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
             return
         }
         lifecycle.markIntentionalStop(for: stream)
-        let previousStop = pendingStreamStopTask
-        pendingStreamStopTask = Task { @MainActor [weak self, lifecycle] in
+        pendingStopQueue.schedule { @MainActor [weak self, lifecycle] in
             defer {
                 lifecycle.finishPendingStop(for: stream)
             }
-            await previousStop?.value
-            try? await stream.stopCapture()
+            try await stream.stopCapture()
             guard let self else {
                 return
             }
@@ -1117,11 +1197,8 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         }
     }
 
-    private func drainPendingStreamStops() async {
-        while let pendingStreamStopTask {
-            self.pendingStreamStopTask = nil
-            await pendingStreamStopTask.value
-        }
+    private func drainPendingStreamStops() async throws {
+        try await pendingStopQueue.drain()
     }
 }
 
@@ -1166,6 +1243,17 @@ final class AudioCaptureService: AudioCaptureEngine {
     ) {
         self.screenCaptureService = screenCaptureService ?? ScreenCaptureAudioService()
         self.recoveryPolicy = recoveryPolicy
+    }
+
+    private func recordSampleArrival(for channel: CaptureChannel, generation: UInt64) {
+        guard screenCaptureService.isCurrentStreamGeneration(generation) else {
+            return
+        }
+        healthRuntime?.receiveHeartbeat(
+            for: channel,
+            level: 0,
+            at: clock.now
+        )
     }
 
     func startCapture(in sessionDirectory: URL) async throws -> CaptureArtifacts {
@@ -1231,55 +1319,61 @@ final class AudioCaptureService: AudioCaptureEngine {
                 // Buffers flow through single-consumer pipelines off the main actor;
                 // UI/metering state hops back to MainActor at most every 100 ms.
                 let systemMeter = MeteringThrottle()
-                let systemPipeline = CaptureSamplePipeline<GenerationTaggedSample>(bufferLimit: 64) { [weak self] sample in
-                    do {
-                        _ = try await streamSysWriter.appendPreservingCanonical(sampleBuffer: sample.buffer)
-                        let level = sample.buffer.normalizedLevel
-                        guard let self else { return }
-                        await MainActor.run {
-                            guard self.screenCaptureService.isCurrentStreamGeneration(sample.generation) else {
-                                return
-                            }
-                            self.healthRuntime?.receiveHeartbeat(
-                                for: .system,
-                                level: level,
-                                at: self.clock.now
-                            )
-                            if systemMeter.due() {
-                                self.systemLevelValue = level
-                            }
+                let systemPipeline = CaptureSamplePipeline<GenerationTaggedSample>(
+                    bufferLimit: 64,
+                    onSubmit: { [weak self] sample in
+                        Task { @MainActor [weak self] in
+                            self?.recordSampleArrival(for: .system, generation: sample.generation)
                         }
-                    } catch {
-                        await streamSysWriter.recordDiagnostic("system append failed: \(error.localizedDescription)")
-                        guard let self else { return }
-                        await MainActor.run {
-                            self.systemLevelValue = 0
+                    },
+                    handler: { [weak self] sample in
+                        do {
+                            _ = try await streamSysWriter.appendPreservingCanonical(sampleBuffer: sample.buffer)
+                            let level = sample.buffer.normalizedLevel
+                            guard let self else { return }
+                            await MainActor.run {
+                                guard self.screenCaptureService.isCurrentStreamGeneration(sample.generation) else {
+                                    return
+                                }
+                                if systemMeter.due() {
+                                    self.systemLevelValue = level
+                                }
+                            }
+                        } catch {
+                            await streamSysWriter.recordDiagnostic("system append failed: \(error.localizedDescription)")
+                            guard let self else { return }
+                            await MainActor.run {
+                                self.systemLevelValue = 0
+                            }
                         }
                     }
-                }
+                )
                 let microphoneMeter = MeteringThrottle()
-                let microphonePipeline = CaptureSamplePipeline<GenerationTaggedSample>(bufferLimit: 64) { [weak self] sample in
-                    do {
-                        _ = try await streamMicWriter.appendPreservingCanonical(sampleBuffer: sample.buffer)
-                        let level = sample.buffer.normalizedLevel
-                        guard let self else { return }
-                        await MainActor.run {
-                            guard self.screenCaptureService.isCurrentStreamGeneration(sample.generation) else {
-                                return
-                            }
-                            self.healthRuntime?.receiveHeartbeat(
-                                for: .microphone,
-                                level: level,
-                                at: self.clock.now
-                            )
-                            if microphoneMeter.due() {
-                                self.microphoneLevelValue = level
-                            }
+                let microphonePipeline = CaptureSamplePipeline<GenerationTaggedSample>(
+                    bufferLimit: 64,
+                    onSubmit: { [weak self] sample in
+                        Task { @MainActor [weak self] in
+                            self?.recordSampleArrival(for: .microphone, generation: sample.generation)
                         }
-                    } catch {
-                        // Keep recording alive if one buffer fails to convert.
+                    },
+                    handler: { [weak self] sample in
+                        do {
+                            _ = try await streamMicWriter.appendPreservingCanonical(sampleBuffer: sample.buffer)
+                            let level = sample.buffer.normalizedLevel
+                            guard let self else { return }
+                            await MainActor.run {
+                                guard self.screenCaptureService.isCurrentStreamGeneration(sample.generation) else {
+                                    return
+                                }
+                                if microphoneMeter.due() {
+                                    self.microphoneLevelValue = level
+                                }
+                            }
+                        } catch {
+                            // Keep recording alive if one buffer fails to convert.
+                        }
                     }
-                }
+                )
                 self.systemSamplePipeline = systemPipeline
                 self.microphoneSamplePipeline = microphonePipeline
 

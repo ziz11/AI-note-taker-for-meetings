@@ -46,6 +46,7 @@ final class RecordingsStore: ObservableObject {
     private let modelSettingsViewModel: ModelSettingsViewModel
     private let captureFailureNotifier: @MainActor () -> Void
     private var meterTimer: Timer?
+    private var captureHealthMonitorTask: Task<Void, Never>?
     private var captureFailureEpisodeActive = false
     private var lastPublishedRecordingSecond = -1
     private var shareableURLCache: (key: String, url: URL?)?
@@ -290,6 +291,7 @@ final class RecordingsStore: ObservableObject {
             viewState.runtime.meterLevels.systemAudioLabel = startResult.systemAudioLabel
             viewState.runtime.captureHealth = workflow.currentCaptureHealth
             startMeterTimer()
+            startCaptureHealthMonitoring()
             viewState.runtime.isCaptureTransitionInFlight = false
         } catch {
             viewState.runtime.isCaptureTransitionInFlight = false
@@ -729,6 +731,7 @@ final class RecordingsStore: ObservableObject {
 
         do {
             viewState.runtime.isCaptureTransitionInFlight = true
+            stopCaptureHealthMonitoring()
             stopMeterTimer()
             viewState.runtime.sidebarStatus = statusWhenSaved
             viewState.runtime.activityStatus = "Processing"
@@ -911,7 +914,6 @@ final class RecordingsStore: ObservableObject {
                 let microphoneLevel = (self.workflow.microphoneLevel() * 20).rounded() / 20
                 let systemAudioLevel = (self.workflow.systemAudioLevel() * 20).rounded() / 20
                 let systemAudioLabel = self.workflow.currentSystemAudioStatusLabel
-                let captureHealth = self.workflow.currentCaptureHealth
                 if newRuntime.meterLevels.microphoneLevel != microphoneLevel {
                     newRuntime.meterLevels.microphoneLevel = microphoneLevel
                     changed = true
@@ -924,13 +926,6 @@ final class RecordingsStore: ObservableObject {
                     newRuntime.meterLevels.systemAudioLabel = systemAudioLabel
                     changed = true
                 }
-                if newRuntime.captureHealth != captureHealth {
-                    newRuntime.captureHealth = captureHealth
-                    changed = true
-                }
-
-                self.notifyIfCaptureFailureStarted(captureHealth)
-
                 if changed {
                     self.viewState.runtime = newRuntime
                 }
@@ -946,7 +941,30 @@ final class RecordingsStore: ObservableObject {
         lastPublishedRecordingSecond = -1
     }
 
+    private func startCaptureHealthMonitoring() {
+        stopCaptureHealthMonitoring()
+        captureHealthMonitorTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(250))
+                } catch {
+                    return
+                }
+                guard let self, self.viewState.runtime.isRecording else {
+                    return
+                }
+                self.refreshCaptureHealth()
+            }
+        }
+    }
+
+    private func stopCaptureHealthMonitoring() {
+        captureHealthMonitorTask?.cancel()
+        captureHealthMonitorTask = nil
+    }
+
     private func resetRuntimeState() {
+        stopCaptureHealthMonitoring()
         viewState.runtime.isRecording = false
         viewState.runtime.activeRecordingID = nil
         viewState.runtime.activeDuration = 0

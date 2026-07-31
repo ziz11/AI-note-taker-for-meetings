@@ -389,6 +389,29 @@ final class DirectPCMMixServiceTests: XCTestCase {
         }
     }
 
+    func testTrackWriterInsertsSilenceForInternalPresentationTimeGap() async throws {
+        let url = directory.appendingPathComponent("system.raw.caf")
+        let first = try makeSourceBuffer(frames: 4_800) { _ in 0.25 }
+        let second = try makeSourceBuffer(frames: 4_800) { _ in 0.5 }
+        let writer = try PCMTrackWriter(kind: .system, fileName: "system.raw.caf", fileURL: url)
+
+        try await writer.append(
+            pcmBuffer: first,
+            presentationTime: CMTime(seconds: 10, preferredTimescale: 48_000)
+        )
+        try await writer.append(
+            pcmBuffer: second,
+            presentationTime: CMTime(seconds: 11, preferredTimescale: 48_000)
+        )
+        let stats = await writer.finalize()
+
+        XCTAssertEqual(stats.framesWritten, 52_800)
+        let samples = try readAllSamples(at: url)
+        assertRegion(samples, from: 0, to: 4_800, equals: 0.25)
+        assertRegion(samples, from: 4_800, to: 48_000, equals: 0)
+        assertRegion(samples, from: 48_000, to: 52_800, equals: 0.5)
+    }
+
     func testTrackWriterStillWritesAACForM4A() async throws {
         let url = directory.appendingPathComponent("mic.m4a")
         let buffer = try makeSourceBuffer(frames: 48_000) { _ in 0.25 }

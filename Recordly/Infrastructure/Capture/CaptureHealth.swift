@@ -101,6 +101,7 @@ final class CaptureHealthCoordinator {
             }
             markHealthy()
         case .recovering:
+            refreshRecoveryAffectedChannels(at: instant)
             guard !restartInFlight,
                   hasFreshHeartbeats(since: lastRestartStartedAt) else {
                 return
@@ -216,6 +217,7 @@ final class CaptureHealthCoordinator {
             return nil
         }
 
+        refreshRecoveryAffectedChannels(at: instant)
         let elapsed = recoveryStartedAt.duration(to: instant)
         if elapsed >= policy.failureDeadline {
             guard !alertIssued else {
@@ -284,6 +286,22 @@ final class CaptureHealthCoordinator {
             }
             return heartbeat.duration(to: instant) >= policy.heartbeatTimeout
         })
+    }
+
+    private func refreshRecoveryAffectedChannels(
+        at instant: ContinuousClock.Instant
+    ) {
+        let updated = Set(requiredChannels.filter { channel in
+            guard let heartbeat = lastHeartbeatAt[channel] else {
+                return true
+            }
+            if let lastRestartStartedAt, heartbeat < lastRestartStartedAt {
+                return true
+            }
+            return heartbeat.duration(to: instant) >= policy.heartbeatTimeout
+        })
+        affectedChannels = updated
+        snapshot.affectedChannels = updated
     }
 
     private func markHealthy() {

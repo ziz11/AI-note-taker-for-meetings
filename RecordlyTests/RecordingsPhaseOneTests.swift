@@ -278,6 +278,33 @@ final class RecordingsPhaseOneTests: XCTestCase {
         XCTAssertEqual(alertCount, 1)
     }
 
+    func testCaptureFailureAlertSurvivesUnrelatedErrorThatStopsMeterUpdates() async throws {
+        let repository = InMemoryRecordingsRepository()
+        let captureEngine = MutableHealthCaptureEngine()
+        let alertExpectation = expectation(description: "Capture failure alert")
+        var alertCount = 0
+        let store = makeStore(
+            repository: repository,
+            audioCaptureEngine: captureEngine,
+            captureFailureNotifier: {
+                alertCount += 1
+                alertExpectation.fulfill()
+            }
+        )
+
+        await store.beginRecording()
+        let recording = try XCTUnwrap(store.recordings.first)
+        store.exportTranscript(for: recording)
+        captureEngine.captureHealth = CaptureHealthSnapshot(
+            phase: .failed(message: "Audio capture could not be restored."),
+            affectedChannels: [.system],
+            statusLabel: "Not recording"
+        )
+
+        await fulfillment(of: [alertExpectation], timeout: 1)
+        XCTAssertEqual(alertCount, 1)
+    }
+
     func testStoreDoesNotAlertWhileRecovering() async throws {
         let repository = InMemoryRecordingsRepository()
         let captureEngine = MutableHealthCaptureEngine()

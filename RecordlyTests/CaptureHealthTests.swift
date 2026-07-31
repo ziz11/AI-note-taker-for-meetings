@@ -115,6 +115,22 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         )
     }
 
+    func testFailureReportsChannelThatRemainsMissingAfterWholeStreamRestart() {
+        let start = clock.now
+        let coordinator = makeHealthyCoordinator(at: start)
+        coordinator.receiveHeartbeat(for: .microphone, level: 0.2, at: start + .seconds(1))
+
+        XCTAssertEqual(
+            coordinator.nextAction(at: start + .milliseconds(1_500)),
+            .restart(attempt: 1)
+        )
+        coordinator.restartFinished(attempt: 1, error: nil, at: start + .milliseconds(1_500))
+        coordinator.receiveHeartbeat(for: .system, level: 0.2, at: start + .seconds(7.4))
+
+        XCTAssertEqual(coordinator.nextAction(at: start + .seconds(7.5)), .alertFailure)
+        XCTAssertEqual(coordinator.snapshot.affectedChannels, [.microphone])
+    }
+
     func testManualStopCancelsRecoveryWithoutFailure() {
         let start = clock.now
         let coordinator = makeHealthyCoordinator(at: start)
@@ -189,6 +205,25 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         lifecycle.finishPendingStop(for: stream)
 
         XCTAssertTrue(lifecycle.beginPendingStop(for: stream))
+    }
+
+    func testPendingStreamStopQueuePropagatesFailureAndStillRunsFollowingStop() async {
+        let queue = PendingStreamStopQueue()
+        var followingStopRan = false
+
+        queue.schedule {
+            throw TestError.failed
+        }
+        queue.schedule {
+            followingStopRan = true
+        }
+
+        do {
+            try await queue.drain()
+            XCTFail("Expected the queued stop failure to propagate")
+        } catch {
+            XCTAssertTrue(followingStopRan)
+        }
     }
 
     func testOldStreamGenerationCannotConfirmReplacementHealth() {

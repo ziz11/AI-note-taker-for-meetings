@@ -6,6 +6,7 @@ import Foundation
 final class CaptureSamplePipeline<Element: Sendable>: @unchecked Sendable {
     private let continuation: AsyncStream<Element>.Continuation
     private let consumer: Task<Void, Never>
+    private let onSubmit: @Sendable (Element) -> Void
     private let lock = NSLock()
     private var dropped = 0
     private var finished = false
@@ -15,12 +16,17 @@ final class CaptureSamplePipeline<Element: Sendable>: @unchecked Sendable {
         return dropped
     }
 
-    init(bufferLimit: Int = 64, handler: @escaping @Sendable (Element) async -> Void) {
+    init(
+        bufferLimit: Int = 64,
+        onSubmit: @escaping @Sendable (Element) -> Void = { _ in },
+        handler: @escaping @Sendable (Element) async -> Void
+    ) {
         var continuation: AsyncStream<Element>.Continuation!
         let stream = AsyncStream<Element>(bufferingPolicy: .bufferingOldest(bufferLimit)) {
             continuation = $0
         }
         self.continuation = continuation
+        self.onSubmit = onSubmit
         self.consumer = Task {
             for await element in stream {
                 await handler(element)
@@ -35,6 +41,7 @@ final class CaptureSamplePipeline<Element: Sendable>: @unchecked Sendable {
             return
         }
         lock.unlock()
+        onSubmit(element)
         if case .dropped = continuation.yield(element) {
             lock.lock()
             dropped += 1
