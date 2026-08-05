@@ -313,10 +313,12 @@ struct TranscriptionPipeline {
     ) -> [String] {
         let assetFileName = channel == .mic ? recording.assets.microphoneFile : recording.assets.systemAudioFile
         let canonicalDurable = channel == .mic ? "mic.m4a" : "system.m4a"
+        let canonicalRaw = channel == .mic ? "mic.raw.caf" : "system.raw.caf"
 
         let orderedCandidates = [
             canonicalDurable,
-            assetFileName
+            assetFileName,
+            canonicalRaw
         ]
 
         var unique: [String] = []
@@ -329,7 +331,9 @@ struct TranscriptionPipeline {
     }
 
     private func isLiveCaptureInferenceCandidate(_ fileName: String) -> Bool {
-        fileName != "merged-call.m4a" && fileName.lowercased().hasSuffix(".m4a")
+        let normalized = fileName.lowercased()
+        return fileName != "merged-call.m4a"
+            && (normalized.hasSuffix(".m4a") || normalized.hasSuffix(".raw.caf"))
     }
 
     private func prepareInputCandidate(
@@ -371,7 +375,7 @@ struct TranscriptionPipeline {
     }
 
     private func requiresLiveCaptureValidation(fileName: String) -> Bool {
-        fileName == "mic.raw.caf" || fileName == "system.raw.caf"
+        isDurableSourceFileName(fileName) || isTemporaryFastPathFileName(fileName)
     }
 
     private func prepareImportedInput(

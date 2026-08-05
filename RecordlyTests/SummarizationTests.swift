@@ -1579,9 +1579,9 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         )
         let workflow = RecordingWorkflowController(
             audioCaptureEngine: AudioCaptureService(),
-            transcriptionPipeline: TranscriptionPipeline(
-                audioInputValidator: AcceptingAudioInputValidator()
-            ),
+            // Real validation: raw CAF is now an accepted fallback candidate, but an
+            // unreadable CAF must still be rejected, leaving no usable input.
+            transcriptionPipeline: TranscriptionPipeline(),
             runtimeProfileSelector: runtimeSelector,
             inferenceEngineFactory: TestInferenceEngineFactory(
                 asrEngine: WorkflowASREngine(),

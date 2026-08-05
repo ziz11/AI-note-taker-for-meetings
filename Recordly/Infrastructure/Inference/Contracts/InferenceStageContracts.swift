@@ -8,6 +8,8 @@ protocol AudioCaptureEngine: AnyObject {
     func currentMicrophoneLevel() -> Double
     func currentSystemAudioLevel() -> Double
     var systemAudioStatusLabel: String { get }
+    var captureHealth: CaptureHealthSnapshot { get }
+    func retryCaptureNow() async
     func recoverPendingSessions(in recordingsDirectory: URL) async
 }
 
@@ -15,6 +17,16 @@ extension AudioCaptureEngine {
     func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
         throw AudioCaptureError.mixdownFailed
     }
+
+    var captureHealth: CaptureHealthSnapshot {
+        CaptureHealthSnapshot(
+            phase: systemAudioStatusLabel == "Captured" ? .healthy : .idle,
+            affectedChannels: [],
+            statusLabel: systemAudioStatusLabel
+        )
+    }
+
+    func retryCaptureNow() async {}
 }
 
 struct ASREngineConfiguration: Sendable {

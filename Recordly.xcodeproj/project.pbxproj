@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CAFE00012F31000000000001 /* CaptureHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00022F31000000000001 /* CaptureHealth.swift */; };
+		CAFE00032F31000000000001 /* CaptureHealthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00042F31000000000001 /* CaptureHealthTests.swift */; };
 		FA1000012F0A000000000001 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = FA1000022F0A000000000001 /* FluidAudio */; };
 		FA1000112F0A000000000001 /* FluidAudioASREngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1000122F0A000000000001 /* FluidAudioASREngineTests.swift */; };
 		FA1000132F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1000142F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift */; };
@@ -28,6 +30,10 @@
 		2E4CAE3A529698B5142F49C6 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2F770263847E29213B40F9F9 /* Foundation.framework */; };
 		49F43926E87A51AB075E490E /* TranscriptRenderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83340338D9A97D1FCCE50966 /* TranscriptRenderService.swift */; };
 		6C21B2A77926FB977C286632 /* TranscriptionPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */; };
+		CA0000012F10000000000001 /* DirectPCMMixServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000022F10000000000001 /* DirectPCMMixServiceTests.swift */; };
+		CA0000032F10000000000001 /* SessionMergeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000042F10000000000001 /* SessionMergeServiceTests.swift */; };
+		CA0000052F10000000000001 /* CaptureSamplePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000062F10000000000001 /* CaptureSamplePipeline.swift */; };
+		CA0000072F10000000000001 /* CaptureSamplePipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000082F10000000000001 /* CaptureSamplePipelineTests.swift */; };
 		8754BE5E6A83DDC122A462CC /* ASRDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE471CED942092CB3514DA68 /* ASRDocument.swift */; };
 		8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26EB5F71C65439BACDB01E3 /* FluidAudioASREngine.swift */; };
 		FA3000092F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA30000A2F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift */; };
@@ -97,6 +103,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		CAFE00022F31000000000001 /* CaptureHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureHealth.swift; sourceTree = "<group>"; };
+		CAFE00042F31000000000001 /* CaptureHealthTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaptureHealthTests.swift; sourceTree = "<group>"; };
 		18F73A72E7F344B6A8F1F3DD /* SummaryEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SummaryEngine.swift; sourceTree = "<group>"; };
 		395881AA0C8D023430EC50AE /* SummaryPromptBuilder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SummaryPromptBuilder.swift; sourceTree = "<group>"; };
 		BD717C9D72DB2D702C5C541E /* SummaryOutputParser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SummaryOutputParser.swift; sourceTree = "<group>"; };
@@ -176,6 +184,10 @@
 		DE471CED942092CB3514DA68 /* ASRDocument.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ASRDocument.swift; sourceTree = "<group>"; };
 		EC87BE0D109F50639B2B62E9 /* DiarizationDocument.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DiarizationDocument.swift; sourceTree = "<group>"; };
 		F9A80C0007162E4EDD80B4D5 /* TranscriptionPipelineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TranscriptionPipelineTests.swift; path = TranscriptionPipelineTests.swift; sourceTree = "<group>"; };
+		CA0000022F10000000000001 /* DirectPCMMixServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DirectPCMMixServiceTests.swift; path = DirectPCMMixServiceTests.swift; sourceTree = "<group>"; };
+		CA0000042F10000000000001 /* SessionMergeServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SessionMergeServiceTests.swift; path = SessionMergeServiceTests.swift; sourceTree = "<group>"; };
+		CA0000062F10000000000001 /* CaptureSamplePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSamplePipeline.swift; sourceTree = "<group>"; };
+		CA0000082F10000000000001 /* CaptureSamplePipelineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CaptureSamplePipelineTests.swift; path = CaptureSamplePipelineTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -201,6 +213,7 @@
 		29C3C247DD8022A1CC461F0C /* RecordlyTests */ = {
 			isa = PBXGroup;
 			children = (
+				CAFE00042F31000000000001 /* CaptureHealthTests.swift */,
 				61A96044014F4044B8D17512 /* ModelDiscoveryTests.swift */,
 				458D7BF2780B07D4DABC985A /* TranscriptMergeServiceTests.swift */,
 				248B0A3CEFC995A4371B6129 /* SystemSpeakerMappingServiceTests.swift */,
@@ -216,6 +229,9 @@
 				FA1000142F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift */,
 				FA4000022F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift */,
 				FA5000022F0E000000000001 /* ModelSettingsViewModelTests.swift */,
+				CA0000022F10000000000001 /* DirectPCMMixServiceTests.swift */,
+				CA0000042F10000000000001 /* SessionMergeServiceTests.swift */,
+				CA0000082F10000000000001 /* CaptureSamplePipelineTests.swift */,
 			);
 			name = RecordlyTests;
 			path = RecordlyTests;
@@ -415,9 +431,11 @@
 		CAB300EE2EBC1D6F00000001 /* Capture */ = {
 			isa = PBXGroup;
 			children = (
+				CAFE00022F31000000000001 /* CaptureHealth.swift */,
 				9C41A2242D82A10000A13B02 /* AudioCaptureService.swift */,
 				CAB301002EBC1D6F00000001 /* SessionMergeService.swift */,
 				CAB301022EBC1D6F00000001 /* DirectPCMMixService.swift */,
+				CA0000062F10000000000001 /* CaptureSamplePipeline.swift */,
 			);
 			path = Capture;
 			sourceTree = "<group>";
@@ -587,6 +605,10 @@
 				FA1000132F0A000000000001 /* FluidAudioSystemChunkTranscriptionEngineTests.swift in Sources */,
 				FA4000012F0D000000000001 /* FluidAudioDiarizationModelProviderTests.swift in Sources */,
 				FA5000012F0E000000000001 /* ModelSettingsViewModelTests.swift in Sources */,
+				CA0000012F10000000000001 /* DirectPCMMixServiceTests.swift in Sources */,
+				CA0000032F10000000000001 /* SessionMergeServiceTests.swift in Sources */,
+				CA0000072F10000000000001 /* CaptureSamplePipelineTests.swift in Sources */,
+				CAFE00032F31000000000001 /* CaptureHealthTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -612,6 +634,8 @@
 				9C41A24B2D82A10000A13B02 /* EmptyRecordingView.swift in Sources */,
 				CAB301012EBC1D6F00000001 /* SessionMergeService.swift in Sources */,
 				CAB301032EBC1D6F00000001 /* DirectPCMMixService.swift in Sources */,
+				CA0000052F10000000000001 /* CaptureSamplePipeline.swift in Sources */,
+				CAFE00012F31000000000001 /* CaptureHealth.swift in Sources */,
 				8F95705CCD914B3F83D2505D /* FluidAudioASREngine.swift in Sources */,
 				FA3000092F0C000000000001 /* FluidAudioSystemChunkTranscriptionEngine.swift in Sources */,
 				FA3000012F0C000000000001 /* FluidAudioSessionAudioLoader.swift in Sources */,
@@ -750,7 +774,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Recordly Local Development";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
@@ -765,6 +790,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.local.Recordly;
 				PRODUCT_MODULE_NAME = Recordly;
 				PRODUCT_NAME = Recordly;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				STRIP_INSTALLED_PRODUCT = NO;
 				SUPPORTED_PLATFORMS = macosx;

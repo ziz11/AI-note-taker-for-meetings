@@ -44,8 +44,12 @@ final class RecordingsStore: ObservableObject {
     private let playbackController: PlaybackController
     private let modelManager: ModelManager
     private let modelSettingsViewModel: ModelSettingsViewModel
+    private let captureFailureNotifier: @MainActor () -> Void
     private var meterTimer: Timer?
+    private var captureHealthMonitorTask: Task<Void, Never>?
+    private var captureFailureEpisodeActive = false
     private var lastPublishedRecordingSecond = -1
+    private var shareableURLCache: (key: String, url: URL?)?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var summarizationTasks: [UUID: Task<Void, Never>] = [:]
     private var playbackMixTasks: [UUID: Task<Void, Never>] = [:]
@@ -62,10 +66,16 @@ final class RecordingsStore: ObservableObject {
         fluidAudioModelProvider: any FluidAudioASRModelProviding,
         fluidAudioDiarizationModelProvider: any FluidAudioDiarizationModelProviding,
         repository: RecordingsPersistence = RecordingsRepository(),
-        previewMode: Bool = false
+        previewMode: Bool = false,
+        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000,
+        captureFailureNotifier: @escaping @MainActor () -> Void = {
+            NSSound.beep()
+            NSApp.requestUserAttention(.criticalRequest)
+        }
     ) {
         self.previewMode = previewMode
         self.modelManager = modelManager
+        self.captureFailureNotifier = captureFailureNotifier
         self.modelSettingsViewModel = ModelSettingsViewModel(
             modelManager: modelManager,
             fluidAudioModelProvider: fluidAudioModelProvider,
@@ -81,7 +91,8 @@ final class RecordingsStore: ObservableObject {
             runtimeProfileSelector: runtimeProfileSelector,
             inferenceEngineFactory: inferenceEngineFactory,
             repository: repository,
-            selectedModelProfile: initialViewState.selectedModelProfile
+            selectedModelProfile: initialViewState.selectedModelProfile,
+            captureFinalizationTimeoutNanoseconds: captureFinalizationTimeoutNanoseconds
         )
         self.playbackController = PlaybackController(repository: repository, previewMode: previewMode)
         self.playbackController.onStateChange = { [weak self] state in
@@ -278,7 +289,9 @@ final class RecordingsStore: ObservableObject {
             viewState.runtime.activityStatus = "Recording"
             viewState.runtime.sidebarStatus = "Recording"
             viewState.runtime.meterLevels.systemAudioLabel = startResult.systemAudioLabel
+            viewState.runtime.captureHealth = workflow.currentCaptureHealth
             startMeterTimer()
+            startCaptureHealthMonitoring()
             viewState.runtime.isCaptureTransitionInFlight = false
         } catch {
             viewState.runtime.isCaptureTransitionInFlight = false
@@ -297,6 +310,18 @@ final class RecordingsStore: ObservableObject {
             runSummarization: viewState.autoTranscribeEnabled && viewState.autoSummarizeEnabled,
             statusWhenSaved: "Saving"
         )
+    }
+
+    func retryCaptureNow() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await workflow.retryCaptureNow()
+            refreshCaptureHealth()
+        }
+    }
+
+    func refreshCaptureHealth() {
+        publishCaptureHealth(workflow.currentCaptureHealth)
     }
 
     func finalizeActiveRecordingBeforeTermination() async {
@@ -641,7 +666,30 @@ final class RecordingsStore: ObservableObject {
     }
 
     func shareableAudioURL(for recording: RecordingSession) -> URL? {
-        try? workflow.playableAudioURL(for: recording)
+        // Called from view bodies on every render — memoize so re-renders don't
+        // redo file I/O (opening a mid-write m4a also spams CoreAudio errors).
+        let key = [
+            recording.id.uuidString,
+            recording.assets.importedAudioFile ?? "-",
+            recording.assets.mergedCallFile ?? "-",
+            recording.assets.microphoneFile ?? "-",
+            recording.assets.systemAudioFile ?? "-",
+            String(describing: recording.lifecycleState)
+        ].joined(separator: "|")
+
+        if let shareableURLCache, shareableURLCache.key == key {
+            return shareableURLCache.url
+        }
+
+        // While this recording is actively capturing, its files are mid-write and
+        // unreadable — don't probe them; sharing becomes available after stop.
+        if viewState.runtime.isRecording, viewState.runtime.activeRecordingID == recording.id {
+            return nil
+        }
+
+        let url = try? workflow.playableAudioURL(for: recording)
+        shareableURLCache = (key, url)
+        return url
     }
 
     func deleteSelectedRecording() {
@@ -683,6 +731,7 @@ final class RecordingsStore: ObservableObject {
 
         do {
             viewState.runtime.isCaptureTransitionInFlight = true
+            stopCaptureHealthMonitoring()
             stopMeterTimer()
             viewState.runtime.sidebarStatus = statusWhenSaved
             viewState.runtime.activityStatus = "Processing"
@@ -834,28 +883,52 @@ final class RecordingsStore: ObservableObject {
     private func startMeterTimer() {
         stopMeterTimer()
         lastPublishedRecordingSecond = -1
-        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
+        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else {
                     return
                 }
 
-                if let recordingStartedAt = self.viewState.runtime.recordingStartedAt {
+                // Each write to the @Published viewState re-renders every view that
+                // observes the store (incl. the whole detail pane, which doesn't even
+                // read meter levels). So: compute everything first, mutate once, and
+                // only when something visible actually changed. Levels are quantized
+                // to ~5% buckets — finer changes are sub-pixel on the meter bars.
+                var newRuntime = self.viewState.runtime
+                var changed = false
+
+                if let recordingStartedAt = newRuntime.recordingStartedAt {
                     let duration = Date().timeIntervalSince(recordingStartedAt)
                     let currentSecond = Int(duration.rounded(.down))
-                    self.viewState.runtime.activeDuration = duration
-
-                    if currentSecond != self.lastPublishedRecordingSecond,
-                       let activeRecordingID = self.viewState.runtime.activeRecordingID,
-                       let index = self.recordings.firstIndex(where: { $0.id == activeRecordingID }) {
-                        self.recordings[index].duration = duration
+                    if currentSecond != self.lastPublishedRecordingSecond {
+                        newRuntime.activeDuration = duration
+                        if let activeRecordingID = newRuntime.activeRecordingID,
+                           let index = self.recordings.firstIndex(where: { $0.id == activeRecordingID }) {
+                            self.recordings[index].duration = duration
+                        }
                         self.lastPublishedRecordingSecond = currentSecond
+                        changed = true
                     }
                 }
 
-                self.viewState.runtime.meterLevels.microphoneLevel = self.workflow.microphoneLevel()
-                self.viewState.runtime.meterLevels.systemAudioLevel = self.workflow.systemAudioLevel()
-                self.viewState.runtime.meterLevels.systemAudioLabel = self.workflow.currentSystemAudioStatusLabel
+                let microphoneLevel = (self.workflow.microphoneLevel() * 20).rounded() / 20
+                let systemAudioLevel = (self.workflow.systemAudioLevel() * 20).rounded() / 20
+                let systemAudioLabel = self.workflow.currentSystemAudioStatusLabel
+                if newRuntime.meterLevels.microphoneLevel != microphoneLevel {
+                    newRuntime.meterLevels.microphoneLevel = microphoneLevel
+                    changed = true
+                }
+                if newRuntime.meterLevels.systemAudioLevel != systemAudioLevel {
+                    newRuntime.meterLevels.systemAudioLevel = systemAudioLevel
+                    changed = true
+                }
+                if newRuntime.meterLevels.systemAudioLabel != systemAudioLabel {
+                    newRuntime.meterLevels.systemAudioLabel = systemAudioLabel
+                    changed = true
+                }
+                if changed {
+                    self.viewState.runtime = newRuntime
+                }
             }
         }
     }
@@ -868,12 +941,37 @@ final class RecordingsStore: ObservableObject {
         lastPublishedRecordingSecond = -1
     }
 
+    private func startCaptureHealthMonitoring() {
+        stopCaptureHealthMonitoring()
+        captureHealthMonitorTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(250))
+                } catch {
+                    return
+                }
+                guard let self, self.viewState.runtime.isRecording else {
+                    return
+                }
+                self.refreshCaptureHealth()
+            }
+        }
+    }
+
+    private func stopCaptureHealthMonitoring() {
+        captureHealthMonitorTask?.cancel()
+        captureHealthMonitorTask = nil
+    }
+
     private func resetRuntimeState() {
+        stopCaptureHealthMonitoring()
         viewState.runtime.isRecording = false
         viewState.runtime.activeRecordingID = nil
         viewState.runtime.activeDuration = 0
         viewState.runtime.recordingStartedAt = nil
         viewState.runtime.meterLevels = RecordingMeterLevels()
+        viewState.runtime.captureHealth = .idle
+        captureFailureEpisodeActive = false
         viewState.runtime.transcriptionProgress = nil
         viewState.runtime.transcriptionStageLabel = nil
         viewState.runtime.summarizationProgress = nil
@@ -886,6 +984,29 @@ final class RecordingsStore: ObservableObject {
             viewState.runtime.activityStatus = "Error"
             viewState.runtime.sidebarStatus = "Error"
             stopMeterTimer()
+        }
+    }
+
+    private func publishCaptureHealth(_ captureHealth: CaptureHealthSnapshot) {
+        notifyIfCaptureFailureStarted(captureHealth)
+        guard viewState.runtime.captureHealth != captureHealth else {
+            return
+        }
+        viewState.runtime.captureHealth = captureHealth
+    }
+
+    private func notifyIfCaptureFailureStarted(_ captureHealth: CaptureHealthSnapshot) {
+        switch captureHealth.phase {
+        case .failed:
+            guard !captureFailureEpisodeActive else {
+                return
+            }
+            captureFailureEpisodeActive = true
+            captureFailureNotifier()
+        case .healthy, .idle:
+            captureFailureEpisodeActive = false
+        case .starting, .recovering:
+            break
         }
     }
 

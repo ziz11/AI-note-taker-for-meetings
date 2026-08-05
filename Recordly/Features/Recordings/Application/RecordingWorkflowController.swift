@@ -51,6 +51,7 @@ final class RecordingWorkflowController {
     private let inferenceEngineFactory: any InferenceEngineFactory
     private let repository: RecordingsPersistence
     private let summarizationTimeoutSeconds: UInt64
+    private let captureFinalizationTimeoutNanoseconds: UInt64
     var selectedModelProfile: ModelProfile
 
     init(
@@ -60,7 +61,8 @@ final class RecordingWorkflowController {
         inferenceEngineFactory: any InferenceEngineFactory,
         repository: RecordingsPersistence,
         selectedModelProfile: ModelProfile = .balanced,
-        summarizationTimeoutSeconds: UInt64 = 180
+        summarizationTimeoutSeconds: UInt64 = 180,
+        captureFinalizationTimeoutNanoseconds: UInt64 = 60_000_000_000
     ) {
         self.audioCaptureEngine = audioCaptureEngine
         self.transcriptionPipeline = transcriptionPipeline
@@ -69,10 +71,19 @@ final class RecordingWorkflowController {
         self.repository = repository
         self.selectedModelProfile = selectedModelProfile
         self.summarizationTimeoutSeconds = max(1, summarizationTimeoutSeconds)
+        self.captureFinalizationTimeoutNanoseconds = max(1, captureFinalizationTimeoutNanoseconds)
     }
 
     var currentSystemAudioStatusLabel: String {
         audioCaptureEngine.systemAudioStatusLabel
+    }
+
+    var currentCaptureHealth: CaptureHealthSnapshot {
+        audioCaptureEngine.captureHealth
+    }
+
+    func retryCaptureNow() async {
+        await audioCaptureEngine.retryCaptureNow()
     }
 
     func recordingsDirectoryPath() throws -> String {
@@ -147,7 +158,7 @@ final class RecordingWorkflowController {
     ) async throws -> RecordingCompletionResult {
         let captureArtifacts: CaptureArtifacts
         do {
-            captureArtifacts = try await audioCaptureEngine.stopCapture()
+            captureArtifacts = try await stopCaptureWithTimeout()
         } catch {
             var failedRecording = recording
             failedRecording.duration = duration
@@ -167,8 +178,8 @@ final class RecordingWorkflowController {
         updatedRecording.duration = duration
         updatedRecording.lifecycleState = runTranscription ? .processing : .ready
         updatedRecording.transcriptState = runTranscription ? .queued : .idle
-        updatedRecording.assets.microphoneFile = captureArtifacts.microphoneFile ?? updatedRecording.assets.microphoneFile
-        updatedRecording.assets.systemAudioFile = captureArtifacts.systemAudioFile ?? updatedRecording.assets.systemAudioFile
+        updatedRecording.assets.microphoneFile = captureArtifacts.microphoneFile
+        updatedRecording.assets.systemAudioFile = captureArtifacts.systemAudioFile
         updatedRecording.assets.mergedCallFile = captureArtifacts.mergedCallFile
         updatedRecording.assets.connectorNotesFile = captureArtifacts.connectorNotesFile ?? updatedRecording.assets.connectorNotesFile
         updatedRecording.notes = runTranscription ? "Audio saved. Preparing transcript." : "Audio saved."
@@ -212,6 +223,33 @@ final class RecordingWorkflowController {
         )
     }
 
+    private func stopCaptureWithTimeout() async throws -> CaptureArtifacts {
+        let stopTask = Task { @MainActor [audioCaptureEngine] in
+            try await audioCaptureEngine.stopCapture()
+        }
+        defer {
+            stopTask.cancel()
+        }
+
+        return try await withThrowingTaskGroup(of: CaptureArtifacts.self) { group in
+            group.addTask {
+                try await stopTask.value
+            }
+            group.addTask { [captureFinalizationTimeoutNanoseconds] in
+                try await Task.sleep(nanoseconds: captureFinalizationTimeoutNanoseconds)
+                stopTask.cancel()
+                throw AudioCaptureError.captureFinalizationTimedOut
+            }
+
+            guard let result = try await group.next() else {
+                throw AudioCaptureError.captureFinalizationTimedOut
+            }
+
+            group.cancelAll()
+            return result
+        }
+    }
+
     func mergeCompletedSession(for recording: RecordingSession) async throws -> RecordingSession {
         let sessionDirectory = try repository.sessionDirectory(for: recording.id)
         let captureArtifacts = try await audioCaptureEngine.mergeCompletedSession(in: sessionDirectory)
@@ -231,6 +269,7 @@ final class RecordingWorkflowController {
                 updatedRecording.notes = captureArtifacts.note ?? "Offline merge completed."
             }
             try repository.save(updatedRecording)
+            cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
             return updatedRecording
         }
 
@@ -619,7 +658,14 @@ final class RecordingWorkflowController {
             guard shouldCleanupTemporaryCaptureArtifacts(in: sessionDirectory) else {
                 return
             }
-            try cleanupTemporaryCaptureArtifacts(in: sessionDirectory)
+            // Raw CAFs are the transcription fast-path fallback; keep them while a
+            // transcription pass is in flight (or pending recovery) and after a
+            // failure, so a retry still has every candidate available.
+            let transcriptionSettled = recording.transcriptState == .idle || recording.transcriptState == .ready
+            try cleanupTemporaryCaptureArtifacts(
+                in: sessionDirectory,
+                allowRawCAFDeletion: transcriptionSettled
+            )
         } catch {
             let warning = "Temporary audio cleanup failed: \(error.localizedDescription)"
             if !recording.notes.contains(warning) {
@@ -634,12 +680,28 @@ final class RecordingWorkflowController {
         return isUsableAudioFile(mergedM4AURL)
     }
 
-    private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL) throws {
+    private func cleanupTemporaryCaptureArtifacts(in sessionDirectory: URL, allowRawCAFDeletion: Bool) throws {
         let fileManager = FileManager.default
-        for fileName in [
+        var deletableFileNames = [
             "mic.raw.flac",
             "system.raw.flac"
-        ] {
+        ]
+
+        if allowRawCAFDeletion {
+            // A raw CAF is pure redundancy once its durable m4a is usable: the durable
+            // track is the preferred ASR candidate, the preferred merge input, and what
+            // recovery re-merge consumes.
+            let rawToDurable = [
+                "mic.raw.caf": "mic.m4a",
+                "system.raw.caf": "system.m4a"
+            ]
+            for (rawFileName, durableFileName) in rawToDurable
+            where isUsableAudioFile(sessionDirectory.appendingPathComponent(durableFileName)) {
+                deletableFileNames.append(rawFileName)
+            }
+        }
+
+        for fileName in deletableFileNames {
             let url = sessionDirectory.appendingPathComponent(fileName)
             guard fileManager.fileExists(atPath: url.path) else {
                 continue
@@ -670,16 +732,7 @@ final class RecordingWorkflowController {
     }
 
     private func isUsableAudioFile(_ url: URL) -> Bool {
-        guard FileManager.default.fileExists(atPath: url.path),
-              let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              size > 0 else {
-            return false
-        }
-
-        guard let file = try? AVAudioFile(forReading: url) else {
-            return false
-        }
-        return file.length > 0
+        AudioFileProbe.isReadable(url, caller: "RecordingWorkflowController")
     }
 
     private func composeSummary(
