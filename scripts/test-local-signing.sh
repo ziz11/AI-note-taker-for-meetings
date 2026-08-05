@@ -33,7 +33,7 @@ command_name="${1:-}"
 
 case "$command_name" in
   default-keychain)
-    echo '"/tmp/fake-login.keychain-db"'
+    echo '    "/tmp/fake-login.keychain-db"'
     ;;
   find-identity)
     if [[ -f "$STATE_DIR/installed" ]]; then
@@ -62,19 +62,19 @@ chmod +x "$FAKE_SECURITY"
 first_output="$(
   RECORDLY_FAKE_SECURITY_STATE="$FAKE_STATE" \
   RECORDLY_SECURITY_BIN="$FAKE_SECURITY" \
-  RECORDLY_KEYCHAIN_PATH="$TEST_ROOT/login.keychain-db" \
   "$SETUP_SCRIPT"
 )"
 
 second_output="$(
   RECORDLY_FAKE_SECURITY_STATE="$FAKE_STATE" \
   RECORDLY_SECURITY_BIN="$FAKE_SECURITY" \
-  RECORDLY_KEYCHAIN_PATH="$TEST_ROOT/login.keychain-db" \
   "$SETUP_SCRIPT"
 )"
 
 [[ "$first_output" == *"Created code-signing identity: Recordly Local Development"* ]] || \
   fail "first setup run did not report identity creation"
+[[ "$first_output" == *"Keychain: /tmp/fake-login.keychain-db"* ]] || \
+  fail "default keychain path was not trimmed and unquoted"
 [[ "$second_output" == *"already exists"* ]] || \
   fail "second setup run did not report the existing identity"
 

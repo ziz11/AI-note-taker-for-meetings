@@ -19,7 +19,10 @@ if [[ -n "${RECORDLY_KEYCHAIN_PATH:-}" ]]; then
   KEYCHAIN_PATH="$RECORDLY_KEYCHAIN_PATH"
 else
   KEYCHAIN_PATH="$($SECURITY_BIN default-keychain -d user)"
-  KEYCHAIN_PATH="${KEYCHAIN_PATH//\"/}"
+  KEYCHAIN_PATH="${KEYCHAIN_PATH#"${KEYCHAIN_PATH%%[![:space:]]*}"}"
+  KEYCHAIN_PATH="${KEYCHAIN_PATH%"${KEYCHAIN_PATH##*[![:space:]]}"}"
+  KEYCHAIN_PATH="${KEYCHAIN_PATH#\"}"
+  KEYCHAIN_PATH="${KEYCHAIN_PATH%\"}"
   [[ -n "$KEYCHAIN_PATH" ]] || fail "could not determine the user login keychain"
 fi
 
