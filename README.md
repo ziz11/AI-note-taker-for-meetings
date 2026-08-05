@@ -33,11 +33,55 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 ## Prerequisites
 
 - **llama.cpp CLI binary** (for LLM summarization): `main` or `llama-cli` on `PATH` (for example from `brew install llama.cpp`). Without it, summarization falls back to template output.
+- **Local Debug signing identity** (for Xcode Run): create the repository's persistent self-signed `Recordly Local Development` identity as described below. No Apple Developer account is required.
 - **Developer ID Application certificate** (for outside-App-Store distribution): installed in Keychain Access on the build Mac.
 
 ## Build
 
-Build Recordly directly from Xcode.
+### One-time local signing setup
+
+Recordly's Debug configuration deliberately uses one persistent local certificate so
+macOS Microphone and Screen Recording permissions survive rebuilds. Create it once:
+
+```bash
+./scripts/setup-local-signing.sh
+security find-identity -v -p codesigning | grep "Recordly Local Development"
+```
+
+The script creates a self-signed code-signing identity in the current user's login
+keychain and trusts it locally for Code Signing. It is idempotent, requires no paid
+Apple Developer account, and is intended only for development on this Mac. Do not
+use it for distribution, notarization, or the Mac App Store.
+
+Open `Recordly.xcodeproj` and use Xcode Run (⌘R). If Xcode reports that the signing
+certificate is missing, rerun the setup script from the same macOS user account.
+
+### One-time permission migration from ad-hoc builds
+
+Old Debug builds were ad-hoc signed, so macOS recorded each rebuilt binary as a
+different identity. After installing the persistent certificate, quit every running
+Recordly instance and reset only those obsolete Recordly grants once:
+
+```bash
+tccutil reset Microphone com.local.Recordly
+tccutil reset ScreenCapture com.local.Recordly
+```
+
+Run Recordly from Xcode and grant Microphone access when prompted. Use Recordly's
+**Grant Access** action for Screen Recording, grant it in System Settings, and restart
+Recordly once if macOS requests it. Later Xcode Run builds should keep both grants;
+do not remove and re-add Recordly in System Settings after every build.
+
+To inspect the built application, copy its path from Xcode's Products group and run:
+
+```bash
+codesign -dvvv -r- "/path/from/Xcode/Recordly.app"
+```
+
+The output should show `Authority=Recordly Local Development`, and its designated
+requirement must be certificate-backed rather than CDHash-only.
+
+### Packaging
 
 The repo keeps `scripts/build-unsigned-app.sh` and `scripts/build-distribution-app.sh` only as disabled placeholders so older instructions do not point at a removed file. They do not generate app bundles or archives anymore.
 
