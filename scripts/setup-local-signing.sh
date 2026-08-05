@@ -79,6 +79,7 @@ EOF
 
 "$OPENSSL_BIN" pkcs12 \
   -export \
+  -legacy \
   -inkey "$PRIVATE_KEY" \
   -in "$CERTIFICATE" \
   -name "$IDENTITY_NAME" \

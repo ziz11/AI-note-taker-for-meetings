@@ -6,8 +6,10 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SETUP_SCRIPT="$ROOT_DIR/scripts/setup-local-signing.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/recordly-local-signing-test.XXXXXX")"
 FAKE_SECURITY="$TEST_ROOT/security"
+FAKE_OPENSSL="$TEST_ROOT/openssl"
 FAKE_STATE="$TEST_ROOT/state"
 PROJECT_JSON="$TEST_ROOT/project.json"
+REAL_OPENSSL="$(command -v openssl)"
 
 cleanup() {
   rm -rf "$TEST_ROOT"
@@ -59,14 +61,28 @@ esac
 FAKE_SECURITY_EOF
 chmod +x "$FAKE_SECURITY"
 
+cat > "$FAKE_OPENSSL" <<'FAKE_OPENSSL_EOF'
+#!/bin/zsh
+
+set -euo pipefail
+
+echo "$*" >> "${RECORDLY_FAKE_SECURITY_STATE:?}/openssl-commands"
+exec "${RECORDLY_REAL_OPENSSL:?}" "$@"
+FAKE_OPENSSL_EOF
+chmod +x "$FAKE_OPENSSL"
+
 first_output="$(
   RECORDLY_FAKE_SECURITY_STATE="$FAKE_STATE" \
+  RECORDLY_REAL_OPENSSL="$REAL_OPENSSL" \
+  RECORDLY_OPENSSL_BIN="$FAKE_OPENSSL" \
   RECORDLY_SECURITY_BIN="$FAKE_SECURITY" \
   "$SETUP_SCRIPT"
 )"
 
 second_output="$(
   RECORDLY_FAKE_SECURITY_STATE="$FAKE_STATE" \
+  RECORDLY_REAL_OPENSSL="$REAL_OPENSSL" \
+  RECORDLY_OPENSSL_BIN="$FAKE_OPENSSL" \
   RECORDLY_SECURITY_BIN="$FAKE_SECURITY" \
   "$SETUP_SCRIPT"
 )"
@@ -81,6 +97,10 @@ second_output="$(
 mutation_count="$(wc -l < "$FAKE_STATE/mutations" | tr -d ' ')"
 [[ "$mutation_count" == "2" ]] || \
   fail "expected one import and one trust mutation, got $mutation_count"
+
+pkcs12_command="$(grep '^pkcs12 ' "$FAKE_STATE/openssl-commands")"
+[[ "$pkcs12_command" == *" -legacy "* ]] || \
+  fail "PKCS#12 export does not request macOS-compatible legacy encryption"
 
 /usr/bin/plutil -convert json -o "$PROJECT_JSON" \
   "$ROOT_DIR/Recordly.xcodeproj/project.pbxproj"
