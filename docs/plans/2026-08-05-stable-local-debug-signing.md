@@ -215,4 +215,3 @@ Run `./scripts/setup-local-signing.sh`, then build twice with Xcode Run and insp
 both built apps with `codesign -dvvv -r-`. Confirm the authority and designated
 requirement remain certificate-backed and the previously granted permissions remain
 enabled after the second build.
-

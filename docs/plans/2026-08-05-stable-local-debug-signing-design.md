@@ -100,4 +100,3 @@ The certificate is trusted only on the local Mac and is intended only for Debug
 builds. It is not suitable for distribution, Gatekeeper, notarization, or the Mac
 App Store. The change does not alter capture behavior, sandboxing, persisted audio,
 or release packaging.
-

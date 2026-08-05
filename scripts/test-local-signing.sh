@@ -8,6 +8,7 @@ TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/recordly-local-signing-test.XXXXXX")"
 FAKE_SECURITY="$TEST_ROOT/security"
 FAKE_OPENSSL="$TEST_ROOT/openssl"
 FAKE_STATE="$TEST_ROOT/state"
+LIBRESSL_STATE="$TEST_ROOT/libressl-state"
 PROJECT_JSON="$TEST_ROOT/project.json"
 REAL_OPENSSL="$(command -v openssl)"
 
@@ -23,7 +24,7 @@ fail() {
 
 [[ -x "$SETUP_SCRIPT" ]] || fail "setup-local-signing.sh is missing or not executable"
 
-mkdir -p "$FAKE_STATE"
+mkdir -p "$FAKE_STATE" "$LIBRESSL_STATE"
 
 cat > "$FAKE_SECURITY" <<'FAKE_SECURITY_EOF'
 #!/bin/zsh
@@ -101,6 +102,15 @@ mutation_count="$(wc -l < "$FAKE_STATE/mutations" | tr -d ' ')"
 pkcs12_command="$(grep '^pkcs12 ' "$FAKE_STATE/openssl-commands")"
 [[ "$pkcs12_command" == *" -legacy "* ]] || \
   fail "PKCS#12 export does not request macOS-compatible legacy encryption"
+
+libressl_output="$(
+  RECORDLY_FAKE_SECURITY_STATE="$LIBRESSL_STATE" \
+  RECORDLY_OPENSSL_BIN=/usr/bin/openssl \
+  RECORDLY_SECURITY_BIN="$FAKE_SECURITY" \
+  "$SETUP_SCRIPT"
+)"
+[[ "$libressl_output" == *"Created code-signing identity: Recordly Local Development"* ]] || \
+  fail "setup did not support the system LibreSSL executable"
 
 /usr/bin/plutil -convert json -o "$PROJECT_JSON" \
   "$ROOT_DIR/Recordly.xcodeproj/project.pbxproj"

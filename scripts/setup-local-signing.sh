@@ -77,9 +77,14 @@ EOF
   -config "$OPENSSL_CONFIG" \
   >/dev/null 2>&1 || fail "OpenSSL could not create the certificate"
 
+PKCS12_COMPATIBILITY_ARGS=()
+if "$OPENSSL_BIN" pkcs12 -help 2>&1 | grep -q -- "-legacy"; then
+  PKCS12_COMPATIBILITY_ARGS=(-legacy)
+fi
+
 "$OPENSSL_BIN" pkcs12 \
   -export \
-  -legacy \
+  "${PKCS12_COMPATIBILITY_ARGS[@]}" \
   -inkey "$PRIVATE_KEY" \
   -in "$CERTIFICATE" \
   -name "$IDENTITY_NAME" \
