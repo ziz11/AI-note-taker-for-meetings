@@ -974,6 +974,22 @@ final class PendingStreamStopQueue {
 }
 
 @MainActor
+enum ScreenCaptureStreamReplacement {
+    typealias Operation = @MainActor () async throws -> Void
+
+    static func run(
+        retireCurrentStream: Operation,
+        startReplacement: Operation
+    ) async throws {
+        // ScreenCaptureKit reports an error when a stream was already stopped by
+        // the system. That stream is still retired from Recordly's perspective,
+        // so its stop error must not prevent creation of a replacement.
+        try? await retireCurrentStream()
+        try await startReplacement()
+    }
+}
+
+@MainActor
 protocol ScreenAudioStreaming: AnyObject {
     var microphoneViaStreamEnabled: Bool { get }
     var onUnexpectedStop: (@MainActor (String) -> Void)? { get set }
@@ -1050,17 +1066,25 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
     }
 
     func restartCapture() async throws {
-        try await drainPendingStreamStops()
         guard captureRequested else {
             throw CancellationError()
         }
         let request = lifecycle.beginCaptureRequest()
-        try await stopCurrentStreamIfPresent()
-        guard captureRequested,
-              lifecycle.isCurrentCaptureRequest(request) else {
-            throw CancellationError()
-        }
-        try await startNewStream(for: request)
+        try await ScreenCaptureStreamReplacement.run(
+            retireCurrentStream: { [self] in
+                // A queued stop may also target a stream already stopped by the
+                // system. Drain it best-effort, then retire the current reference.
+                try? await drainPendingStreamStops()
+                try await stopCurrentStreamIfPresent()
+            },
+            startReplacement: { [self] in
+                guard captureRequested,
+                      lifecycle.isCurrentCaptureRequest(request) else {
+                    throw CancellationError()
+                }
+                try await startNewStream(for: request)
+            }
+        )
     }
 
     func stopCapture() async throws {

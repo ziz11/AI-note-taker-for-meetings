@@ -226,6 +226,21 @@ final class CaptureHealthCoordinatorTests: XCTestCase {
         }
     }
 
+    func testStreamReplacementStartsWhenRetiringStoppedStreamFails() async throws {
+        var replacementStarted = false
+
+        try await ScreenCaptureStreamReplacement.run(
+            retireCurrentStream: {
+                throw TestError.failed
+            },
+            startReplacement: {
+                replacementStarted = true
+            }
+        )
+
+        XCTAssertTrue(replacementStarted)
+    }
+
     func testOldStreamGenerationCannotConfirmReplacementHealth() {
         let lifecycle = ScreenCaptureStreamLifecycle()
         let oldStream = NSObject()
