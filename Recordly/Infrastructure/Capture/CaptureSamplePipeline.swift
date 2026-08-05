@@ -1,5 +1,15 @@
 import Foundation
 
+enum CaptureSampleCommitGate {
+    static func perform(
+        write: () async throws -> Void,
+        onCommit: () async -> Void
+    ) async rethrows {
+        try await write()
+        await onCommit()
+    }
+}
+
 /// Single-consumer pipeline for high-rate capture callbacks: the producer
 /// side is non-blocking (drop-newest on overflow), one long-lived Task
 /// consumes elements in order. Replaces per-buffer `Task {}` spawns.

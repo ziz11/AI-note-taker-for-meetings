@@ -1345,24 +1345,28 @@ final class AudioCaptureService: AudioCaptureEngine {
                 let systemMeter = MeteringThrottle()
                 let systemPipeline = CaptureSamplePipeline<GenerationTaggedSample>(
                     bufferLimit: 64,
-                    onSubmit: { [weak self] sample in
-                        Task { @MainActor [weak self] in
-                            self?.recordSampleArrival(for: .system, generation: sample.generation)
-                        }
-                    },
                     handler: { [weak self] sample in
                         do {
-                            _ = try await streamSysWriter.appendPreservingCanonical(sampleBuffer: sample.buffer)
                             let level = sample.buffer.normalizedLevel
-                            guard let self else { return }
-                            await MainActor.run {
-                                guard self.screenCaptureService.isCurrentStreamGeneration(sample.generation) else {
-                                    return
+                            try await CaptureSampleCommitGate.perform(
+                                write: {
+                                    _ = try await streamSysWriter.appendPreservingCanonical(
+                                        sampleBuffer: sample.buffer
+                                    )
+                                },
+                                onCommit: { [weak self] in
+                                    guard let self else { return }
+                                    await MainActor.run {
+                                        guard self.screenCaptureService.isCurrentStreamGeneration(sample.generation) else {
+                                            return
+                                        }
+                                        self.recordSampleArrival(for: .system, generation: sample.generation)
+                                        if systemMeter.due() {
+                                            self.systemLevelValue = level
+                                        }
+                                    }
                                 }
-                                if systemMeter.due() {
-                                    self.systemLevelValue = level
-                                }
-                            }
+                            )
                         } catch {
                             await streamSysWriter.recordDiagnostic("system append failed: \(error.localizedDescription)")
                             guard let self else { return }
@@ -1375,24 +1379,28 @@ final class AudioCaptureService: AudioCaptureEngine {
                 let microphoneMeter = MeteringThrottle()
                 let microphonePipeline = CaptureSamplePipeline<GenerationTaggedSample>(
                     bufferLimit: 64,
-                    onSubmit: { [weak self] sample in
-                        Task { @MainActor [weak self] in
-                            self?.recordSampleArrival(for: .microphone, generation: sample.generation)
-                        }
-                    },
                     handler: { [weak self] sample in
                         do {
-                            _ = try await streamMicWriter.appendPreservingCanonical(sampleBuffer: sample.buffer)
                             let level = sample.buffer.normalizedLevel
-                            guard let self else { return }
-                            await MainActor.run {
-                                guard self.screenCaptureService.isCurrentStreamGeneration(sample.generation) else {
-                                    return
+                            try await CaptureSampleCommitGate.perform(
+                                write: {
+                                    _ = try await streamMicWriter.appendPreservingCanonical(
+                                        sampleBuffer: sample.buffer
+                                    )
+                                },
+                                onCommit: { [weak self] in
+                                    guard let self else { return }
+                                    await MainActor.run {
+                                        guard self.screenCaptureService.isCurrentStreamGeneration(sample.generation) else {
+                                            return
+                                        }
+                                        self.recordSampleArrival(for: .microphone, generation: sample.generation)
+                                        if microphoneMeter.due() {
+                                            self.microphoneLevelValue = level
+                                        }
+                                    }
                                 }
-                                if microphoneMeter.due() {
-                                    self.microphoneLevelValue = level
-                                }
-                            }
+                            )
                         } catch {
                             // Keep recording alive if one buffer fails to convert.
                         }
