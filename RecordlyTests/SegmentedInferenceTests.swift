@@ -1,8 +1,216 @@
 import AVFoundation
+import Combine
 import XCTest
 @testable import Recordly
 
 final class SegmentedInferenceTests: XCTestCase {
+    @MainActor
+    func testProgressCountsActualWorkAndNeverRegressesAcrossStages() async throws {
+        try addAudio(track: .microphone, startSeconds: 0, seconds: 130)
+        try addAudio(track: .system, startSeconds: 0, seconds: 130)
+        var updates: [TranscriptProcessingProgress] = []
+        _ = try await process(asr: SegmentedTestASREngine(), onProgress: { updates.append($0) })
+        let final = try XCTUnwrap(updates.last)
+        XCTAssertEqual(final.asr.total, 6)
+        XCTAssertEqual(final.asr.handled, 6)
+        XCTAssertEqual(final.diarization.total, 3)
+        XCTAssertEqual(final.diarization.handled, 3)
+        XCTAssertEqual(final.overallFraction, 1)
+        XCTAssertEqual(final.state, .ready)
+        XCTAssertTrue(zip(updates, updates.dropFirst()).allSatisfy { $0.overallFraction <= $1.overallFraction })
+        XCTAssertTrue(updates.contains { $0.state == .queued && $0.asr.total == 6 })
+    }
+
+    @MainActor
+    func testProgressAccountsForCachedASRAndFailedDiarization() async throws {
+        try addAudio(track: .system, startSeconds: 0, seconds: 2)
+        let asr = SegmentedTestASREngine()
+        _ = try await process(asr: asr)
+        var updates: [TranscriptProcessingProgress] = []
+        _ = try await process(asr: asr, diarization: SegmentedTestDiarizationEngine(fails: true), onProgress: { updates.append($0) })
+        let final = try XCTUnwrap(updates.last)
+        XCTAssertEqual(final.asr.handled, 1)
+        XCTAssertEqual(final.asr.reused, 1)
+        XCTAssertEqual(final.diarization.handled, 1)
+        XCTAssertEqual(final.diarization.failed, 1)
+        XCTAssertTrue(final.diagnosticsLabel.contains("1 failed"))
+        XCTAssertEqual(final.overallFraction, 1)
+    }
+
+    @MainActor
+    func testProgressPublishesTrailingStageWhileBackendIsStillWorking() async throws {
+        let delivered = expectation(description: "Latest counters and active stage delivered")
+        var updates: [TranscriptProcessingProgress] = []
+        let publisher = TranscriptProgressPublisher { snapshot in
+            updates.append(snapshot)
+            if snapshot.state == .diarizingSystem { delivered.fulfill() }
+        }
+        var snapshot = TranscriptProcessingProgress(asr: .init(total: 1), diarization: .init(total: 1))
+        publisher.publish(snapshot, force: true)
+        // Fast cache/stage changes, followed by no further backend callbacks.
+        for _ in 0..<100 { publisher.publish(snapshot) }
+        snapshot.asr.handled = 1
+        snapshot.asr.reused = 1
+        snapshot.state = .diarizingSystem
+        publisher.publish(snapshot)
+        await fulfillment(of: [delivered], timeout: 2)
+        XCTAssertEqual(updates.count, 2)
+        XCTAssertEqual(updates.last?.asr.handled, 1)
+        XCTAssertEqual(updates.last?.asr.reused, 1)
+        XCTAssertEqual(updates.last?.diarization.handled, 0)
+    }
+
+    @MainActor
+    func testProgressKeepsFailureAndCancellationCountersBelowCompletion() async throws {
+        try addAudio(track: .system, startSeconds: 0, seconds: 2)
+        var updates: [TranscriptProcessingProgress] = []
+        do {
+            _ = try await process(asr: SegmentedTestASREngine(failingChannel: .system), onProgress: { updates.append($0) })
+            XCTFail("Expected all-ASR failure")
+        } catch { XCTAssertFalse(error is CancellationError) }
+        let failure = try XCTUnwrap(updates.last)
+        XCTAssertEqual(failure.state, .failed)
+        XCTAssertEqual(failure.asr.handled, 1)
+        XCTAssertEqual(failure.asr.failed, 1)
+        XCTAssertLessThan(failure.overallFraction, 1)
+        updates = []
+        do {
+            _ = try await process(asr: SegmentedTestASREngine(), diarization: .init(cancels: true), onProgress: { updates.append($0) })
+            XCTFail("Expected cancellation")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        let cancellation = try XCTUnwrap(updates.last)
+        XCTAssertTrue(cancellation.isCancelled)
+        XCTAssertEqual(cancellation.asr.handled, 1)
+        XCTAssertEqual(cancellation.diarization.handled, 0)
+        XCTAssertLessThan(cancellation.overallFraction, 1)
+    }
+
+    @MainActor
+    func testProgressCountsMissingOwnedAudioAndUnavailableDiarizationAsSkipped() async throws {
+        try addAudio(track: .system, startSeconds: 0, seconds: 2)
+        try addAudio(track: .system, startSeconds: 120, seconds: 2)
+        var updates: [TranscriptProcessingProgress] = []
+        _ = try await process(asr: .init(), diarizationModelURL: directory.appendingPathComponent("missing"), onProgress: { updates.append($0) })
+        let final = try XCTUnwrap(updates.last)
+        XCTAssertEqual(final.asr.total, 3)
+        XCTAssertEqual(final.asr.handled, 3)
+        XCTAssertEqual(final.asr.skipped, 1)
+        XCTAssertEqual(final.diarization.total, 3)
+        XCTAssertEqual(final.diarization.handled, 3)
+        XCTAssertEqual(final.diarization.skipped, 3)
+        XCTAssertEqual(final.overallFraction, 1)
+    }
+
+    @MainActor
+    func testStoreVisibleProgressStartsAtZeroAndKeepsCountersThroughCompletion() async throws {
+        try addAudio(track: .microphone, startSeconds: 0, seconds: 2)
+        let modelURL = directory.appendingPathComponent("store-model")
+        try Data("model".utf8).write(to: modelURL)
+        let recording = RecordingSession(id: sessionID, title: "Progress", createdAt: Date(), duration: 2,
+            lifecycleState: .ready, transcriptState: .idle, source: .liveCapture, notes: "",
+            assets: .init(audioManifestFile: "audio-manifest.json", audioTracks: ["microphone"]))
+        let repository = InMemoryRecordingsRepository(recordings: [recording], sessionDirectories: [sessionID: directory])
+        let profile = InferenceRuntimeProfile(stageSelection: .defaultLocal,
+            modelArtifacts: .init(asrModelURL: modelURL, diarizationModelURL: nil, summarizationModelURL: nil),
+            summarizationRuntimeSettings: .default)
+        let manager = ModelManager(discoveryPaths: .init(appSupportDirectory: { _ in nil },
+            sharedDirectory: { _ in nil }, userDirectory: { _ in nil }, projectDirectories: { [] }))
+        let store = RecordingsStore(audioCaptureEngine: StubAudioCaptureEngine(artifacts: .init()),
+            transcriptionPipeline: .init(), runtimeProfileSelector: ProgressTestProfileSelector(profile: profile),
+            inferenceEngineFactory: SegmentedTestEngineFactory(asr: .init(), diarization: .init()),
+            transcriptionEngineDisplayName: "Test", modelManager: manager,
+            fluidAudioModelProvider: FluidAudioASRModelProvider(),
+            fluidAudioDiarizationModelProvider: FluidAudioDiarizationModelProvider(), repository: repository)
+        // Let startup recovery finish before intentionally queueing this recording.
+        await Task.yield()
+        store.pauseTranscriptionQueue()
+        let finished = expectation(description: "Store forwards completed progress")
+        var fractions: [Double] = []
+        var final: TranscriptProcessingProgress?
+        let subscription = store.$viewState.sink { state in
+            guard let job = state.runtime.processingJobs.first(where: { $0.kind == .transcription }) else { return }
+            fractions.append(job.progress)
+            if job.transcriptionDetail?.state == .ready && final == nil {
+                final = job.transcriptionDetail
+                finished.fulfill()
+            }
+        }
+        await store.transcribeSelectedRecording()
+        XCTAssertEqual(store.processingJobs.first?.progress, 0)
+        store.resumeTranscriptionQueue()
+        await fulfillment(of: [finished], timeout: 5)
+        XCTAssertEqual(fractions.first, 0)
+        XCTAssertTrue(zip(fractions, fractions.dropFirst()).allSatisfy { $0 <= $1 })
+        XCTAssertEqual(final?.asr.handled, 1)
+        XCTAssertEqual(final?.asr.total, 1)
+        XCTAssertEqual(final?.overallFraction, 1)
+        subscription.cancel()
+        store.cancelAllProcessingJobs()
+    }
+
+    @MainActor
+    func testProgressFlushesCancellationDuringFinalization() async throws {
+        try addAudio(track: .microphone, startSeconds: 0, seconds: 2)
+        var updates: [TranscriptProcessingProgress] = []
+        var task: Task<TranscriptionResult, Error>?
+        task = Task {
+            try await process(asr: .init(), onProgress: { snapshot in
+                updates.append(snapshot)
+                if snapshot.state == .merging { task?.cancel() }
+            })
+        }
+        do { _ = try await task!.value; XCTFail("Expected cancellation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(try XCTUnwrap(updates.last).isCancelled)
+        XCTAssertLessThan(try XCTUnwrap(updates.last).overallFraction, 1)
+        XCTAssertTrue(zip(updates, updates.dropFirst()).allSatisfy { $0.overallFraction <= $1.overallFraction })
+    }
+
+    @MainActor
+    func testProgressFlushesOutputFailureWithoutRegressingFinishingWork() async throws {
+        try addAudio(track: .microphone, startSeconds: 0, seconds: 2)
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("transcript.txt"), withIntermediateDirectories: true)
+        var updates: [TranscriptProcessingProgress] = []
+        do {
+            _ = try await process(asr: .init(), onProgress: { updates.append($0) })
+            XCTFail("Expected output write failure")
+        } catch { XCTAssertFalse(error is CancellationError) }
+        XCTAssertEqual(updates.last?.state, .failed)
+        XCTAssertEqual(updates.last?.asr.handled, 1)
+        XCTAssertLessThan(try XCTUnwrap(updates.last).overallFraction, 1)
+        XCTAssertTrue(zip(updates, updates.dropFirst()).allSatisfy { $0.overallFraction <= $1.overallFraction })
+    }
+
+    @MainActor
+    func testForcedBoundaryCannotLetCancelledTimerFlushNewSnapshotEarly() async throws {
+        let delivered = expectation(description: "Next snapshot respects new boundary interval")
+        var boundaryTime: TimeInterval = 0
+        let publisher = TranscriptProgressPublisher { snapshot in
+            if snapshot.state == .renderingOutputs {
+                XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - boundaryTime, 0.08)
+                delivered.fulfill()
+            }
+        }
+        var snapshot = TranscriptProcessingProgress()
+        publisher.publish(snapshot, force: true)
+        snapshot.state = .diarizingSystem
+        publisher.publish(snapshot)
+        try await Task.sleep(nanoseconds: 10_000_000)
+        // Leave the old timer's continuation queued on the main actor.
+        Self.blockMainActorForTimerFixture()
+        snapshot.state = .merging
+        publisher.publish(snapshot, force: true)
+        boundaryTime = ProcessInfo.processInfo.systemUptime
+        snapshot.state = .renderingOutputs
+        publisher.publish(snapshot)
+        await fulfillment(of: [delivered], timeout: 2)
+    }
+
+    @MainActor
+    private static func blockMainActorForTimerFixture() {
+        Thread.sleep(forTimeInterval: 0.15)
+    }
+
     private var directory: URL!
     private let sessionID = UUID()
 
@@ -566,7 +774,7 @@ final class SegmentedInferenceTests: XCTestCase {
         try JSONDecoder().decode(SegmentedInferenceReport.self, from: Data(contentsOf: directory.appendingPathComponent("inference/report.json")))
     }
 
-    private func process(asr: SegmentedTestASREngine, diarization: SegmentedTestDiarizationEngine = SegmentedTestDiarizationEngine(), modelBytes: String = "model-v1", diarizationModelURL: URL? = nil, overrideDirectory: URL? = nil, overrideSessionID: UUID? = nil) async throws -> TranscriptionResult {
+    private func process(asr: SegmentedTestASREngine, diarization: SegmentedTestDiarizationEngine = SegmentedTestDiarizationEngine(), modelBytes: String = "model-v1", diarizationModelURL: URL? = nil, overrideDirectory: URL? = nil, overrideSessionID: UUID? = nil, onProgress: (@MainActor (TranscriptProcessingProgress) -> Void)? = nil) async throws -> TranscriptionResult {
         let directory = overrideDirectory ?? self.directory!
         let sessionID = overrideSessionID ?? self.sessionID
         let model = directory.appendingPathComponent("test-model")
@@ -578,7 +786,7 @@ final class SegmentedInferenceTests: XCTestCase {
             modelArtifacts: InferenceModelArtifacts(asrModelURL: model, diarizationModelURL: diarizationModelURL, summarizationModelURL: nil),
             summarizationRuntimeSettings: .default)
         return try await TranscriptionPipeline().process(recording: recording, in: directory, runtimeProfile: profile,
-            engineFactory: SegmentedTestEngineFactory(asr: asr, diarization: diarization))
+            engineFactory: SegmentedTestEngineFactory(asr: asr, diarization: diarization), onProgress: onProgress)
     }
 
     private func readTranscript(in overrideDirectory: URL? = nil) throws -> TranscriptDocument {
@@ -696,5 +904,16 @@ private final class SegmentedAlwaysExistingFileManager: FileManager, @unchecked 
 private struct SegmentedImmediateAudioLoader: FluidAudioSessionAudioLoading {
     func loadAudio(from audioURL: URL) throws -> PreparedSessionAudio {
         PreparedSessionAudio(samples: [0.1, 0.2], sampleRate: 16_000, durationMs: 1, sourceURL: audioURL)
+    }
+}
+
+@MainActor
+private struct ProgressTestProfileSelector: InferenceRuntimeProfileSelecting {
+    let profile: InferenceRuntimeProfile
+    func transcriptionAvailability(for profile: ModelProfile) -> TranscriptionAvailability { .ready }
+    func resolveTranscriptionProfile(for profile: ModelProfile) throws -> InferenceRuntimeProfile { self.profile }
+    func resolveSummarizationProfile(for profile: ModelProfile) throws -> InferenceRuntimeProfile {
+        XCTFail("Summarization must not be resolved by transcription")
+        return self.profile
     }
 }

@@ -4,6 +4,10 @@ Feature branch: `feature/audio_pipeline_v2`.
 Base develop: `59a0b28856b222638d0ed0aada6e63df615b9aec` (matched origin/develop when prepared).
 The final branch SHA is available with `git rev-parse HEAD` and in the delivery message; develop is not merged or rewritten.
 
+## Current follow-up
+
+The progress/summary-placeholder follow-up supersedes the summarization acceptance work described below: summary generation, queues, fallback/logging and runtime configuration UI are disabled. Recording detail opens Transcript; previous artifacts remain intact. V2 processing now publishes independent window counters and monotonic progress with coalesced UI updates. See `docs/progress-and-summary-placeholder-report.md` for current verification. The remaining sections document the earlier V2 delivery.
+
 ## Milestone status
 
 - A: implemented and independently reviewed. Actual AAC storage, playback/export, recovery and fault tests pass. Hardware capture and extended meeting memory/CPU measurements remain separate acceptance work.

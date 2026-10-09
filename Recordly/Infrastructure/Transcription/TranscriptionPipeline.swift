@@ -113,14 +113,15 @@ struct TranscriptionPipeline {
         in sessionDirectory: URL,
         runtimeProfile: InferenceRuntimeProfile,
         engineFactory: any InferenceEngineFactory,
-        onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
+        onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil,
+        onProgress: (@MainActor (TranscriptProcessingProgress) -> Void)? = nil
     ) async throws -> TranscriptionResult {
         await onStateChange?(.queued)
         try Task.checkCancellation()
         if recording.assets.audioManifestFile != nil {
             return try await SegmentedTranscriptionPipeline(mergeService: mergeService, renderService: renderService)
                 .process(recording: recording, in: sessionDirectory, runtimeProfile: runtimeProfile,
-                    engineFactory: engineFactory, onStateChange: onStateChange)
+                    engineFactory: engineFactory, onStateChange: onStateChange, onProgress: onProgress)
         }
 
         let micInput = try preparePreferredLiveCaptureInput(

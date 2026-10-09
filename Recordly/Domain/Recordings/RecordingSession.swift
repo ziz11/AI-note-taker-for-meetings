@@ -37,7 +37,7 @@ enum RecordingSource: String, Codable, CaseIterable {
     }
 }
 
-enum TranscriptPipelineState: String, Codable, CaseIterable {
+enum TranscriptPipelineState: String, Codable, CaseIterable, Sendable {
     case idle
     case queued
     case transcribingMic
@@ -427,5 +427,44 @@ extension RecordingSession {
         }
 
         return .missing
+    }
+}
+
+struct TranscriptStageProgress: Equatable, Sendable {
+    var total = 0
+    var handled = 0
+    var failed = 0
+    var skipped = 0
+    var reused = 0
+}
+
+struct TranscriptProcessingProgress: Equatable, Sendable {
+    var state: TranscriptPipelineState = .queued
+    var asr = TranscriptStageProgress()
+    var diarization = TranscriptStageProgress()
+    var activeWindow: Int?
+    var isCancelled = false
+    var completedOutputSteps = 0
+
+    var overallFraction: Double {
+        if state == .ready { return 1 }
+        return min(0.99, Double(asr.handled + diarization.handled + completedOutputSteps) / Double(max(asr.total + diarization.total + 2, 1)))
+    }
+    var stageLabel: String {
+        if isCancelled { return "Cancelled" }
+        if let activeWindow { return "\(state.label) · window \(activeWindow)/\(asr.total)" }
+        return state.label
+    }
+    var asrLabel: String { "Transcription \(asr.handled)/\(asr.total)" }
+    var diarizationLabel: String { "Diarization \(diarization.handled)/\(diarization.total)" }
+    var diagnosticsLabel: String {
+        var parts = ["Audio windows"]
+        let failures = asr.failed + diarization.failed
+        let skipped = asr.skipped + diarization.skipped
+        let reused = asr.reused + diarization.reused
+        if failures > 0 { parts.append("\(failures) failed") }
+        if skipped > 0 { parts.append("\(skipped) skipped") }
+        if reused > 0 { parts.append("\(reused) reused") }
+        return parts.joined(separator: " · ")
     }
 }

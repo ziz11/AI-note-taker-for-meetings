@@ -44,58 +44,11 @@ struct ModelSettingsView: View {
                         }
                         .id("fluidAudioDiarizationSection")
 
-                        sectionHeader(
-                            eyebrow: "Summarization",
-                            title: "Local summary models",
-                            subtitle: "Choose the local model used for summary generation."
+                        emptyStateCard(
+                            title: "Summarization unavailable",
+                            subtitle: "Summary generation is temporarily disabled. Transcripts remain available."
                         )
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("llama-cli executable")
-                                .font(.headline)
-                            HStack {
-                                Text(viewModel.llamaExecutablePath.isEmpty ? "No executable configured" : viewModel.llamaExecutablePath)
-                                    .font(.caption).textSelection(.enabled)
-                                Spacer()
-                                Button("Choose Executable…") {
-                                    let panel = NSOpenPanel()
-                                    panel.canChooseFiles = true
-                                    panel.canChooseDirectories = false
-                                    panel.allowsMultipleSelection = false
-                                    panel.message = "Choose your installed llama-cli executable for local summaries."
-                                    if panel.runModal() == .OK, let url = panel.url {
-                                        viewModel.configureLlamaExecutable(path: url.path)
-                                    }
-                                }
-                                if !viewModel.llamaExecutablePath.isEmpty {
-                                    Button("Clear") { viewModel.configureLlamaExecutable(path: "") }
-                                }
-                            }
-                            Text(viewModel.summarizationReadinessMessage)
-                                .font(.caption).foregroundStyle(AppTheme.secondaryText)
-                        }
-
-                        if viewModel.summarizationCatalogModels.isEmpty {
-                            emptyStateCard(
-                                title: "No summarization models discovered",
-                                subtitle: "Add compatible GGUF files or MLX model directories to a summarization models folder to use local summaries."
-                            )
-                        } else {
-                            VStack(spacing: 10) {
-                                ForEach(viewModel.summarizationCatalogModels) { model in
-                                    catalogRow(
-                                        model: model,
-                                        actionTitle: model.isSelected ? "Now Using" : "Use Model",
-                                        actionProminent: !model.isSelected
-                                    ) {
-                                        guard !model.isSelected else { return }
-                                        viewModel.selectSummarizationModel(model.id)
-                                    }
-                                }
-                            }
-                        }
-
-                        folderActions
                     }
                     .padding(14)
                 }
@@ -132,7 +85,7 @@ struct ModelSettingsView: View {
                     .font(.system(size: 34, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
 
-                Text("Catalog view for on-device dictation, speaker separation, and summarization.")
+                Text("Models for on-device transcription and speaker separation.")
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.secondaryText)
             }
@@ -239,21 +192,6 @@ struct ModelSettingsView: View {
         }
         .padding(14)
         .appPanel(selected: viewModel.isFluidDiarizationModelReady, prominent: true, cornerRadius: 20)
-    }
-
-    private var folderActions: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Model Folders")
-                .font(.headline)
-                .foregroundStyle(.primary)
-
-            HStack(spacing: 8) {
-                folderButton(title: "Open ~/models Folder", url: viewModel.folderURL(for: .summarization, source: .homeModels))
-                folderButton(title: "Open Summaries Folder", url: viewModel.folderURL(for: .summarization, source: .userLocal))
-                folderButton(title: "Open Shared Folder", url: viewModel.folderURL(for: .summarization, source: .shared))
-                folderButton(title: "Open App Support Folder", url: viewModel.folderURL(for: .summarization, source: .appSupport))
-            }
-        }
     }
 
     private func sectionHeader(eyebrow: String, title: String, subtitle: String) -> some View {

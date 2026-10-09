@@ -33,6 +33,7 @@ struct RecordingProcessingJob: Equatable, Identifiable {
     var progress: Double
     var stageLabel: String
     var startedAt: Date
+    var transcriptionDetail: TranscriptProcessingProgress? = nil
 
     var id: String {
         "\(recordingID.uuidString)-\(kind.rawValue)"

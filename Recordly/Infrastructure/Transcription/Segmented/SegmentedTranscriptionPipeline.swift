@@ -17,7 +17,8 @@ struct SegmentedTranscriptionPipeline {
 
     func process(recording: RecordingSession, in directory: URL, runtimeProfile: InferenceRuntimeProfile,
                  engineFactory: any InferenceEngineFactory,
-                 onStateChange: (@MainActor (TranscriptPipelineState) -> Void)?) async throws -> TranscriptionResult {
+                 onStateChange: (@MainActor (TranscriptPipelineState) -> Void)?,
+                 onProgress: (@MainActor (TranscriptProcessingProgress) -> Void)? = nil) async throws -> TranscriptionResult {
         try Task.checkCancellation()
         guard recording.assets.audioManifestFile == "audio-manifest.json" else { throw TranscriptionPipelineError.unsupportedFormat }
         let temporaryDirectory = directory.appendingPathComponent("inference/temporary")
@@ -55,6 +56,11 @@ struct SegmentedTranscriptionPipeline {
             windows += try planner.windows(track: track, durationFrames: manifest.segments.filter { $0.track == track }.map(\.endFrame).max() ?? 0)
         }
         let systemWindowCount = windows.filter { $0.track == .system }.count
+        var progress = TranscriptProcessingProgress(
+            asr: TranscriptStageProgress(total: windows.count),
+            diarization: TranscriptStageProgress(total: systemWindowCount))
+        let publisher = await TranscriptProgressPublisher(callback: onProgress)
+        await publisher.publish(progress, force: true)
         var report = SegmentedInferenceReport(sessionID: recording.id,
             speakerContinuity: systemWindowCount > 1 ? .unresolvedAcrossWindows : (systemWindowCount == 1 ? .windowLocalOnly : .microphoneOnly),
             audioDiagnostics: manifest.diagnostics)
@@ -74,182 +80,233 @@ struct SegmentedTranscriptionPipeline {
         var diarization: (any DiarizationEngine)?
         var diarizationUnavailable = diarizationArtifactFailure
         var requiresDiarizationRestart = false
-        if systemWindowCount > 0 && diarizationArtifactFailure == nil {
-            do { diarization = try await MainActor.run { try engineFactory.makeDiarizationEngine(for: runtimeProfile) } }
-            catch { try propagateInferenceCancellation(error); diarizationUnavailable = error.localizedDescription }
-        }
-        try writeInferenceJSON(report, to: reportURL)
         do {
-            for window in windows {
-                try Task.checkCancellation()
-                let provenance = WindowInferenceProvenance(manifest: manifest, window: window, profile: runtimeProfile,
-                    asrArtifactFingerprint: asrArtifact, asrEngineFingerprint: asr.cacheFingerprint(configuration: asrConfiguration),
-                    diarizationArtifactFingerprint: window.track == .system ? diarizationArtifact : nil, settings: settings)
-                var result = cache.load(matching: provenance) ?? PersistedInferenceWindow(provenance: provenance)
-                let hadASR = result.asr != nil
-                let hadDiarization = result.diarization != nil && result.diarizationRunID != nil && diarizationArtifact != nil
-                if hadASR { report.reusedASRWindows += 1 }
-                if hadDiarization { report.reusedDiarizationWindows += 1 }
-                if window.track == .system && !hadDiarization { result.diarization = nil; result.diarizationRunID = nil }
-                let ownsAudio = hasUsableAudio(manifest: manifest, track: window.track, startFrame: window.ownershipStartFrame, endFrame: window.ownershipEndFrame)
-                if !ownsAudio {
-                    report.windowFailures.append(failure(window, stage: "audio", message: "No committed audio in owned range; gap preserved as silence."))
-                    report.completedWindows.append(window.id)
-                    try writeInferenceJSON(report, to: reportURL)
-                    continue
-                }
-                let unavailable = provenance.audio.filter { $0.state != .committed }
-                for chunk in unavailable {
-                    report.windowFailures.append(failure(window, stage: "audio", message: "Chunk \(chunk.id) is \(chunk.state.rawValue); its timeline range remains silent."))
-                }
-                let inputURL = temporaryDirectory.appendingPathComponent("\(window.id)-\(UUID().uuidString).caf")
-                defer { try? FileManager.default.removeItem(at: inputURL) }
-                let needsDiarization = window.track == .system && !hadDiarization && diarization != nil
-                var diarizationInputAvailable = true
-                if !hadASR || needsDiarization {
-                    do {
-                        try reader.materialize(track: window.track, startFrame: window.inputStartFrame, frameCount: window.frameCount, to: inputURL)
-                        report.materializedWindowCount += 1
-                        report.maximumMaterializedFrames = max(report.maximumMaterializedFrames, window.frameCount)
-                    } catch {
-                        try propagateInferenceCancellation(error)
-                        report.windowFailures.append(failure(window, stage: "audio", message: error.localizedDescription))
-                        if hadASR {
-                            // Only optional diarization needed this export. The
-                            // validated ASR cache still represents the audio and
-                            // must survive with an explicit unknown remote speaker.
-                            diarizationInputAvailable = false
-                            result.diarizationFailure = "Diarization audio materialization failed: \(error.localizedDescription)"
-                        } else {
-                            report.completedWindows.append(window.id)
-                            try writeInferenceJSON(report, to: reportURL)
-                            continue
+            if systemWindowCount > 0 && diarizationArtifactFailure == nil {
+                do { diarization = try await MainActor.run { try engineFactory.makeDiarizationEngine(for: runtimeProfile) } }
+                catch { try propagateInferenceCancellation(error); diarizationUnavailable = error.localizedDescription }
+            }
+            try writeInferenceJSON(report, to: reportURL)
+            do {
+                for (windowIndex, window) in windows.enumerated() {
+                    progress.activeWindow = windowIndex + 1
+                    try Task.checkCancellation()
+                    let provenance = WindowInferenceProvenance(manifest: manifest, window: window, profile: runtimeProfile,
+                        asrArtifactFingerprint: asrArtifact, asrEngineFingerprint: asr.cacheFingerprint(configuration: asrConfiguration),
+                        diarizationArtifactFingerprint: window.track == .system ? diarizationArtifact : nil, settings: settings)
+                    var result = cache.load(matching: provenance) ?? PersistedInferenceWindow(provenance: provenance)
+                    let hadASR = result.asr != nil
+                    let hadDiarization = result.diarization != nil && result.diarizationRunID != nil && diarizationArtifact != nil
+                    if hadASR { report.reusedASRWindows += 1 }
+                    if hadDiarization { report.reusedDiarizationWindows += 1 }
+                    if window.track == .system && !hadDiarization { result.diarization = nil; result.diarizationRunID = nil }
+                    let ownsAudio = hasUsableAudio(manifest: manifest, track: window.track, startFrame: window.ownershipStartFrame, endFrame: window.ownershipEndFrame)
+                    if !ownsAudio {
+                        report.windowFailures.append(failure(window, stage: "audio", message: "No committed audio in owned range; gap preserved as silence."))
+                        report.completedWindows.append(window.id)
+                        try writeInferenceJSON(report, to: reportURL)
+                        progress.asr.handled += 1
+                        progress.asr.skipped += 1
+                        if window.track == .system {
+                            progress.diarization.handled += 1
+                            progress.diarization.skipped += 1
                         }
+                        await publisher.publish(progress)
+                        continue
                     }
-                }
-                if !hadASR {
-                    await onStateChange?(window.track == .microphone ? .transcribingMic : .transcribingSystem)
-                    do {
-                        result.asr = try await asr.transcribe(audioURL: inputURL, channel: window.track.transcriptChannel,
-                            sessionID: recording.id, configuration: asrConfiguration)
-                        try Task.checkCancellation()
-                        result.asrFailure = nil
-                    } catch {
-                        try propagateInferenceCancellation(error)
-                        result.asr = nil
-                        result.asrFailure = error.localizedDescription
+                    let unavailable = provenance.audio.filter { $0.state != .committed }
+                    for chunk in unavailable {
+                        report.windowFailures.append(failure(window, stage: "audio", message: "Chunk \(chunk.id) is \(chunk.state.rawValue); its timeline range remains silent."))
                     }
-                    // A completed ASR window is durable even if cancellation happens
-                    // during its optional diarization step.
-                    try cache.save(result)
-                }
-                if window.track == .system && !hadDiarization && diarizationInputAvailable {
-                    if let activeDiarization = diarization {
-                        await onStateChange?(.diarizingSystem)
+                    let inputURL = temporaryDirectory.appendingPathComponent("\(window.id)-\(UUID().uuidString).caf")
+                    defer { try? FileManager.default.removeItem(at: inputURL) }
+                    let needsDiarization = window.track == .system && !hadDiarization && diarization != nil
+                    var diarizationInputAvailable = true
+                    if !hadASR || needsDiarization {
                         do {
-                            result.diarization = try await activeDiarization.diarize(window: PreparedDiarizationWindow(
-                                audioURL: inputURL, track: window.track, startFrame: window.inputStartFrame, frameCount: window.frameCount),
-                                sessionID: recording.id, configuration: diarizationConfiguration)
-                            try Task.checkCancellation()
-                            result.diarizationRunID = UUID()
-                            result.diarizationFailure = nil
+                            try reader.materialize(track: window.track, startFrame: window.inputStartFrame, frameCount: window.frameCount, to: inputURL)
+                            report.materializedWindowCount += 1
+                            report.maximumMaterializedFrames = max(report.maximumMaterializedFrames, window.frameCount)
                         } catch {
                             try propagateInferenceCancellation(error)
-                            result.diarization = nil
-                            result.diarizationRunID = nil
-                            result.diarizationFailure = error.localizedDescription
-                            if let runtimeError = error as? DiarizationRuntimeError,
-                               [.timedOut, .runtimeBusy, .runtimeQuarantined].contains(runtimeError) {
-                                diarization = nil
-                                var diagnostic = "Further diarization skipped after runtime timeout or unavailable manager. \(error.localizedDescription)"
-                                if runtimeProfile.stageSelection.backend(for: .diarization) == .fluidAudio && runtimeError != .runtimeBusy {
-                                    requiresDiarizationRestart = true
-                                    diagnostic += " A timed out or cancelled SDK manager requires an app restart."
+                            report.windowFailures.append(failure(window, stage: "audio", message: error.localizedDescription))
+                            if hadASR {
+                                // Only optional diarization needed this export. The
+                                // validated ASR cache still represents the audio and
+                                // must survive with an explicit unknown remote speaker.
+                                diarizationInputAvailable = false
+                                result.diarizationFailure = "Diarization audio materialization failed: \(error.localizedDescription)"
+                            } else {
+                                report.completedWindows.append(window.id)
+                                try writeInferenceJSON(report, to: reportURL)
+                                progress.asr.handled += 1
+                                progress.asr.failed += 1
+                                if window.track == .system {
+                                    progress.diarization.handled += 1
+                                    progress.diarization.skipped += 1
                                 }
-                                diarizationUnavailable = diagnostic
-                                report.diagnostics.append(diagnostic)
+                                await publisher.publish(progress)
+                                continue
                             }
                         }
-                    } else {
-                        result.diarizationFailure = diarizationUnavailable ?? "Diarization is disabled or unavailable."
                     }
-                }
-                try cache.save(result)
-                if let error = result.asrFailure { report.windowFailures.append(failure(window, stage: "asr", message: error)) }
-                if let error = result.diarizationFailure { report.windowFailures.append(failure(window, stage: "diarization", message: error)) }
-                if let document = result.asr {
-                    completedASR[window.track, default: 0] += 1
-                    candidates += try makeCandidates(asr: document, diarization: result.diarization, diarizationRunID: result.diarizationRunID,
-                        provenance: provenance, manifest: manifest, identityStore: identityStore, identities: &identities)
-                    if document.segments.isEmpty { appendDegradation(window.track == .microphone ? .emptyMicASR : .emptySystemASR, to: &degraded) }
-                }
-                if let document = result.diarization, let runID = result.diarizationRunID {
-                    for local in document.segments {
-                        let start = max(window.ownershipStartMs, local.startMs + window.offsetMs)
-                        let end = min(window.ownershipEndMs, local.endMs + window.offsetMs)
-                        guard start < end else { continue }
-                        let identity = try identityStore.identity(rawLabel: local.speaker, diarization: document,
-                            runID: runID, provenance: provenance, document: &identities)
-                        diarizationSegments.append(DiarizationSegment(id: "\(window.id)-\(local.id)", speaker: identity.id,
-                            startMs: start, endMs: end, confidence: local.confidence))
+                    if !hadASR {
+                        progress.state = window.track == .microphone ? .transcribingMic : .transcribingSystem
+                        await onStateChange?(progress.state)
+                        await publisher.publish(progress)
+                        do {
+                            result.asr = try await asr.transcribe(audioURL: inputURL, channel: window.track.transcriptChannel,
+                                sessionID: recording.id, configuration: asrConfiguration)
+                            try Task.checkCancellation()
+                            result.asrFailure = nil
+                        } catch {
+                            try propagateInferenceCancellation(error)
+                            result.asr = nil
+                            result.asrFailure = error.localizedDescription
+                        }
+                        // A completed ASR window is durable even if cancellation happens
+                        // during its optional diarization step.
+                        try cache.save(result)
                     }
+                    progress.asr.handled += 1
+                    if hadASR { progress.asr.reused += 1 }
+                    else if result.asr == nil { progress.asr.failed += 1 }
+                    await publisher.publish(progress)
+                    let attemptedDiarization = window.track == .system && !hadDiarization && diarizationInputAvailable && diarization != nil
+                    if window.track == .system && !hadDiarization && diarizationInputAvailable {
+                        if let activeDiarization = diarization {
+                            progress.state = .diarizingSystem
+                            await onStateChange?(progress.state)
+                            await publisher.publish(progress)
+                            do {
+                                result.diarization = try await activeDiarization.diarize(window: PreparedDiarizationWindow(
+                                    audioURL: inputURL, track: window.track, startFrame: window.inputStartFrame, frameCount: window.frameCount),
+                                    sessionID: recording.id, configuration: diarizationConfiguration)
+                                try Task.checkCancellation()
+                                result.diarizationRunID = UUID()
+                                result.diarizationFailure = nil
+                            } catch {
+                                try propagateInferenceCancellation(error)
+                                result.diarization = nil
+                                result.diarizationRunID = nil
+                                result.diarizationFailure = error.localizedDescription
+                                if let runtimeError = error as? DiarizationRuntimeError,
+                                   [.timedOut, .runtimeBusy, .runtimeQuarantined].contains(runtimeError) {
+                                    diarization = nil
+                                    var diagnostic = "Further diarization skipped after runtime timeout or unavailable manager. \(error.localizedDescription)"
+                                    if runtimeProfile.stageSelection.backend(for: .diarization) == .fluidAudio && runtimeError != .runtimeBusy {
+                                        requiresDiarizationRestart = true
+                                        diagnostic += " A timed out or cancelled SDK manager requires an app restart."
+                                    }
+                                    diarizationUnavailable = diagnostic
+                                    report.diagnostics.append(diagnostic)
+                                }
+                            }
+                        } else {
+                            result.diarizationFailure = diarizationUnavailable ?? "Diarization is disabled or unavailable."
+                        }
+                    }
+                    if window.track == .system {
+                        progress.diarization.handled += 1
+                        if hadDiarization { progress.diarization.reused += 1 }
+                        else if result.diarization == nil {
+                            if attemptedDiarization || !diarizationInputAvailable { progress.diarization.failed += 1 }
+                            else { progress.diarization.skipped += 1 }
+                        }
+                    }
+                    await publisher.publish(progress)
+                    try cache.save(result)
+                    if let error = result.asrFailure { report.windowFailures.append(failure(window, stage: "asr", message: error)) }
+                    if let error = result.diarizationFailure { report.windowFailures.append(failure(window, stage: "diarization", message: error)) }
+                    if let document = result.asr {
+                        completedASR[window.track, default: 0] += 1
+                        candidates += try makeCandidates(asr: document, diarization: result.diarization, diarizationRunID: result.diarizationRunID,
+                            provenance: provenance, manifest: manifest, identityStore: identityStore, identities: &identities)
+                        if document.segments.isEmpty { appendDegradation(window.track == .microphone ? .emptyMicASR : .emptySystemASR, to: &degraded) }
+                    }
+                    if let document = result.diarization, let runID = result.diarizationRunID {
+                        for local in document.segments {
+                            let start = max(window.ownershipStartMs, local.startMs + window.offsetMs)
+                            let end = min(window.ownershipEndMs, local.endMs + window.offsetMs)
+                            guard start < end else { continue }
+                            let identity = try identityStore.identity(rawLabel: local.speaker, diarization: document,
+                                runID: runID, provenance: provenance, document: &identities)
+                            diarizationSegments.append(DiarizationSegment(id: "\(window.id)-\(local.id)", speaker: identity.id,
+                                startMs: start, endMs: end, confidence: local.confidence))
+                        }
+                    }
+                    try identityStore.save(identities)
+                    report.completedWindows.append(window.id)
+                    try writeInferenceJSON(report, to: reportURL)
                 }
-                try identityStore.save(identities)
-                report.completedWindows.append(window.id)
-                try writeInferenceJSON(report, to: reportURL)
             }
+            if report.windowFailures.contains(where: { $0.stage == "diarization" }) { appendDegradation(.diarizationDegraded, to: &degraded) }
+            if report.windowFailures.contains(where: { $0.stage == "asr" && $0.track == .microphone }) { appendDegradation(.micASRFailedFallbackUsed, to: &degraded) }
+            if report.windowFailures.contains(where: { $0.stage == "asr" && $0.track == .system }) { appendDegradation(.systemASRFailedFallbackUsed, to: &degraded) }
+            if report.windowFailures.contains(where: { $0.stage == "audio" || $0.stage == "asr" }) { appendDegradation(.windowInferenceFailed, to: &degraded) }
+            if systemWindowCount > 1 { appendDegradation(.speakerContinuityUnresolved, to: &degraded) }
+            guard completedASR.values.reduce(0, +) > 0 else {
+                report.status = "failed"; try writeInferenceJSON(report, to: reportURL)
+                throw TranscriptionPipelineError.inferenceFailed(report.windowFailures.first?.message ?? "No inference windows completed.")
+            }
+            try Task.checkCancellation()
+            let reconciled = try reconcile(candidates)
+            report.events = try reconciled.map { TranscriptEventProvenance(eventID: $0.segment.id, windowID: $0.provenance.window.id, windowFingerprint: try $0.provenance.fingerprint) }
+            let segments = mergeService.merge(micSegments: reconciled.filter { $0.segment.channel == .mic }.map(\.segment),
+                systemSegments: reconciled.filter { $0.segment.channel == .system }.map(\.segment))
+            progress.state = .merging
+            progress.activeWindow = nil
+            await onStateChange?(.merging)
+            await publisher.publish(progress, force: true)
+            try Task.checkCancellation()
+            let channels = [TranscriptChannel.mic, .system].filter { completedASR[$0 == .mic ? .microphone : .system] != nil }
+            let transcript = TranscriptDocument(version: 1, sessionID: recording.id, createdAt: Date(), channelsPresent: channels,
+                diarizationApplied: !diarizationSegments.isEmpty, mergePolicy: .deterministicStartEndChannelID, segments: segments)
+            try writeInferenceJSON(transcript, to: directory.appendingPathComponent("transcript.json"))
+            progress.completedOutputSteps = 1
+            progress.state = .renderingOutputs
+            progress.activeWindow = nil
+            await onStateChange?(.renderingOutputs)
+            await publisher.publish(progress, force: true)
+            try Task.checkCancellation()
+            let rendered = renderService.render(document: transcript)
+            try rendered.transcriptText.write(to: directory.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
+            try rendered.srtText.write(to: directory.appendingPathComponent("transcript.srt"), atomically: true, encoding: .utf8)
+            for channel in channels {
+                let document = ASRDocument(version: 1, sessionID: recording.id, channel: channel, createdAt: Date(),
+                    segments: segments.filter { $0.channel == channel }.map { ASRSegment(id: $0.id, startMs: $0.startMs, endMs: $0.endMs,
+                        text: $0.text, confidence: $0.confidence, language: $0.language, words: $0.words) })
+                try writeInferenceJSON(document, to: directory.appendingPathComponent(channel == .mic ? "mic.asr.json" : "system.asr.json"))
+            }
+            if !diarizationSegments.isEmpty {
+                try writeInferenceJSON(DiarizationDocument(version: 1, sessionID: recording.id, createdAt: Date(), segments: diarizationSegments),
+                    to: directory.appendingPathComponent("system.diarization.json"))
+            }
+            try Task.checkCancellation()
+            report.status = "ready"; try writeInferenceJSON(report, to: reportURL)
+            progress.state = .ready
+            progress.activeWindow = nil
+            await onStateChange?(.ready)
+            await publisher.publish(progress, force: true)
+            let diarizationFailure = report.windowFailures.filter { $0.stage == "diarization" }.map(\.message).first
+            let continuityNote = systemWindowCount > 1 ? " Remote speaker continuity across windows remains unresolved." : ""
+            let failureNote = report.windowFailures.isEmpty ? "" : " \(report.windowFailures.count) inference/audio range issues; see inference/report.json."
+            let restartNote = requiresDiarizationRestart ? " Restart the app before retrying diarization; ASR remains available with unknown remote speakers." : ""
+            return TranscriptionResult(transcriptFile: "transcript.txt", srtFile: "transcript.srt", transcriptJSONFile: "transcript.json",
+                structuredTranscriptJSONFile: nil, structuredTranscriptTextFile: nil,
+                micASRJSONFile: completedASR[.microphone] != nil ? "mic.asr.json" : nil,
+                systemASRJSONFile: completedASR[.system] != nil ? "system.asr.json" : nil,
+                systemDiarizationJSONFile: diarizationSegments.isEmpty ? nil : "system.diarization.json", diarizationApplied: !diarizationSegments.isEmpty,
+                diarizationDegradedReason: diarizationFailure, diarizationModelUsed: systemWindowCount == 0 ? nil : (runtimeProfile.modelArtifacts.diarizationModelURL?.lastPathComponent ?? "sdk-managed; cache identity unverified"),
+                degradedReasons: degraded, state: .ready, summary: "Transcript ready." + failureNote + continuityNote + restartNote, audioProvenance: .m4aRecovery)
         } catch {
-            report.status = error is CancellationError ? "cancelled" : "failed"
+            progress.isCancelled = error is CancellationError
+            progress.state = progress.isCancelled ? .idle : .failed
+            progress.activeWindow = nil
+            await publisher.publish(progress, force: true)
+            report.status = progress.isCancelled ? "cancelled" : "failed"
             try? writeInferenceJSON(report, to: reportURL)
             throw error
         }
-        if report.windowFailures.contains(where: { $0.stage == "diarization" }) { appendDegradation(.diarizationDegraded, to: &degraded) }
-        if report.windowFailures.contains(where: { $0.stage == "asr" && $0.track == .microphone }) { appendDegradation(.micASRFailedFallbackUsed, to: &degraded) }
-        if report.windowFailures.contains(where: { $0.stage == "asr" && $0.track == .system }) { appendDegradation(.systemASRFailedFallbackUsed, to: &degraded) }
-        if report.windowFailures.contains(where: { $0.stage == "audio" || $0.stage == "asr" }) { appendDegradation(.windowInferenceFailed, to: &degraded) }
-        if systemWindowCount > 1 { appendDegradation(.speakerContinuityUnresolved, to: &degraded) }
-        guard completedASR.values.reduce(0, +) > 0 else {
-            report.status = "failed"; try writeInferenceJSON(report, to: reportURL)
-            throw TranscriptionPipelineError.inferenceFailed(report.windowFailures.first?.message ?? "No inference windows completed.")
-        }
-        try Task.checkCancellation()
-        let reconciled = try reconcile(candidates)
-        report.events = try reconciled.map { TranscriptEventProvenance(eventID: $0.segment.id, windowID: $0.provenance.window.id, windowFingerprint: try $0.provenance.fingerprint) }
-        let segments = mergeService.merge(micSegments: reconciled.filter { $0.segment.channel == .mic }.map(\.segment),
-            systemSegments: reconciled.filter { $0.segment.channel == .system }.map(\.segment))
-        await onStateChange?(.merging)
-        let channels = [TranscriptChannel.mic, .system].filter { completedASR[$0 == .mic ? .microphone : .system] != nil }
-        let transcript = TranscriptDocument(version: 1, sessionID: recording.id, createdAt: Date(), channelsPresent: channels,
-            diarizationApplied: !diarizationSegments.isEmpty, mergePolicy: .deterministicStartEndChannelID, segments: segments)
-        try writeInferenceJSON(transcript, to: directory.appendingPathComponent("transcript.json"))
-        await onStateChange?(.renderingOutputs)
-        let rendered = renderService.render(document: transcript)
-        try rendered.transcriptText.write(to: directory.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
-        try rendered.srtText.write(to: directory.appendingPathComponent("transcript.srt"), atomically: true, encoding: .utf8)
-        for channel in channels {
-            let document = ASRDocument(version: 1, sessionID: recording.id, channel: channel, createdAt: Date(),
-                segments: segments.filter { $0.channel == channel }.map { ASRSegment(id: $0.id, startMs: $0.startMs, endMs: $0.endMs,
-                    text: $0.text, confidence: $0.confidence, language: $0.language, words: $0.words) })
-            try writeInferenceJSON(document, to: directory.appendingPathComponent(channel == .mic ? "mic.asr.json" : "system.asr.json"))
-        }
-        if !diarizationSegments.isEmpty {
-            try writeInferenceJSON(DiarizationDocument(version: 1, sessionID: recording.id, createdAt: Date(), segments: diarizationSegments),
-                to: directory.appendingPathComponent("system.diarization.json"))
-        }
-        try Task.checkCancellation()
-        report.status = "ready"; try writeInferenceJSON(report, to: reportURL)
-        await onStateChange?(.ready)
-        let diarizationFailure = report.windowFailures.filter { $0.stage == "diarization" }.map(\.message).first
-        let continuityNote = systemWindowCount > 1 ? " Remote speaker continuity across windows remains unresolved." : ""
-        let failureNote = report.windowFailures.isEmpty ? "" : " \(report.windowFailures.count) inference/audio range issues; see inference/report.json."
-        let restartNote = requiresDiarizationRestart ? " Restart the app before retrying diarization; ASR remains available with unknown remote speakers." : ""
-        return TranscriptionResult(transcriptFile: "transcript.txt", srtFile: "transcript.srt", transcriptJSONFile: "transcript.json",
-            structuredTranscriptJSONFile: nil, structuredTranscriptTextFile: nil,
-            micASRJSONFile: completedASR[.microphone] != nil ? "mic.asr.json" : nil,
-            systemASRJSONFile: completedASR[.system] != nil ? "system.asr.json" : nil,
-            systemDiarizationJSONFile: diarizationSegments.isEmpty ? nil : "system.diarization.json", diarizationApplied: !diarizationSegments.isEmpty,
-            diarizationDegradedReason: diarizationFailure, diarizationModelUsed: systemWindowCount == 0 ? nil : (runtimeProfile.modelArtifacts.diarizationModelURL?.lastPathComponent ?? "sdk-managed; cache identity unverified"),
-            degradedReasons: degraded, state: .ready, summary: "Transcript ready." + failureNote + continuityNote + restartNote, audioProvenance: .m4aRecovery)
     }
 
     private func makeCandidates(asr: ASRDocument, diarization: DiarizationDocument?, diarizationRunID: UUID?,
@@ -444,4 +501,46 @@ struct SegmentedTranscriptionPipeline {
 
 private extension TrackKind {
     var transcriptChannel: TranscriptChannel { self == .microphone ? .mic : .system }
+}
+
+/// Coalesces fast cache/stage changes, with a trailing update so a long backend
+/// call cannot leave the UI stuck on the previous phase. Boundaries always flush.
+@MainActor
+final class TranscriptProgressPublisher {
+    private let callback: (@MainActor (TranscriptProcessingProgress) -> Void)?
+    private var lastPublication: TimeInterval = -.infinity
+    private var pendingSnapshot: TranscriptProcessingProgress?
+    private var pendingPublication: Task<Void, Never>?
+
+    init(callback: (@MainActor (TranscriptProcessingProgress) -> Void)?) {
+        self.callback = callback
+    }
+
+    deinit { pendingPublication?.cancel() }
+
+    func publish(_ snapshot: TranscriptProcessingProgress, force: Bool = false) {
+        guard callback != nil else { return }
+        pendingSnapshot = snapshot
+        let remaining = 0.1 - (ProcessInfo.processInfo.systemUptime - lastPublication)
+        if force || remaining <= 0 {
+            pendingPublication?.cancel()
+            pendingPublication = nil
+            deliverPending()
+        } else if pendingPublication == nil {
+            pendingPublication = Task { [weak self] in
+                do { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
+                catch { return }
+                guard !Task.isCancelled, let self else { return }
+                self.pendingPublication = nil
+                self.deliverPending()
+            }
+        }
+    }
+
+    private func deliverPending() {
+        guard let snapshot = pendingSnapshot else { return }
+        pendingSnapshot = nil
+        lastPublication = ProcessInfo.processInfo.systemUptime
+        callback?(snapshot)
+    }
 }

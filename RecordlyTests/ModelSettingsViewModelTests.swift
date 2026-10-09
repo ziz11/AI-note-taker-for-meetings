@@ -30,7 +30,7 @@ final class ModelSettingsViewModelTests: XCTestCase {
         defaults = nil
     }
 
-    func testRefreshBuildsCatalogStateForASRAndSummarization() throws {
+    func testRefreshBuildsASRCatalogAndPreservesDisabledSummaryPreferences() throws {
         let asrDirectory = tempDirectory.appendingPathComponent("asr", isDirectory: true)
         let summarizationDirectory = tempDirectory.appendingPathComponent("summarization", isDirectory: true)
         try FileManager.default.createDirectory(at: asrDirectory, withIntermediateDirectories: true)
@@ -59,9 +59,7 @@ final class ModelSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.localASRModels.count, 1)
         XCTAssertEqual(viewModel.localASRModels.first?.sourceLabel, "User")
         XCTAssertFalse(viewModel.localASRModels.first?.supportsSelection ?? true)
-        XCTAssertEqual(viewModel.summarizationCatalogModels.count, 1)
-        XCTAssertTrue(viewModel.summarizationCatalogModels.first?.isSelected ?? false)
-        XCTAssertEqual(viewModel.summarizationCatalogModels.first?.title, "Meeting Summary")
+        XCTAssertEqual(manager.selectedSummarizationModelID, selectedSummarization.id)
     }
 
     func testDownloadFluidDiarizationModelUpdatesProvisioningState() async {
@@ -78,20 +76,6 @@ final class ModelSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(provider.downloadCallCount, 1)
         XCTAssertEqual(viewModel.fluidDiarizationProvisioningState, .ready)
         XCTAssertTrue(viewModel.isFluidDiarizationModelReady)
-    }
-
-    func testExecutableConfigurationPersistsAndMissingSelectionRemainsVisible() {
-        let manager = makeModelManager(asrDirectory: nil, summarizationDirectory: nil)
-        let missing = tempDirectory.appendingPathComponent("missing.gguf").path
-        manager.selectedSummarizationModelID = missing
-        let viewModel = ModelSettingsViewModel(modelManager: manager,
-            fluidAudioModelProvider: StubFluidAudioASRModelProvider(state: .needsDownload),
-            fluidAudioDiarizationModelProvider: StubFluidAudioDiarizationModelProvider(state: .needsDownload))
-        viewModel.configureLlamaExecutable(path: " /tmp/explicit/llama-cli ")
-        XCTAssertEqual(manager.llamaExecutablePath, "/tmp/explicit/llama-cli")
-        XCTAssertEqual(viewModel.llamaExecutablePath, "/tmp/explicit/llama-cli")
-        XCTAssertEqual(viewModel.selectedSummarizationModelID, missing)
-        XCTAssertTrue(viewModel.summarizationReadinessMessage.contains(missing))
     }
 
     private func makeModelManager(

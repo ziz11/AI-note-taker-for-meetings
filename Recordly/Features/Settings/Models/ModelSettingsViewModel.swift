@@ -15,15 +15,9 @@ final class ModelSettingsViewModel: ObservableObject {
     }
 
     @Published private(set) var diarizationModels: [LocalModelOption] = []
-    @Published private(set) var summarizationModels: [LocalModelOption] = []
     @Published private(set) var localASRModels: [CatalogModel] = []
-    @Published private(set) var summarizationCatalogModels: [CatalogModel] = []
-
-    @Published private(set) var llamaExecutablePath = ""
-    @Published private(set) var summarizationReadinessMessage = ""
 
     @Published var selectedDiarizationModelID: String?
-    @Published var selectedSummarizationModelID: String?
     @Published private(set) var shouldScrollToDiarizationSection = false
 
     @Published private(set) var fluidProvisioningState: FluidAudioModelProvisioningState = .needsDownload
@@ -50,64 +44,17 @@ final class ModelSettingsViewModel: ObservableObject {
 
     func refresh() {
         diarizationModels = modelManager.listLocalOptions(kind: .diarization)
-        summarizationModels = modelManager.listLocalOptions(kind: .summarization)
         localASRModels = discoverLocalASRModels()
 
         selectedDiarizationModelID = modelManager.selectedDiarizationModelID
-        selectedSummarizationModelID = modelManager.selectedSummarizationModelID
-        llamaExecutablePath = modelManager.llamaExecutablePath ?? ""
-        summarizationReadinessMessage = readinessMessage()
-        if let selected = modelManager.selectedLocalOption(kind: .summarization),
-           !summarizationModels.contains(where: { $0.id == selected.id }) {
-            summarizationModels.append(selected)
-        }
-        summarizationCatalogModels = summarizationModels.map { option in
-            makeCatalogModel(
-                option: option,
-                kind: .summarization,
-                isSelected: option.id == selectedSummarizationModelID,
-                supportsSelection: true
-            )
-        }
-
         fluidAudioModelProvider.refreshState()
         fluidProvisioningState = fluidAudioModelProvider.state
         fluidAudioDiarizationModelProvider.refreshState()
         fluidDiarizationProvisioningState = fluidAudioDiarizationModelProvider.state
     }
 
-    func configureLlamaExecutable(path: String) {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        modelManager.llamaExecutablePath = trimmed.isEmpty ? nil : trimmed
-        refresh()
-    }
-
-    private func readinessMessage() -> String {
-        guard let selectedID = modelManager.selectedSummarizationModelID else {
-            return summarizationModels.isEmpty
-                ? "No summarization models installed. Add a supported GGUF or MLX model, then choose Use Model."
-                : "Summary model installed, but no model selected. Choose Use Model."
-        }
-        guard let option = modelManager.selectedLocalOption(kind: .summarization) else {
-            return SummarizationModelArtifactError.missing(URL(fileURLWithPath: selectedID)).localizedDescription
-        }
-        if MLXModelValidator.isValidModelDirectory(option.url) {
-            return "Selected MLX model installed. Generation requires the existing mlx_lm.generate runtime."
-        }
-        do {
-            try GGUFModelValidator.validate(option.url)
-            _ = try resolveLlamaBinaryURL(configuredPath: modelManager.llamaExecutablePath)
-            return "Selected GGUF and configured llama-cli are available. Model loading is checked when generating a summary."
-        } catch { return error.localizedDescription }
-    }
-
     func selectDiarizationModel(_ modelID: String?) {
         modelManager.setSelectedModelID(modelID, for: .diarization)
-        refresh()
-    }
-
-    func selectSummarizationModel(_ modelID: String?) {
-        modelManager.setSelectedModelID(modelID, for: .summarization)
         refresh()
     }
 

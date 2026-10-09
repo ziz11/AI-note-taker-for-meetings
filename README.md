@@ -6,7 +6,7 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 
 - New live recordings use compact segmented AAC storage, recovery reconciliation, native timeline playback, and explicit combined export. Existing single-file recordings remain supported.
 - Import-audio flow is supported.
-- Model management UI supports FluidAudio SDK-managed ASR provisioning and folder-based local models for diarization/summarization.
+- Model management UI supports FluidAudio SDK-managed ASR provisioning and speaker separation provisioning. Summary controls are temporary placeholders.
 - Current design direction for Models settings is provider-first:
   - users download or install models
   - users select the active model per task
@@ -16,23 +16,23 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 - ASR model provisioning is SDK-managed via `FluidAudioASRModelProvider`. Models are downloaded and cached by the SDK, not picked from local `.bin` files.
 - Legacy ASR preference keys (`selectedASRBackend`, `selectedASRLanguage`) are preserved for migration compatibility only and do not affect active runtime language/backend behavior.
 - Default diarization inference is FluidAudio-based via `FluidAudioDiarizationEngine`, with degraded fallback when model/output is unavailable.
-- Summarization inference is wired through llama.cpp-compatible runner (explicitly configured `llama-cli`) in `LlamaCppSummarizationEngine`. Falls back to template summary when LLM is unavailable.
+- Summarization is disabled in the app. Summary controls are placeholders, no summary runtime is invoked, and recording detail opens Transcript by default. Previously saved artifacts remain on disk.
 - Per-stage backend switching point is localized in `DefaultInferenceComposition` + `DefaultInferenceEngineFactory`.
 - Whisper / `whisper.cpp` is not part of the active ASR path in this branch.
 
 ## Reliability behavior
 
 - If the FluidAudio diarization package is missing, transcription can still run, but remote speaker labeling degrades.
-- Summarization falls back to template summary if LLM path fails.
+- V2 processing shows separate transcription/diarization window counters, explicit failures/skips/cache reuse, and monotonic overall progress.
 - Successful microphone or system windows survive failure of the other track. Failed ranges and missing audio are recorded as degradation. Cancellation remains cancellation.
 - Segmented inference owns 50-second intervals with up to 5 seconds of context on each side. Each temporary PCM input is at most 60 seconds. Window caches resume successful stages and validate provenance. Remote speaker continuity across windows is explicitly unresolved; local speaker renames persist independently of raw backend labels.
 - Transcript rendering falls back to segment text when backend token timings look syllabified or subword-like.
 - Persisted transcript/srt/json artifacts and recovery flow remain unchanged.
-- Transcription/summarization flows are recoverable.
+- Transcription flows are recoverable; completed window work is reused when provenance matches.
 
 ## Prerequisites
 
-- **Summarization:** select a compatible GGUF model and save the absolute path to an existing `llama-cli` executable in Models settings. Finder launches use this saved path. A template fallback explicitly shows why inference was unavailable. Model weights and the executable are external to the app bundle.
+- **Summarization:** temporarily disabled; it needs no model or executable configuration.
 - **Local Debug signing identity** (for Xcode Run): create the repository's persistent self-signed `Recordly Local Development` identity as described below. No Apple Developer account is required.
 - **Developer ID Application certificate** (for outside-App-Store distribution): installed in Keychain Access on the build Mac.
 
@@ -99,10 +99,9 @@ The script uses the persistent `Recordly Local Development` identity and require
 3. Download the FluidAudio v3 model (one-time, SDK-managed).
 4. Optionally select local model files for:
    - `Speaker Separation Model` (optional, improves remote speaker labeling)
-   - `Summarization Model` (a GGUF file), plus the absolute `llama-cli` executable path
-5. Start live-recording transcription, imported-audio transcription, or summarization.
+5. Start live-recording or imported-audio transcription. Summary generation is disabled.
 
-Diarization and summarization models remain local-file based. Common discovery locations include:
+Legacy model discovery locations remain supported for compatibility. Summary model discovery does not enable generation:
 
 - `/Users/Shared/RecordlyModels/diarization/diarization-enhanced-v1/`
 - `/Users/Shared/RecordlyModels/summarization/example-model.gguf`

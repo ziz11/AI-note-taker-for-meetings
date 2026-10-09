@@ -12,7 +12,7 @@ struct RecordingDetailView: View {
 
     @State private var draftTitle = ""
     @State private var isEditingTitle = false
-    @State private var selectedTab: DetailContentTab = .summary
+    @State private var selectedTab: DetailContentTab = .transcript
     @State private var isMetadataExpanded = false
     @FocusState private var isTitleFieldFocused: Bool
 
@@ -44,7 +44,7 @@ struct RecordingDetailView: View {
         .onChange(of: recording.id) { _, _ in
             draftTitle = recording.title
             isEditingTitle = false
-            selectedTab = .summary
+            selectedTab = .transcript
             isMetadataExpanded = false
         }
     }
@@ -147,7 +147,7 @@ struct RecordingDetailView: View {
                 heroMetaText(recording.lifecycleState.label)
             }
 
-            Text(recording.transcriptState.label)
+            Text(store.processingJobs(for: recording.id).contains { $0.transcriptionDetail != nil } ? "Processing audio" : recording.transcriptState.label)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(AppTheme.secondaryText)
         }
@@ -163,7 +163,8 @@ struct RecordingDetailView: View {
             progressCard(
                 title: job.kind == .transcription ? "Transcription" : "Summary",
                 detail: job.stageLabel,
-                value: job.progress
+                value: job.progress,
+                counters: job.transcriptionDetail
             )
         }
     }
@@ -249,17 +250,10 @@ struct RecordingDetailView: View {
                 }
 
                 secondaryActionButton(
-                    title: "Summarize",
+                    title: "Summarize (Unavailable)",
                     systemImage: "sparkles",
-                    isDisabled: store.isRecording
-                        || !hasTranscript
-                        || store.isProcessing(.transcription, for: recording.id)
-                        || store.isProcessing(.summarization, for: recording.id)
-                ) {
-                    Task {
-                        await store.summarizeSelectedRecording()
-                    }
-                }
+                    isDisabled: true
+                ) {}
 
                 secondaryActionButton(
                     title: "Open Folder",
@@ -303,8 +297,8 @@ struct RecordingDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Picker("Content", selection: $selectedTab) {
-                    Text(DetailContentTab.summary.rawValue).tag(DetailContentTab.summary)
                     Text(DetailContentTab.transcript.rawValue).tag(DetailContentTab.transcript)
+                    Text(DetailContentTab.summary.rawValue).tag(DetailContentTab.summary)
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: isCompact ? .infinity : 260)
@@ -322,6 +316,7 @@ struct RecordingDetailView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(AppTheme.accent)
+                .disabled(selectedTab == .summary)
             }
 
             Text(activeNotesText)
@@ -433,7 +428,7 @@ struct RecordingDetailView: View {
     private var activeNotesText: String {
         switch selectedTab {
         case .summary:
-            return store.summaryText(for: recording) ?? recording.summaryPreviewFallback
+            return "Summarization is temporarily unavailable."
         case .transcript:
             return store.transcriptText(for: recording) ?? recording.transcriptPreviewFallback
         }
@@ -442,7 +437,7 @@ struct RecordingDetailView: View {
     private var activeNotesIsFallback: Bool {
         switch selectedTab {
         case .summary:
-            return store.summaryText(for: recording) == nil
+            return true
         case .transcript:
             return store.transcriptText(for: recording) == nil
         }
@@ -524,7 +519,7 @@ struct RecordingDetailView: View {
         .opacity(isDisabled ? 0.35 : 1)
     }
 
-    private func progressCard(title: String, detail: String, value: Double) -> some View {
+    private func progressCard(title: String, detail: String, value: Double, counters: TranscriptProcessingProgress? = nil) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(title)
@@ -538,7 +533,21 @@ struct RecordingDetailView: View {
 
             ProgressView(value: value, total: 1)
                 .tint(AppTheme.accent)
+            if let counters {
+                HStack {
+                    Text(counters.asrLabel)
+                    Spacer()
+                    Text("\(Int(value * 100))%")
+                }
+                Text(counters.diarizationLabel)
+                Text(counters.diagnosticsLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+
         }
+        .font(.system(size: 12, weight: .medium))
+        .monospacedDigit()
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .appPanel(cornerRadius: 24)

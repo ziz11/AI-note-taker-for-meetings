@@ -258,6 +258,20 @@ struct RecordingSidebarView: View {
 
             ProgressView(value: job.progress, total: 1)
                 .tint(AppTheme.accent)
+            if let counters = job.transcriptionDetail {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(counters.asrLabel)
+                        Spacer(minLength: 4)
+                        Text("\(Int(job.progress * 100))%")
+                    }
+                    Text(counters.diarizationLabel)
+                    Text(counters.diagnosticsLabel)
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+                .font(.system(size: 11, weight: .medium))
+                .monospacedDigit()
+            }
 
             HStack(spacing: 10) {
                 Button("Retry") {
@@ -352,7 +366,9 @@ struct RecordingSidebarView: View {
 
             HStack(spacing: 14) {
                 toggleChip(title: "Auto Transcribe", isOn: $store.viewState.autoTranscribeEnabled)
-                toggleChip(title: "Auto Summarize", isOn: $store.viewState.autoSummarizeEnabled)
+                toggleChip(title: "Auto Summarize", isOn: .constant(false))
+                    .disabled(true)
+                    .help("Summarization is temporarily unavailable.")
             }
         }
         .padding(14)

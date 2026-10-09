@@ -2,14 +2,11 @@ import AVFoundation
 import Foundation
 
 enum RecordingWorkflowError: LocalizedError {
-    case missingTranscript
     case missingMergedPlaybackAudio
     case transcriptionUnavailable(TranscriptionAvailability)
 
     var errorDescription: String? {
         switch self {
-        case .missingTranscript:
-            return "No transcript is available for this recording yet."
         case .missingMergedPlaybackAudio:
             return "Mixed playback audio is not ready yet."
         case let .transcriptionUnavailable(availability):
@@ -50,7 +47,6 @@ final class RecordingWorkflowController {
     private let runtimeProfileSelector: any InferenceRuntimeProfileSelecting
     private let inferenceEngineFactory: any InferenceEngineFactory
     private let repository: RecordingsPersistence
-    private let summarizationTimeoutSeconds: UInt64
     private let captureFinalizationTimeoutNanoseconds: UInt64
     var selectedModelProfile: ModelProfile
 
@@ -70,7 +66,6 @@ final class RecordingWorkflowController {
         self.inferenceEngineFactory = inferenceEngineFactory
         self.repository = repository
         self.selectedModelProfile = selectedModelProfile
-        self.summarizationTimeoutSeconds = max(1, summarizationTimeoutSeconds)
         self.captureFinalizationTimeoutNanoseconds = max(1, captureFinalizationTimeoutNanoseconds)
     }
 
@@ -156,7 +151,8 @@ final class RecordingWorkflowController {
         for recording: RecordingSession,
         duration: TimeInterval,
         runTranscription: Bool,
-        onTranscriptionStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
+        onTranscriptionStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil,
+        onProgress: (@MainActor (TranscriptProcessingProgress) -> Void)? = nil
     ) async throws -> RecordingCompletionResult {
         let captureArtifacts: CaptureArtifacts
         do {
@@ -202,7 +198,8 @@ final class RecordingWorkflowController {
                 cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
                 transcriptionResult = try await performTranscription(
                     for: updatedRecording,
-                    onStateChange: onTranscriptionStateChange
+                    onStateChange: onTranscriptionStateChange,
+                    onProgress: onProgress
                 )
                 if let transcriptionResult {
                     updatedRecording = applyTranscriptionResult(transcriptionResult, to: updatedRecording)
@@ -304,7 +301,8 @@ final class RecordingWorkflowController {
     func importAudio(
         from sourceURL: URL,
         autoTranscribe: Bool,
-        onTranscriptionStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
+        onTranscriptionStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil,
+        onProgress: (@MainActor (TranscriptProcessingProgress) -> Void)? = nil
     ) async throws -> ImportedRecordingResult {
         var recording = RecordingSession(
             id: UUID(),
@@ -327,7 +325,8 @@ final class RecordingWorkflowController {
             do {
                 transcriptionResult = try await performTranscription(
                     for: recording,
-                    onStateChange: onTranscriptionStateChange
+                    onStateChange: onTranscriptionStateChange,
+                    onProgress: onProgress
                 )
                 if let transcriptionResult {
                     recording = applyTranscriptionResult(transcriptionResult, to: recording)
@@ -355,7 +354,8 @@ final class RecordingWorkflowController {
     func transcribe(
         recording: RecordingSession,
         summarizeAfterTranscription: Bool = false,
-        onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
+        onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil,
+        onProgress: (@MainActor (TranscriptProcessingProgress) -> Void)? = nil
     ) async throws -> RecordingSession {
         var updatedRecording = recording
         updatedRecording.lifecycleState = .processing
@@ -367,20 +367,12 @@ final class RecordingWorkflowController {
         do {
             let transcriptionResult = try await performTranscription(
                 for: updatedRecording,
-                onStateChange: onStateChange
+                onStateChange: onStateChange,
+                onProgress: onProgress
             )
             updatedRecording = applyTranscriptionResult(transcriptionResult, to: updatedRecording)
             try repository.save(updatedRecording)
             cleanupTemporaryCaptureArtifactsIfNeeded(for: &updatedRecording)
-            if summarizeAfterTranscription {
-                do {
-                    updatedRecording = try await summarize(recording: updatedRecording)
-                } catch {
-                    if error is CancellationError || Task.isCancelled { throw CancellationError() }
-                    updatedRecording.notes = "Transcript ready. Summary unavailable."
-                    try? repository.save(updatedRecording)
-                }
-            }
             return updatedRecording
         } catch {
             if error is CancellationError || Task.isCancelled {
@@ -399,132 +391,14 @@ final class RecordingWorkflowController {
         }
     }
 
+    // Compatibility entry point while the summarizer is a disabled UI placeholder.
+    // Existing summary artifacts remain readable; this call performs no inference or writes.
     func summarize(
         recording: RecordingSession,
         onProgress: (@MainActor (Double, String) -> Void)? = nil
     ) async throws -> RecordingSession {
-        let sessionDirectory = try repository.sessionDirectory(for: recording.id)
-        onProgress?(0.1, "Preparing summary")
-        let summarizationStartedAt = Date()
-        var logLines: [String] = []
-        logLines.append("started_at=\(iso8601Timestamp(summarizationStartedAt))")
-        logLines.append("recording_id=\(recording.id.uuidString)")
-        logLines.append("recording_title=\(recording.title)")
-
-        let summaryInputs = loadSummaryInputs(for: recording, in: sessionDirectory)
-        logLines.append("summary_input=\(summaryInputs.transcript != nil ? "transcript" : "srt")")
-        logLines.append("transcript_chars=\(summaryInputs.transcript?.count ?? 0)")
-        logLines.append("srt_chars=\(summaryInputs.srtText?.count ?? 0)")
-
-        guard summaryInputs.transcript != nil || summaryInputs.srtText != nil else {
-            logLines.append("result=failed")
-            logLines.append("reason=missing-transcript-and-srt")
-            persistSummarizationLog(lines: logLines, in: sessionDirectory)
-            throw RecordingWorkflowError.missingTranscript
-        }
-
-        var summary: String?
-        var summarySource = "fallback"
-        var summaryFailure: String?
-        var profileFailure: Error?
-        let summarizationProfile: InferenceRuntimeProfile?
-        do {
-            summarizationProfile = try runtimeProfileSelector.resolveSummarizationProfile(for: selectedModelProfile)
-        } catch {
-            if error is CancellationError || Task.isCancelled { throw CancellationError() }
-            profileFailure = error
-            summarizationProfile = nil
-        }
-
-        if let summarizationProfile,
-           let modelURL = summarizationProfile.modelArtifacts.summarizationModelURL {
-            do {
-                let summarizationEngine = try inferenceEngineFactory.makeSummarizationEngine(for: summarizationProfile)
-                onProgress?(0.6, "Generating summary")
-                logLines.append("llm_engine=enabled")
-                logLines.append("model_id=\(modelURL.path)")
-                logLines.append("model_path=\(modelURL.path)")
-                let runtimeSettings = summarizationProfile.summarizationRuntimeSettings
-                logLines.append("ctx_size=\(runtimeSettings.contextSize)")
-                logLines.append("temperature=\(runtimeSettings.temperature)")
-                logLines.append("top_p=\(runtimeSettings.topP)")
-                logLines.append("timeout_seconds=\(summarizationTimeoutSeconds)")
-                let config = SummarizationConfiguration(
-                    modelURL: modelURL,
-                    runtime: runtimeSettings
-                )
-                let doc = try await summarizeWithTimeout(timeoutSeconds: summarizationTimeoutSeconds) {
-                    try await summarizationEngine.summarize(
-                        transcript: summaryInputs.transcript ?? "",
-                        srtText: summaryInputs.srtText,
-                        recordingTitle: recording.title,
-                        configuration: config
-                    )
-                }
-                summary = doc.rawMarkdown
-                summarySource = "llm"
-                logLines.append("llm_status=success")
-                logLines.append("summary_chars=\(doc.rawMarkdown.count)")
-            } catch {
-                if error is CancellationError || Task.isCancelled {
-                    logLines.append("result=cancelled")
-                    persistSummarizationLog(lines: logLines, in: sessionDirectory)
-                    throw CancellationError()
-                }
-                logLines.append("llm_status=failed")
-                summaryFailure = summarizationErrorDescription(error)
-                logLines.append("llm_error=\(summarizationErrorDescription(error))")
-                if let summarizationError = error as? SummarizationError {
-                    switch summarizationError {
-                    case .cancelled:
-                        logLines.append("result=cancelled")
-                        persistSummarizationLog(lines: logLines, in: sessionDirectory)
-                        throw CancellationError()
-                    case .timedOut:
-                        onProgress?(0.7, "Summary model timed out. Switching to fallback")
-                    default:
-                        onProgress?(0.7, "Summary model failed. Switching to fallback")
-                    }
-
-                } else {
-                    onProgress?(0.7, "Summary model failed. Switching to fallback")
-                }
-            }
-        } else {
-            summaryFailure = profileFailure.map(summarizationErrorDescription) ?? "Select a summarization model."
-            onProgress?(0.7, "Template fallback: \(summaryFailure!)")
-            logLines.append("llm_engine=disabled")
-            logLines.append("llm_reason=\(profileFailure.map(summarizationErrorDescription) ?? "model-not-selected")")
-        }
-
-        if summary == nil {
-            onProgress?(0.75, "Building fallback summary")
-            summary = composeSummary(
-                recording: recording,
-                transcript: summaryInputs.transcript,
-                srtText: summaryInputs.srtText
-            )
-            summarySource = "fallback"
-            logLines.append("fallback_status=used")
-            logLines.append("summary_chars=\(summary?.count ?? 0)")
-        }
-
-        onProgress?(0.92, "Saving summary")
-        let summaryFile = "summary.md"
-        let summaryURL = sessionDirectory.appendingPathComponent(summaryFile)
-        try summary!.write(to: summaryURL, atomically: true, encoding: .utf8)
-        logLines.append("summary_file=\(summaryFile)")
-        logLines.append("summary_source=\(summarySource)")
-        logLines.append("result=success")
-        logLines.append("finished_at=\(iso8601Timestamp(Date()))")
-        persistSummarizationLog(lines: logLines, in: sessionDirectory)
-
-        var updatedRecording = recording
-        updatedRecording.assets.summaryFile = summaryFile
-        updatedRecording.notes = summarySource == "llm" ? "Summary is ready." : "Template summary saved. \(summaryFailure ?? "Local generation unavailable.")"
-        try repository.save(updatedRecording)
-        onProgress?(1, summarySource == "llm" ? "Summary ready" : "Template summary ready")
-        return updatedRecording
+        try Task.checkCancellation()
+        return recording
     }
 
     func microphoneLevel() -> Double {
@@ -633,7 +507,8 @@ final class RecordingWorkflowController {
 
     private func performTranscription(
         for recording: RecordingSession,
-        onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
+        onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil,
+        onProgress: (@MainActor (TranscriptProcessingProgress) -> Void)? = nil
     ) async throws -> TranscriptionResult {
         try transcriptionPrecheck()
 
@@ -654,7 +529,8 @@ final class RecordingWorkflowController {
             in: sessionDirectory,
             runtimeProfile: runtimeProfile,
             engineFactory: inferenceEngineFactory,
-            onStateChange: onStateChange
+            onStateChange: onStateChange,
+            onProgress: onProgress
         )
     }
 
@@ -772,21 +648,6 @@ final class RecordingWorkflowController {
         }
     }
 
-    private func loadSummaryInputs(for recording: RecordingSession, in sessionDirectory: URL) -> SummaryInputs {
-        let transcript = repository.transcriptText(for: recording)
-        guard transcript == nil else {
-            return SummaryInputs(transcript: transcript, srtText: nil)
-        }
-
-        guard let srtFile = recording.assets.srtFile else {
-            return SummaryInputs(transcript: nil, srtText: nil)
-        }
-
-        let srtURL = sessionDirectory.appendingPathComponent(srtFile)
-        let srtText = try? String(contentsOf: srtURL, encoding: .utf8)
-        return SummaryInputs(transcript: nil, srtText: srtText)
-    }
-
     private func hasUsableChannelAudio(for recording: RecordingSession, in sessionDirectory: URL) -> Bool {
         [recording.assets.microphoneFile, recording.assets.systemAudioFile]
             .compactMap { $0 }
@@ -795,65 +656,6 @@ final class RecordingWorkflowController {
 
     private func isUsableAudioFile(_ url: URL) -> Bool {
         AudioFileProbe.isReadable(url, caller: "RecordingWorkflowController")
-    }
-
-    private func composeSummary(
-        recording: RecordingSession,
-        transcript: String?,
-        srtText: String?
-    ) -> String {
-        let timeline = parseSRTTimeline(srtText)
-        let transcriptLines = (transcript ?? "")
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-
-        let executiveBullets: String = {
-            if !timeline.isEmpty {
-                return timeline.prefix(6).map { "- [\($0.timestamp)] \($0.text)" }.joined(separator: "\n")
-            }
-            if !transcriptLines.isEmpty {
-                return transcriptLines.prefix(6).map { "- \($0)" }.joined(separator: "\n")
-            }
-            return "- Недостаточно данных для автоматического резюме."
-        }()
-
-        let topicsBullets = "- Темы и договоренности не выделены автоматически. Требуется ручная проверка."
-
-        let decisionsBullets = "- Решения и договоренности не выделены автоматически. Требуется ручная проверка."
-
-        let actionItemsBullets = "- [Не указан] [Не указан] Action items не выделены автоматически. Требуется ручная проверка."
-
-        let risksBullets = "- Риски и открытые вопросы не определены автоматически. Требуется ручная проверка."
-
-        return """
-        # Summary
-
-        - Recording: \(recording.title)
-        - Created: \(recording.createdAt.formatted(date: .abbreviated, time: .shortened))
-        - Duration: \(recording.durationLabel)
-        - Source: \(recording.transcriptSourceLabel)
-
-        ## Call Summary
-
-        \(executiveBullets)
-
-        ## Topics and Agreements
-
-        \(topicsBullets)
-
-        ## Decisions
-
-        \(decisionsBullets)
-
-        ## Action Items
-
-        \(actionItemsBullets)
-
-        ## Risks
-
-        \(risksBullets)
-        """
     }
 
     private func validateTranscriptionAvailability(_ availability: TranscriptionAvailability) throws {
@@ -872,114 +674,10 @@ final class RecordingWorkflowController {
             || notes == "Transcript failed."
     }
 
-    private func parseSRTTimeline(_ text: String?) -> [(seconds: Int, timestamp: String, text: String)] {
-        guard let text, !text.isEmpty else {
-            return []
-        }
-
-        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
-        let blocks = normalized.components(separatedBy: "\n\n")
-
-        var timeline: [(seconds: Int, timestamp: String, text: String)] = []
-        timeline.reserveCapacity(blocks.count)
-
-        for block in blocks {
-            let lines = block
-                .split(separator: "\n", omittingEmptySubsequences: true)
-                .map(String.init)
-
-            guard lines.count >= 3 else {
-                continue
-            }
-
-            let timestampLine = lines[1]
-            let parts = timestampLine.components(separatedBy: " --> ")
-            guard let start = parts.first else {
-                continue
-            }
-
-            let payload = lines.dropFirst(2).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !payload.isEmpty else {
-                continue
-            }
-
-            let seconds = parseSRTSeconds(start)
-            timeline.append((seconds: seconds, timestamp: start, text: payload))
-        }
-
-        return timeline.sorted(by: { $0.seconds < $1.seconds })
-    }
-
-    private struct SummaryInputs {
-        let transcript: String?
-        let srtText: String?
-    }
-
-    private func parseSRTSeconds(_ raw: String) -> Int {
-        let cleaned = raw.replacingOccurrences(of: ",", with: ".")
-        let parts = cleaned.components(separatedBy: ":")
-        guard parts.count == 3 else {
-            return Int.max
-        }
-
-        let hours = Int(parts[0]) ?? 0
-        let minutes = Int(parts[1]) ?? 0
-        let secondsPart = parts[2].components(separatedBy: ".").first ?? "0"
-        let seconds = Int(secondsPart) ?? 0
-        return (hours * 3600) + (minutes * 60) + seconds
-    }
-
     private func duration(for audioURL: URL) async throws -> TimeInterval {
         let asset = AVURLAsset(url: audioURL)
         let duration = try await asset.load(.duration)
         return duration.isNumeric ? duration.seconds : 0
     }
 
-    private func summarizeWithTimeout<T>(
-        timeoutSeconds: UInt64 = 30,
-        operation: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            defer { group.cancelAll() }
-            group.addTask {
-                try await operation()
-            }
-
-            group.addTask {
-                try await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
-                throw SummarizationError.timedOut
-            }
-
-            guard let first = try await group.next() else {
-                throw SummarizationError.cancelled
-            }
-
-            group.cancelAll()
-            return first
-        }
-    }
-
-    private func persistSummarizationLog(lines: [String], in sessionDirectory: URL) {
-        let logURL = sessionDirectory.appendingPathComponent("summarization.log")
-        let body = lines.joined(separator: "\n") + "\n"
-        try? body.write(to: logURL, atomically: true, encoding: .utf8)
-    }
-
-    private func summarizationErrorDescription(_ error: Error) -> String {
-        if let summarizationError = error as? SummarizationError {
-            return summarizationError.errorDescription ?? String(describing: summarizationError)
-        }
-
-        if let localizedError = error as? LocalizedError, let text = localizedError.errorDescription {
-            return text
-        }
-
-        return String(describing: error)
-    }
-
-    private func iso8601Timestamp(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
-    }
 }
