@@ -8,7 +8,7 @@ The final branch SHA is available with `git rev-parse HEAD` and in the delivery 
 
 - A: implemented and independently reviewed. Actual AAC storage, playback/export, recovery and fault tests pass. Hardware capture and extended meeting memory/CPU measurements remain separate acceptance work.
 - B: implemented and independently reviewed; 85 focused checks passed (one existing skip), followed by the full suite. Bounded inference and persistent local speaker names work; validated remote continuity across windows remains explicitly unresolved.
-- C: implemented configured external runtime, exact artifact resolution and accurate diagnostics. Standalone packaging and launch evidence are recorded below. No compatible real GGUF/MLX model was supplied or found, so real model loading/generation acceptance remains pending.
+- C: configured external runtime, exact artifact resolution and accurate diagnostics implemented; locally signed Release app built and launched outside Xcode. UI inspection and real generation acceptance remain incomplete for the reasons below. No compatible real GGUF/MLX model was supplied or found, so real model loading/generation acceptance remains pending.
 
 ## Storage, timeline and recovery
 
@@ -70,7 +70,11 @@ Existing MLX code is reachable through selector/factory when an MLX model is sel
 - B focused tests and independent review fixes cover bounded cross-chunk input, eight-hour planning, cache invalidation, local names, symmetric partial failure, cancellation, missing diarization artifacts, reversed boundary jitter, optional-stage failure and duplication.
 - Milestone A was built independently without B and passed 38 capture/storage/compatibility tests; the new reader memory test also passed in that independent snapshot.
 - Final full suite: **322 tests, zero failures, one existing skip**, xcodebuild exit 0. The same run observed 2.347 ms maximum rotation and 118,145,024 sampled resident bytes in both short/long reader phases. Isolated reader runs sampled up to 172,179,456 bytes with 8.06 MB growth; these are separate test-host observations, not interchangeable full-call/model RSS.
-- Standalone Release build and LaunchServices results are recorded below after the corresponding checks complete.
+- Local standalone script completed with xcodebuild exit 0 and **BUILD SUCCEEDED**. `codesign --verify --deep --strict` passed; authority `Recordly Local Development`, universal arm64/x86_64 bundle, identifier `com.local.Recordly`.
+- LaunchServices smoke test: `env -i PATH=/usr/bin:/bin /usr/bin/open -n <Release app>` returned exit 0, and the exact Release executable remained running (PID 26701 at observation, sampled resident size 71,184 KiB). This is a process launch check, not visual UI acceptance or model inference.
+- Computer Use returned **permissions are not granted**, so Models UI and visible failure text could not be inspected through the app. No alternative UI technology was used to bypass that restriction.
+- The absolute CLI setting is saved and independently readable. Its environment-free version check passed. Compatible real GGUF/MLX weights were not supplied/found; selected-model resolution, actual load and generated summary through Finder therefore remain pending. Unit/fake-runner coverage does not substitute for that acceptance test.
+- Build source revision: `754d30910bd78bffe142cd06f1b7691bcbee9176`; subsequent delivery changes contain verification documentation only.
 
 ## Files and follow-up
 
