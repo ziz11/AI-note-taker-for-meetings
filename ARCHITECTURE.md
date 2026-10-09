@@ -157,12 +157,23 @@ Reference brief:
 
 ## Audio Boundary
 
-- Live capture writes temporary PCM `CAF` source tracks (`mic.raw.caf`, `system.raw.caf`) and durable AAC `m4a` source tracks (`mic.m4a`, `system.m4a`) in parallel.
-- Immediate live transcription prefers source-track `CAF`; recovery and later reprocessing fall back to durable per-source `m4a`.
-- Merge/render may still use `merged-call.caf` internally as a deterministic PCM intermediate.
-- Backend-local FluidAudio adapters may load persisted `CAF`, `FLAC`, or per-source `m4a` session artifacts and prepare SDK-ready mono Float32 PCM at the consumer boundary.
-- `AudioInput`/`AudioInputAdapter` provide boundary-level adaptation for stage engines without changing capture/storage contracts.
-- `merged-call.m4a` remains preferred playback artifact for live recordings and should not become the source-track input of record for ASR/diarization.
+New live sessions follow:
+
+```text
+capture buffers + shared host-clock origin
+  -> bounded per-track queues
+  -> SegmentedTrackWriter (180-second AAC chunks)
+  -> finalized sidecar / published file / atomic manifest
+  -> SessionAudioRangeReader (bounded semantic windows)
+  -> ASR / optional diarization / cached stage results
+  -> timeline events / local speaker identities / transcript
+```
+
+`SessionAudioStore` reconciles the versioned manifest with trustworthy chunk sidecars. Timeline offsets, valid frames and gaps remain independent of AAC decoder durations. `SessionAudioComposition` provides native playback and explicit combined export. Legacy CAF/M4A adapters remain available.
+
+`SegmentedTranscriptionPipeline` owns window orchestration through existing engine contracts. `WindowInferenceCache` validates audio, model and configuration provenance. `SessionSpeakerIdentityStore` separates persisted display names from inference-run aliases; continuity across windows remains unresolved. See `docs/audio-pipeline-v2-report.md` for limits.
+
+Summarization resolves the selected artifact and saved absolute executable path through the selector/factory. Readiness distinguishes absent selection/models, invalid artifacts and unusable runtime. The workflow preserves the reason when writing a template fallback and propagates cancellation.
 
 Historical note:
 

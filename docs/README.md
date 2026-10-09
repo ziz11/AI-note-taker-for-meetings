@@ -4,6 +4,8 @@ This index separates current reference docs from archival notes so the repo's Ma
 
 ## Current Reference
 
+- [`audio-pipeline-v2-report.md`](audio-pipeline-v2-report.md) — segmented capture/inference guarantees, standalone runtime, measurements and pending acceptance.
+
 - [`../README.md`](../README.md) — product overview, setup, storage locations, and current runtime behavior.
 - [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — project structure, ownership boundaries, and inference architecture.
 - [`../AGENTS.md`](../AGENTS.md) — mandatory change-routing and ownership rules for future agents.

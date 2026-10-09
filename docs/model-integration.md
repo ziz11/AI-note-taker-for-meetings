@@ -1,6 +1,6 @@
 # Model Integration Notes
 
-## Current status (March 2026)
+## Current status (October 2026)
 
 Model management and inference runtime are split by responsibility:
 
@@ -73,14 +73,21 @@ Diarization and summarization models remain local-file based:
   - `~/Library/Application Support/Recordly/Models/<kind>/`
 - Supported extensions:
   - Diarization: model directories are legacy/local compatibility paths; default active runtime uses `FluidAudioDiarizationModelProvider`
-  - Summarization: `.bin`, `.gguf`
+  - Summarization: validated GGUF bytes (`.gguf`, or legacy `.bin` only when its header is actually GGUF); Whisper/GGML artifacts are excluded.
 - `model-registry.json` remains for metadata/legacy install flows.
 
 Legacy diarization `.bin` selections are not auto-converted and degrade cleanly under the FluidAudio diarization path.
 
+## Summarization runtime
+
+Select a compatible GGUF and save the absolute `llama-cli` executable path in Models settings (`model.summarization.llamaExecutablePath`). Selection retains the exact picked artifact URL even when discovery contains duplicate basenames. Missing selected files remain visible and distinct from no selection/no installed models. Bundled registry discovery supports the resource directory layout.
+
+The runner invokes the configured executable directly with a single turn and EOF input, bounded output, timeout and process cancellation. It does not depend on Finder inheriting Homebrew or shell PATH. The workflow writes a template fallback with the actual reason; cancellation is propagated.
+
+An existing MLX backend remains available through selector/factory for MLX directories containing `config.json`, tokenizer data and a monolithic `model.safetensors`. It requires an external Python/`mlx_lm.generate` environment. Sharded weights, explicit Python runtime packaging and bounded prompt/context handling remain limitations. This change retains llama.cpp as the chosen standalone runtime and adds no redundant MLX provider.
+
 ## ASR audio boundary policy
 
-- Internal capture/storage contract remains canonical PCM-in-CAF for immediate live processing, with durable per-source `m4a` persisted for recovery.
-- The active FluidAudio backend path loads persisted `CAF`, `FLAC`, or per-source `m4a` artifacts and prepares SDK-ready mono Float32 PCM inside backend-local adapters.
-- When VAD does not provide usable regions, long full-input FluidAudio transcription is windowed backend-locally rather than emitted as one full-span segment.
-- Do not change internal capture format to satisfy a single backend input requirement.
+New live recordings use durable segmented AAC and short semantic inference-window CAFs (at most 60 seconds). FluidAudio adapters prepare SDK PCM from these windows. Storage boundaries do not reset the transcript timeline. Legacy single-file CAF/FLAC/M4A inputs continue through existing adapters.
+
+See `audio-pipeline-v2-report.md` for acceptance evidence and unverified real-model cases.

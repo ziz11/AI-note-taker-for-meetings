@@ -2,9 +2,9 @@
 
 Recordly is a local-first macOS app for call capture with session-based storage and deterministic on-device post-processing.
 
-## Current status (March 2026)
+## Current status (October 2026)
 
-- Capture and merge pipeline: functional.
+- New live recordings use compact segmented AAC storage, recovery reconciliation, native timeline playback, and explicit combined export. Existing single-file recordings remain supported.
 - Import-audio flow is supported.
 - Model management UI supports FluidAudio SDK-managed ASR provisioning and folder-based local models for diarization/summarization.
 - Current design direction for Models settings is provider-first:
@@ -16,7 +16,7 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 - ASR model provisioning is SDK-managed via `FluidAudioASRModelProvider`. Models are downloaded and cached by the SDK, not picked from local `.bin` files.
 - Legacy ASR preference keys (`selectedASRBackend`, `selectedASRLanguage`) are preserved for migration compatibility only and do not affect active runtime language/backend behavior.
 - Default diarization inference is FluidAudio-based via `FluidAudioDiarizationEngine`, with degraded fallback when model/output is unavailable.
-- Summarization inference is wired through llama.cpp-compatible runner (`main`/`llama-cli`) in `LlamaCppSummarizationEngine`. Falls back to template summary when LLM is unavailable.
+- Summarization inference is wired through llama.cpp-compatible runner (explicitly configured `llama-cli`) in `LlamaCppSummarizationEngine`. Falls back to template summary when LLM is unavailable.
 - Per-stage backend switching point is localized in `DefaultInferenceComposition` + `DefaultInferenceEngineFactory`.
 - Whisper / `whisper.cpp` is not part of the active ASR path in this branch.
 
@@ -24,15 +24,15 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 
 - If the FluidAudio diarization package is missing, transcription can still run, but remote speaker labeling degrades.
 - Summarization falls back to template summary if LLM path fails.
-- ASR failure is a hard failure for transcription.
-- Long full-input FluidAudio runs are windowed inside the backend module when VAD produces no usable regions, so mic ASR is no longer persisted as one session-wide segment.
+- Successful microphone or system windows survive failure of the other track. Failed ranges and missing audio are recorded as degradation. Cancellation remains cancellation.
+- Segmented inference owns 50-second intervals with up to 5 seconds of context on each side. Each temporary PCM input is at most 60 seconds. Window caches resume successful stages and validate provenance. Remote speaker continuity across windows is explicitly unresolved; local speaker renames persist independently of raw backend labels.
 - Transcript rendering falls back to segment text when backend token timings look syllabified or subword-like.
 - Persisted transcript/srt/json artifacts and recovery flow remain unchanged.
 - Transcription/summarization flows are recoverable.
 
 ## Prerequisites
 
-- **llama.cpp CLI binary** (for LLM summarization): `main` or `llama-cli` on `PATH` (for example from `brew install llama.cpp`). Without it, summarization falls back to template output.
+- **Summarization:** select a compatible GGUF model and save the absolute path to an existing `llama-cli` executable in Models settings. Finder launches use this saved path. A template fallback explicitly shows why inference was unavailable. Model weights and the executable are external to the app bundle.
 - **Local Debug signing identity** (for Xcode Run): create the repository's persistent self-signed `Recordly Local Development` identity as described below. No Apple Developer account is required.
 - **Developer ID Application certificate** (for outside-App-Store distribution): installed in Keychain Access on the build Mac.
 
@@ -83,7 +83,14 @@ requirement must be certificate-backed rather than CDHash-only.
 
 ### Packaging
 
-The repo keeps `scripts/build-unsigned-app.sh` and `scripts/build-distribution-app.sh` only as disabled placeholders so older instructions do not point at a removed file. They do not generate app bundles or archives anymore.
+Build a locally signed Release app and ZIP without opening Xcode:
+
+```bash
+./scripts/build-standalone-local.sh
+open build/standalone-local/Build/Products/Release/Recordly.app
+```
+
+The script uses the persistent `Recordly Local Development` identity and requires the Xcode command-line build tools. The resulting app runs independently of Xcode on this Mac. This local certificate does not provide Developer ID distribution or notarization. The old unsigned/distribution scripts remain disabled placeholders.
 
 ## Local models setup
 
@@ -92,13 +99,13 @@ The repo keeps `scripts/build-unsigned-app.sh` and `scripts/build-distribution-a
 3. Download the FluidAudio v3 model (one-time, SDK-managed).
 4. Optionally select local model files for:
    - `Speaker Separation Model` (optional, improves remote speaker labeling)
-   - `Summarization Model` (used by LLM summarization when `llama-cli` is available)
+   - `Summarization Model` (a GGUF file), plus the absolute `llama-cli` executable path
 5. Start live-recording transcription, imported-audio transcription, or summarization.
 
 Diarization and summarization models remain local-file based. Common discovery locations include:
 
 - `/Users/Shared/RecordlyModels/diarization/diarization-enhanced-v1/`
-- `/Users/Shared/RecordlyModels/summarization/summarization-compact-v1.bin`
+- `/Users/Shared/RecordlyModels/summarization/example-model.gguf`
 - `~/Library/Application Support/Recordly/Models/<kind>/<model-id>/`
 - `~/models/<kind>/`
 - `<repo>/Models/` and `<repo>/models/`
@@ -116,21 +123,15 @@ Legacy diarization `.bin` selections are not auto-migrated and degrade cleanly.
 
 ## Audio format decisions
 
-- Live capture does not arrive as `.caf` or `.wav` files. `ScreenCaptureKit` delivers microphone and system audio as `CMSampleBuffer` streams.
-- The app normalizes those buffers into a single internal working format before persistence: `Float32 PCM`, `48 kHz`, `mono`, non-interleaved.
-- Live capture writes temporary fast-path source artifacts `mic.raw.caf` and `system.raw.caf` in parallel with durable recovery artifacts `mic.m4a` and `system.m4a`.
-- `CAF` remains the internal PCM working container for immediate post-capture processing; durable per-source `m4a` files are AAC-encoded and intended for recovery and reprocessing.
-- Offline merge may still use an internal `merged-call.caf` intermediate, but `merged-call.m4a` is the normal persisted playback/export artifact.
-- `merged-call.m4a` is the normal playback/export artifact. Source-track routing for ASR/diarization should not depend on it.
-- Temporary `CAF` source files may be cleaned up after transcription reaches a terminal state; durable `m4a` source tracks remain the restart/recovery path.
-- Do not switch the internal recording pipeline to `WAV` just to satisfy a downstream tool. If a consumer requires another format, adapt at that integration boundary.
+- ScreenCaptureKit supplies timestamped buffers; microphone fallback uses AVAudioEngine on the same monotonic host-clock origin.
+- Durable new-session storage is `audio-manifest.json` plus independent `audio/microphone/` and `audio/system/` chunks: AAC, 48 kHz, mono, 96 kbps, about 180 seconds per chunk.
+- Timing uses integer frames at 48 kHz. Known capture gaps preserve elapsed time as silence. Decoder padding does not define the session timeline.
+- Each chunk has a stable UUID and recovery sidecar. Finalization, validation, publication and atomic manifest persistence are separate steps. Recovery reconciles closed orphans and preserves missing/corrupt ranges.
+- AVFoundation compositions play the logical timeline directly. A full mixed M4A is generated only by explicit export.
+- Semantic inference windows may cross storage boundaries. Only short PCM CAF inputs are materialized; no whole-session PCM is required for V2.
+- Legacy CAF/M4A and imported single-file sessions retain their existing adapters.
 
-## FluidAudio audio boundary
-
-- Immediate live processing prefers persisted `CAF` PCM source tracks when they are present and valid.
-- Recovery, later reprocessing, and durable live-capture fallback use per-source `m4a` artifacts.
-- The active FluidAudio path explicitly loads persisted session artifacts from `CAF`, `FLAC`, or durable per-source `m4a` and prepares mono Float32 PCM inside the backend module before SDK calls.
-- Do not document or reintroduce a `CAF -> WAV -> whisper-cli` path for current ASR behavior.
+See [Audio Pipeline V2 verification report](docs/audio-pipeline-v2-report.md) for measured results, crash guarantees and validation limits.
 
 ## Documentation
 

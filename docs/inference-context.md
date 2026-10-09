@@ -103,39 +103,15 @@ Rule:
 
 - runtime profile data is configuration, not product policy
 
-## Canonical artifacts and persistence invariants
+## Canonical artifacts and audio boundaries
 
-Live capture source of truth remains normalized PCM in CAF.
+New live sessions persist a v2 `audio-manifest.json` and independent AAC chunks with UUIDs, frame timing, gaps, hashes and recovery sidecars. Capture uses a shared monotonic host-clock origin; storage does not define inference-window boundaries.
 
-Canonical live artifacts:
+`SessionAudioRangeReader` materializes at most 60 seconds of mono PCM for windows owning 50 seconds with 5-second context. Window stage caches validate audio, actual artifact fingerprints, backend settings and implementation versions. Successful windows survive optional-stage failure. Cancellation propagates.
 
-- `mic.raw.caf`
-- `system.raw.caf`
-- `merged-call.caf`
-- `mic.m4a`
-- `system.m4a`
-- `merged-call.m4a`
+Native compositions play the logical timeline; full mixed M4A is explicit export only. Old CAF/M4A and imported-file sessions retain the legacy path. Transcript/SRT/summary locations remain compatible.
 
-Do not change without an explicit migration reason:
-
-- session folder layout
-- canonical artifact names
-- transcript, SRT, JSON, or summary locations
-- recovery semantics
-
-Backend rule:
-
-- adapt backend requirements to persisted artifacts more often than adapting persistence for one backend
-
-## Audio invariants
-
-- internal capture stays `CAF + PCM`
-- live capture may persist durable per-source `m4a` alongside temporary `CAF`
-- immediate live processing prefers source-track `CAF`; recovery and later reprocessing may use per-source `m4a`
-- backend-local FluidAudio adapters may load persisted `CAF`, `FLAC`, or per-source `m4a` session artifacts and prepare SDK-ready PCM
-- backend-local FluidAudio transcription may use VAD regions first and fixed full-input windows second for long recordings
-- if a future backend needs WAV, FLAC, buffers, or another representation, adapt at the consumer boundary
-- do not rewrite the capture pipeline for one backend format preference
+Remote speaker labels are local to an inference run and window. Names persist against stable local identity evidence, while multi-window continuity is explicitly unresolved. See `audio-pipeline-v2-report.md`.
 
 ## Current behavior to preserve
 
@@ -165,9 +141,9 @@ Summarization workflow:
 - success writes `summary.md`
 - if summarization is unavailable, missing, fails, or times out, workflow falls back to a template summary
 
-Hard failure rule:
+Partial failure rule:
 
-- ASR failure is generally a hard failure for transcript generation
+- Independent ASR tracks/windows preserve successful output with degraded ranges. Failure of every usable track remains an error. Cancellation propagates.
 
 Transcript rendering behavior:
 

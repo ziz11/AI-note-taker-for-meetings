@@ -10,7 +10,7 @@ ScreenCaptureKit emits timestamped microphone/system CMSampleBuffers. Bounded si
 
 Separate 48 kHz mono AAC M4A tracks; target 180 seconds at buffer boundaries. Shared host-clock origin maps PTS onto integer 48 kHz session frames. Chunk IDs are UUIDs, not indices. Per-chunk sidecars persist timing before opening a writer, and finalized frame counts before final publication. Atomic manifest commits are serialized across tracks. Recovery reconciles sidecars, final files and readable pending containers, preserves invalid entries as gaps, and never deletes audio. Source frames, encoder padding, decoded frames and intended timeline duration remain distinct.
 
-Writer rotation installs a new active writer before previous close/validation/metadata tasks. Existing capture queues remain bounded (64 buffers per track); limit pending finalizations and fail capture explicitly on exhaustion. No session-wide CAF or automatic playback merge for V2. Legacy paths remain version-aware. Playback schedules bounded PCM ranges on synchronized nodes, preserving gaps and selected source, with seek/rate support.
+Writer rotation installs a new active writer before previous close/validation/metadata tasks. Existing capture queues remain bounded (64 buffers per track); limit pending finalizations and fail capture explicitly on exhaustion. No session-wide CAF or automatic playback merge for V2. Legacy paths remain version-aware. Playback uses native AVFoundation compositions of compact chunks, preserving gaps, selected source, seeking and playback rate. A bounded silent AAC asset anchors otherwise-trimmed trailing empty time.
 
 ## B: inference
 

@@ -102,15 +102,12 @@ Decide first whether the capability is cross-backend or backend-private.
 
 ### Audio invariants
 
-- Live capture source of truth is the canonical internal audio artifacts, not a backend-preferred export format.
-- Canonical live artifacts remain:
-  - `mic.raw.caf`
-  - `system.raw.caf`
-  - `merged-call.caf`
-  - `merged-call.m4a`
-- Internal live-capture format remains normalized PCM in CAF.
-- Backend-local FluidAudio prep may load persisted `CAF` or `FLAC` session artifacts and convert them to SDK-ready PCM at the consumer boundary.
-- If a future backend needs WAV, FLAC, PCM buffers, or another representation, adapt at the consumer boundary.
+- New live-session canonical audio is the versioned `audio-manifest.json` and separate AAC chunks under `audio/microphone/` and `audio/system/`, with recovery sidecars.
+- Shared monotonic capture timing uses integer 48 kHz frame offsets. Preserve missing intervals; do not derive the timeline by concatenating decoded durations.
+- Capture buffers, durable chunks, semantic inference windows, transcript events and speaker identities are distinct layers.
+- PCM remains transient or a bounded inference-window CAF. Do not recreate whole-session PCM/mixed files for routine V2 playback or processing.
+- Existing CAF/M4A names belong to the legacy adapter and remain readable.
+- Backend format adaptation belongs at the consumer boundary.
 
 ### Persistence invariants
 
@@ -183,7 +180,7 @@ Current behavior to preserve unless explicitly changed:
 
 - diarization failure degrades speaker labeling but does not fail transcription
 - summarization failure falls back to template summary
-- ASR failure is generally a hard failure for transcription
+- Independent ASR failures preserve successful tracks/windows with explicit degraded ranges. Missing all usable ASR remains a failure; cancellation must propagate.
 
 ## Recovery and Persistence Rules
 
