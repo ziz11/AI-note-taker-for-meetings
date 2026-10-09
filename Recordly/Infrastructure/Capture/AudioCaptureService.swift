@@ -339,9 +339,9 @@ enum PCMWriterError: Error {
 }
 
 protocol TrackWriting: Actor {
-    func append(sampleBuffer: CMSampleBuffer) throws
-    func append(pcmBuffer: AVAudioPCMBuffer, presentationTime: CMTime?) throws
-    func finalize() -> TrackRuntimeStats
+    func append(sampleBuffer: CMSampleBuffer) async throws
+    func append(pcmBuffer: AVAudioPCMBuffer, presentationTime: CMTime?) async throws
+    func finalize() async -> TrackRuntimeStats
     func recordDiagnostic(_ diagnostic: String)
 }
 
@@ -475,7 +475,8 @@ actor PCMTrackWriter: TrackWriting {
     }
 
     func finalize() -> TrackRuntimeStats {
-        flushStagingBuffer()
+        do { try flushStagingBufferThrowing() }
+        catch { diagnostics.append("Final flush failed: \(error.localizedDescription)") }
         // Close the file so the container is complete (AAC/m4a stays invalid until
         // closed) — stop-time validation and immediate reads depend on this.
         audioFile.close()
