@@ -95,6 +95,7 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
     func testResolveSummarizationProfileUsesLlamaCppAndRuntimeSettings() throws {
         _ = try writeModel(named: "summarization-compact-v1.gguf")
         let manager = makeModelManager()
+        manager.llamaExecutablePath = "/usr/bin/true"
         manager.summarizationRuntimeSettings = SummarizationRuntimeSettings(
             contextSize: 4096,
             temperature: 0.2,
@@ -176,6 +177,68 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         XCTAssertEqual(availability, .degradedNoDiarization)
     }
 
+    func testMissingSelectedModelHasDistinctDiagnosticAndPreservesSelection() {
+        let manager = makeModelManager()
+        let path = tempDirectory.appendingPathComponent("missing.gguf").path
+        manager.selectedSummarizationModelID = path
+        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager, asrModelProvider: StubFluidAudioASRModelProvider(modelURL: nil))
+        XCTAssertThrowsError(try selector.resolveSummarizationProfile(for: .balanced)) { error in
+            XCTAssertTrue(error.localizedDescription.contains(path))
+        }
+        XCTAssertEqual(manager.selectedSummarizationModelID, path)
+    }
+
+    func testRejectsInvalidGGUFHeaderBeforeLaunchingRuntime() throws {
+        let model = try writeModel(named: "invalid.gguf")
+        let manager = makeModelManager()
+        manager.selectedSummarizationModelID = model.path
+        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager, asrModelProvider: StubFluidAudioASRModelProvider(modelURL: nil))
+        XCTAssertThrowsError(try selector.resolveSummarizationProfile(for: .balanced)) { error in
+            XCTAssertTrue(error.localizedDescription.lowercased().contains("invalid"))
+        }
+    }
+
+    func testRejectsLegacyWhisperBinAsIncompatible() throws {
+        let model = try writeModel(named: "whisper-medium.bin")
+        let manager = makeModelManager()
+        manager.selectedSummarizationModelID = model.path
+        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager, asrModelProvider: StubFluidAudioASRModelProvider(modelURL: nil))
+        XCTAssertThrowsError(try selector.resolveSummarizationProfile(for: .balanced)) { error in
+            XCTAssertTrue(error.localizedDescription.lowercased().contains("incompatible"))
+        }
+    }
+
+    func testNoInstalledModelsDiffersFromInstalledButNotSelected() throws {
+        let manager = makeModelManager()
+        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager, asrModelProvider: StubFluidAudioASRModelProvider(modelURL: nil))
+        XCTAssertThrowsError(try selector.resolveSummarizationProfile(for: .balanced)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("No summarization models installed"))
+        }
+        _ = try writeModel(named: "available.gguf")
+        XCTAssertThrowsError(try selector.resolveSummarizationProfile(for: .balanced)) { error in
+            XCTAssertEqual(error as? InferenceRuntimeProfileError, .missingSummarizationModel)
+        }
+    }
+
+    func testConfiguredExecutableIsPassedThroughProfileWithoutShellLookup() throws {
+        let model = try writeModel(named: "selected.gguf")
+        let manager = makeModelManager()
+        manager.selectedSummarizationModelID = model.path
+        manager.llamaExecutablePath = "/usr/bin/true"
+        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: manager, asrModelProvider: StubFluidAudioASRModelProvider(modelURL: nil))
+        XCTAssertEqual(try selector.resolveSummarizationProfile(for: .balanced).llamaExecutableURL?.path, "/usr/bin/true")
+        manager.llamaExecutablePath = tempDirectory.appendingPathComponent("missing-llama").path
+        XCTAssertThrowsError(try selector.resolveSummarizationProfile(for: .balanced)) { error in
+            XCTAssertEqual(error as? LlamaCppRuntimeError, .executableMissing(URL(fileURLWithPath: manager.llamaExecutablePath!)))
+        }
+        let nonExecutable = tempDirectory.appendingPathComponent("llama-cli")
+        try Data("binary".utf8).write(to: nonExecutable)
+        manager.llamaExecutablePath = nonExecutable.path
+        XCTAssertThrowsError(try selector.resolveSummarizationProfile(for: .balanced)) { error in
+            XCTAssertEqual(error as? LlamaCppRuntimeError, .executableNotExecutable(nonExecutable))
+        }
+    }
+
     // MARK: - Helpers
 
     private func makeModelManager() -> ModelManager {
@@ -192,7 +255,7 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
 
     private func writeModel(named name: String) throws -> URL {
         let url = tempDirectory.appendingPathComponent(name)
-        try Data("model".utf8).write(to: url)
+        try ((name.hasPrefix("invalid") || name.hasSuffix(".bin")) ? Data("ggml".utf8) : Data([0x47, 0x47, 0x55, 0x46, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0])).write(to: url)
         return url
     }
 

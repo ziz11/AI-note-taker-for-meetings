@@ -633,11 +633,11 @@ final class SummaryOutputParserTests: XCTestCase {
 // MARK: - LlamaCppSummarizationEngine Tests
 
 final class LlamaCppSummarizationEngineTests: XCTestCase {
-    private let tempModelURL = FileManager.default.temporaryDirectory.appendingPathComponent("test-model-\(UUID().uuidString).bin")
+    private let tempModelURL = FileManager.default.temporaryDirectory.appendingPathComponent("test-model-\(UUID().uuidString).gguf")
 
     override func setUp() {
         super.setUp()
-        FileManager.default.createFile(atPath: tempModelURL.path, contents: Data("fake".utf8))
+        FileManager.default.createFile(atPath: tempModelURL.path, contents: Data([0x47, 0x47, 0x55, 0x46, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]))
     }
 
     override func tearDown() {
@@ -1115,6 +1115,8 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let logText = try String(contentsOf: logURL, encoding: .utf8)
         XCTAssertTrue(logText.contains("llm_status=failed"))
         XCTAssertTrue(logText.contains("summary_source=fallback"))
+        XCTAssertTrue(updated.notes.contains("Template summary"))
+        XCTAssertTrue(updated.notes.localizedCaseInsensitiveContains("timed out"))
     }
 
     func testFallbackSummaryDoesNotPromoteTranscriptExcerptsToTopicsOrActionItems() async throws {
@@ -1382,6 +1384,80 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         XCTAssertEqual(updated.transcriptState, .ready)
         XCTAssertEqual(summaryEngine.capturedTranscript, "[00:00 - 00:01] [You] chained transcript")
         XCTAssertNil(summaryEngine.capturedSRTText)
+    }
+
+    func testChainedSummaryCancellationPreservesCompletedTranscriptAndPropagates() async throws {
+        let recordingID = UUID()
+        let sessionDirectory = tempDirectory.appendingPathComponent(recordingID.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+
+        try writeTestM4A(named: "mic.m4a", in: sessionDirectory)
+
+        let asrModelURL = sessionDirectory.appendingPathComponent("asr.bin")
+        let summarizationModelURL = try makeSummarizationModel(named: "workflow-chain.gguf")
+        try Data("asr".utf8).write(to: asrModelURL)
+
+        let recording = RecordingSession(
+            id: recordingID,
+            title: "Workflow chain",
+            createdAt: Date(),
+            duration: 45,
+            lifecycleState: .ready,
+            transcriptState: .queued,
+            source: .liveCapture,
+            notes: "Queued",
+            assets: RecordingAssets(microphoneFile: "mic.m4a")
+        )
+        let repository = InMemoryRecordingsRepository(
+            recordings: [recording],
+            sessionDirectories: [recordingID: sessionDirectory]
+        )
+
+        let runtimeSelector = StaticRuntimeProfileSelector(
+            availability: .ready,
+            transcriptionProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: InferenceModelArtifacts(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: nil,
+                    summarizationModelURL: nil
+                ),
+                summarizationRuntimeSettings: .default
+            ),
+            summarizationProfile: InferenceRuntimeProfile(
+                stageSelection: .defaultLocal,
+                modelArtifacts: InferenceModelArtifacts(
+                    asrModelURL: asrModelURL,
+                    diarizationModelURL: nil,
+                    summarizationModelURL: summarizationModelURL
+                ),
+                summarizationRuntimeSettings: .default
+            )
+        )
+        let summaryEngine = CapturingSummaryEngine(result: .failure(CancellationError()))
+        let engineFactory = TestInferenceEngineFactory(
+            asrEngine: WorkflowASREngine(),
+            summarizationEngine: summaryEngine
+        )
+
+        let workflow = RecordingWorkflowController(
+            audioCaptureEngine: AudioCaptureService(),
+            transcriptionPipeline: TranscriptionPipeline(),
+            runtimeProfileSelector: runtimeSelector,
+            inferenceEngineFactory: engineFactory,
+            repository: repository
+        )
+
+        do {
+            _ = try await workflow.transcribe(recording: recording, summarizeAfterTranscription: true)
+            XCTFail("Cancellation must reach the caller")
+        } catch is CancellationError { }
+        let saved = try XCTUnwrap(repository.loadRecordings().first)
+        XCTAssertEqual(saved.transcriptState, .ready)
+        XCTAssertEqual(saved.lifecycleState, .ready)
+        XCTAssertEqual(saved.assets.transcriptFile, "transcript.txt")
+        XCTAssertNil(saved.assets.summaryFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("transcript.txt").path))
     }
 
     func testCompleteCaptureWithDiarizationUnavailablePrecheckKeepsSessionReady() async throws {
@@ -1797,7 +1873,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
         let modelsDirectory = tempDirectory.appendingPathComponent("Models", isDirectory: true)
         try FileManager.default.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
         let modelURL = modelsDirectory.appendingPathComponent(name, isDirectory: false)
-        try Data("model".utf8).write(to: modelURL)
+        try Data([0x47, 0x47, 0x55, 0x46, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]).write(to: modelURL)
         return modelURL
     }
 
@@ -1852,6 +1928,7 @@ final class RecordingWorkflowControllerSummarizationTimeoutTests: XCTestCase {
             discoveryPaths: discoveryPaths
         )
 
+        manager.llamaExecutablePath = "/usr/bin/true"
         let options = manager.listLocalOptions(kind: .summarization)
         let selected = options.first(where: { $0.url.path == modelURL.path }) ?? options.first
         manager.setSelectedModelID(selected?.id, for: .summarization)
@@ -1956,6 +2033,7 @@ final class ProcessLlamaCppRunnerTests: XCTestCase {
         XCTAssertTrue(executor.capturedArguments.contains(modelURL.path))
         XCTAssertTrue(executor.capturedArguments.contains("--file"))
         XCTAssertTrue(executor.capturedArguments.contains("--no-display-prompt"))
+        XCTAssertTrue(executor.capturedArguments.contains("--single-turn"))
         XCTAssertTrue(executor.capturedArguments.contains("--ctx-size"))
         XCTAssertTrue(executor.capturedArguments.contains("8192"))
         XCTAssertTrue(executor.capturedArguments.contains("--temp"))
@@ -1993,6 +2071,38 @@ final class ProcessLlamaCppRunnerTests: XCTestCase {
         }
     }
 
+    func testModelLoadFailureHasDistinctDiagnostic() async {
+        let executor = MockLlamaProcessExecutor(result: .success(LlamaProcessResult(exitCode: 1, stdout: "", stderr: "error loading model: unknown model architecture")))
+        let runner = ProcessLlamaCppRunner(processExecutor: executor, resolveBinaryURL: { URL(fileURLWithPath: "/usr/bin/true") })
+        do {
+            _ = try await runner.generate(prompt: "test", configuration: SummarizationConfiguration(modelURL: URL(fileURLWithPath: "/tmp/model.gguf")))
+            XCTFail("Expected model-load diagnostic")
+        } catch {
+            XCTAssertEqual(error as? LlamaCppRuntimeError, .modelLoadFailed("error loading model: unknown model architecture"))
+        }
+    }
+
+    @MainActor
+    func testFactoryUsesConfiguredExecutableWithRealHelperProcess() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("configured-summary-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("summary-helper")
+        // A deterministic fixture process tests wiring; it performs no model inference.
+        try "#!/bin/sh\nprintf '## Topics\\n- Configured runtime reached\\n## Decisions\\n- Keep local models\\n'\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let model = directory.appendingPathComponent("fixture.gguf")
+        try Data([0x47, 0x47, 0x55, 0x46, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]).write(to: model)
+        let profile = InferenceRuntimeProfile(stageSelection: .defaultLocal,
+            modelArtifacts: InferenceModelArtifacts(asrModelURL: nil, diarizationModelURL: nil, summarizationModelURL: model),
+            summarizationRuntimeSettings: .default, llamaExecutableURL: executable)
+        let engine = try DefaultInferenceEngineFactory().makeSummarizationEngine(for: profile)
+        let summary = try await engine.summarize(transcript: String(repeating: "Meeting discussion. ", count: 8), srtText: nil,
+            recordingTitle: "Fixture", configuration: SummarizationConfiguration(modelURL: model))
+        XCTAssertEqual(summary.topics, ["Configured runtime reached"])
+        XCTAssertEqual(summary.decisions, ["Keep local models"])
+    }
+
     func testChatTemplateFailureRetriesWithCompatibilityFlags() async throws {
         let chatTemplateError = """
         common_chat_templates_init: failed to initialize chat template
@@ -2025,7 +2135,7 @@ final class ProcessLlamaCppRunnerTests: XCTestCase {
 }
 
 final class ResolveLlamaBinaryURLTests: XCTestCase {
-    func testPrefersLlamaCliOverMainInCurrentDirectory() throws {
+    func testShellAndCurrentDirectoryDoNotSupplyProductionRuntime() throws {
         let fileManager = FileManager.default
         let originalDirectory = fileManager.currentDirectoryPath
         let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent("resolve-llama-\(UUID().uuidString)")
@@ -2044,8 +2154,10 @@ final class ResolveLlamaBinaryURLTests: XCTestCase {
 
         XCTAssertTrue(fileManager.changeCurrentDirectoryPath(tempDirectory.path))
 
-        let resolved = try resolveLlamaBinaryURL(fileManager: fileManager, environment: [:])
-        XCTAssertEqual(resolved.lastPathComponent, "llama-cli")
+        XCTAssertThrowsError(try resolveLlamaBinaryURL(fileManager: fileManager, environment: ["PATH": tempDirectory.path])) { error in
+            XCTAssertEqual(error as? LlamaCppRuntimeError, .executableNotConfigured)
+        }
+        let resolved = try resolveLlamaBinaryURL(fileManager: fileManager, configuredPath: llamaCliURL.path)
         XCTAssertEqual(resolved.standardizedFileURL.path, llamaCliURL.standardizedFileURL.path)
     }
 }
@@ -2134,6 +2246,18 @@ final class ModelPreferencesStoreTests: XCTestCase {
         XCTAssertEqual(reloadedStore.summarizationRuntimeSettings, expected)
     }
 
+    func testConfiguredExecutablePathPersistsAcrossStoreInstances() {
+        let suiteName = "ModelPreferencesStoreTests-executable-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = ModelPreferencesStore(defaults: defaults)
+        XCTAssertNil(store.llamaExecutablePath)
+        store.llamaExecutablePath = "/tmp/explicit/llama-cli"
+        XCTAssertEqual(ModelPreferencesStore(defaults: defaults).llamaExecutablePath, "/tmp/explicit/llama-cli")
+        store.llamaExecutablePath = nil
+        XCTAssertNil(ModelPreferencesStore(defaults: defaults).llamaExecutablePath)
+    }
+
     func testNormalizesLegacyASRPreferencesToFluidAuto() {
         let suiteName = "ModelPreferencesStoreTests-asr-legacy-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -2171,8 +2295,38 @@ final class FoundationLlamaProcessExecutorTests: XCTestCase {
             _ = try await executor.run(executableURL: shellURL, arguments: ["-lc", "sleep 1"], stdinData: nil)
             XCTFail("Expected timeout")
         } catch {
-            XCTAssertEqual(error as? SummarizationError, .cancelled)
+            XCTAssertTrue(error.localizedDescription.lowercased().contains("timed out"))
         }
+    }
+
+    func testTimeoutTerminatesWrapperDescendantsWithoutWaitingForPipeEOF() async {
+        let executor = FoundationLlamaProcessExecutor(processTimeoutSeconds: 0.1)
+        let started = Date()
+        do {
+            _ = try await executor.run(executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "trap '' TERM; sleep 2 & wait"], stdinData: nil)
+            XCTFail("Expected timeout")
+        } catch {
+            XCTAssertEqual(error as? LlamaCppRuntimeError, .timedOut)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+
+    func testLaunchFailureIsDistinctFromGenerationFailure() async {
+        let executor = FoundationLlamaProcessExecutor(processTimeoutSeconds: 1)
+        do {
+            _ = try await executor.run(executableURL: URL(fileURLWithPath: "/nonexistent/llama-cli"), arguments: [], stdinData: nil)
+            XCTFail("Expected launch failure")
+        } catch {
+            guard case .runtimeLaunchFailed = error as? LlamaCppRuntimeError else { return XCTFail("Unexpected error: \(error)") }
+        }
+    }
+
+    func testExplicitStdinIsDrainedThenClosed() async throws {
+        let executor = FoundationLlamaProcessExecutor(processTimeoutSeconds: 1)
+        let result = try await executor.run(executableURL: URL(fileURLWithPath: "/bin/cat"), arguments: [], stdinData: Data("prompt".utf8))
+        XCTAssertEqual(result.stdout, "prompt")
+        XCTAssertEqual(result.exitCode, 0)
     }
 
     func testRunCompletesWhenConfiguredTimeoutIsSufficient() async throws {
@@ -2187,6 +2341,30 @@ final class FoundationLlamaProcessExecutorTests: XCTestCase {
 
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertEqual(result.stdout, "done")
+    }
+
+    func testCallerCancellationTerminatesChildPromptly() async throws {
+        let executor = FoundationLlamaProcessExecutor(processTimeoutSeconds: 2)
+        let task = Task {
+            try await executor.run(executableURL: URL(fileURLWithPath: "/bin/sleep"), arguments: ["20"], stdinData: nil)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let started = Date()
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5)
+    }
+
+    func testNilStdinDeliversEOF() async throws {
+        let executor = FoundationLlamaProcessExecutor(processTimeoutSeconds: 0.3)
+        let result = try await executor.run(executableURL: URL(fileURLWithPath: "/bin/cat"), arguments: [], stdinData: nil)
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stdout, "")
     }
 
     private func runWithTimeout<T>(

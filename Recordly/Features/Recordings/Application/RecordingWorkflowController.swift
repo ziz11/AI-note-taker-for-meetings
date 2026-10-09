@@ -359,12 +359,20 @@ final class RecordingWorkflowController {
                 do {
                     updatedRecording = try await summarize(recording: updatedRecording)
                 } catch {
+                    if error is CancellationError || Task.isCancelled { throw CancellationError() }
                     updatedRecording.notes = "Transcript ready. Summary unavailable."
                     try? repository.save(updatedRecording)
                 }
             }
             return updatedRecording
         } catch {
+            if error is CancellationError || Task.isCancelled {
+                updatedRecording.lifecycleState = .ready
+                if updatedRecording.transcriptState != .ready { updatedRecording.transcriptState = .idle }
+                updatedRecording.notes = "Processing cancelled. Audio and completed results are saved."
+                try? repository.save(updatedRecording)
+                throw CancellationError()
+            }
             updatedRecording.transcriptState = .failed
             updatedRecording.lifecycleState = .failed
             updatedRecording.notes = transcriptionFailureNote(for: error)
@@ -400,10 +408,14 @@ final class RecordingWorkflowController {
 
         var summary: String?
         var summarySource = "fallback"
+        var summaryFailure: String?
+        var profileFailure: Error?
         let summarizationProfile: InferenceRuntimeProfile?
         do {
             summarizationProfile = try runtimeProfileSelector.resolveSummarizationProfile(for: selectedModelProfile)
         } catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            profileFailure = error
             summarizationProfile = nil
         }
 
@@ -437,22 +449,35 @@ final class RecordingWorkflowController {
                 logLines.append("llm_status=success")
                 logLines.append("summary_chars=\(doc.rawMarkdown.count)")
             } catch {
+                if error is CancellationError || Task.isCancelled {
+                    logLines.append("result=cancelled")
+                    persistSummarizationLog(lines: logLines, in: sessionDirectory)
+                    throw CancellationError()
+                }
                 logLines.append("llm_status=failed")
+                summaryFailure = summarizationErrorDescription(error)
                 logLines.append("llm_error=\(summarizationErrorDescription(error))")
                 if let summarizationError = error as? SummarizationError {
                     switch summarizationError {
                     case .cancelled:
+                        logLines.append("result=cancelled")
+                        persistSummarizationLog(lines: logLines, in: sessionDirectory)
+                        throw CancellationError()
+                    case .timedOut:
                         onProgress?(0.7, "Summary model timed out. Switching to fallback")
                     default:
                         onProgress?(0.7, "Summary model failed. Switching to fallback")
                     }
+
                 } else {
                     onProgress?(0.7, "Summary model failed. Switching to fallback")
                 }
             }
         } else {
+            summaryFailure = profileFailure.map(summarizationErrorDescription) ?? "Select a summarization model."
+            onProgress?(0.7, "Template fallback: \(summaryFailure!)")
             logLines.append("llm_engine=disabled")
-            logLines.append("llm_reason=model-not-selected")
+            logLines.append("llm_reason=\(profileFailure.map(summarizationErrorDescription) ?? "model-not-selected")")
         }
 
         if summary == nil {
@@ -479,9 +504,9 @@ final class RecordingWorkflowController {
 
         var updatedRecording = recording
         updatedRecording.assets.summaryFile = summaryFile
-        updatedRecording.notes = "Summary is ready."
+        updatedRecording.notes = summarySource == "llm" ? "Summary is ready." : "Template summary saved. \(summaryFailure ?? "Local generation unavailable.")"
         try repository.save(updatedRecording)
-        onProgress?(1, "Summary ready")
+        onProgress?(1, summarySource == "llm" ? "Summary ready" : "Template summary ready")
         return updatedRecording
     }
 
@@ -583,7 +608,7 @@ final class RecordingWorkflowController {
             switch error {
             case .missingFluidAudioModel, .fluidAudioProvisioningFailed, .invalidFluidAudioModel:
                 throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
-            case .missingSummarizationModel:
+            case .missingSummarizationModel, .noSummarizationModelsInstalled:
                 throw RecordingWorkflowError.transcriptionUnavailable(.unavailable(reason: error.localizedDescription))
             }
         }
@@ -878,13 +903,14 @@ final class RecordingWorkflowController {
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
+            defer { group.cancelAll() }
             group.addTask {
                 try await operation()
             }
 
             group.addTask {
                 try await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
-                throw SummarizationError.cancelled
+                throw SummarizationError.timedOut
             }
 
             guard let first = try await group.next() else {

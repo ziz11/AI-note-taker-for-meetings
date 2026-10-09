@@ -50,10 +50,35 @@ struct ModelSettingsView: View {
                             subtitle: "Choose the local model used for summary generation."
                         )
 
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("llama-cli executable")
+                                .font(.headline)
+                            HStack {
+                                Text(viewModel.llamaExecutablePath.isEmpty ? "No executable configured" : viewModel.llamaExecutablePath)
+                                    .font(.caption).textSelection(.enabled)
+                                Spacer()
+                                Button("Choose Executable…") {
+                                    let panel = NSOpenPanel()
+                                    panel.canChooseFiles = true
+                                    panel.canChooseDirectories = false
+                                    panel.allowsMultipleSelection = false
+                                    panel.message = "Choose your installed llama-cli executable for local summaries."
+                                    if panel.runModal() == .OK, let url = panel.url {
+                                        viewModel.configureLlamaExecutable(path: url.path)
+                                    }
+                                }
+                                if !viewModel.llamaExecutablePath.isEmpty {
+                                    Button("Clear") { viewModel.configureLlamaExecutable(path: "") }
+                                }
+                            }
+                            Text(viewModel.summarizationReadinessMessage)
+                                .font(.caption).foregroundStyle(AppTheme.secondaryText)
+                        }
+
                         if viewModel.summarizationCatalogModels.isEmpty {
                             emptyStateCard(
                                 title: "No summarization models discovered",
-                                subtitle: "Add compatible `.gguf` or `.bin` files to a summarization models folder to use local summaries."
+                                subtitle: "Add compatible GGUF files or MLX model directories to a summarization models folder to use local summaries."
                             )
                         } else {
                             VStack(spacing: 10) {

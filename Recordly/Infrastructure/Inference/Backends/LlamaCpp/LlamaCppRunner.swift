@@ -11,6 +11,133 @@ protocol LlamaProcessExecutor {
     func run(executableURL: URL, arguments: [String], stdinData: Data?) async throws -> LlamaProcessResult
 }
 
+enum LlamaCppRuntimeError: LocalizedError, Equatable {
+    case executableNotConfigured
+    case executableMissing(URL)
+    case executableNotExecutable(URL)
+    case runtimeLaunchFailed(String)
+    case modelLoadFailed(String)
+    case timedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .executableNotConfigured: return "Configure the llama-cli executable in Models settings before generating a summary."
+        case let .executableMissing(url): return "Configured llama-cli executable is missing at: \(url.path)"
+        case let .executableNotExecutable(url): return "Configured llama-cli path is not an executable file: \(url.path)"
+        case let .runtimeLaunchFailed(message): return "Summarization runtime launch failed: \(message)"
+        case let .modelLoadFailed(message): return "Summarization model load failed: \(message)"
+        case .timedOut: return "Summarization runtime timed out."
+        }
+    }
+}
+
+/// Owns the process between cancellation before launch and cancellation while running.
+private final class LlamaProcessControl: @unchecked Sendable {
+    let process = Process()
+    private let lock = NSLock()
+    private var cancelled = false
+    private var timedOut = false
+    private var ownedProcessGroup: pid_t?
+
+    func launch() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if cancelled { throw CancellationError() }
+        try process.run()
+        let pid = process.processIdentifier
+        // Foundation normally starts its child in a new group. Never signal the
+        // application's group when an alternate launcher does not provide that.
+        if getpgid(pid) == pid { ownedProcessGroup = pid }
+    }
+
+    func stop(timeout: Bool) {
+        lock.lock()
+        if timeout { timedOut = true } else { cancelled = true }
+        if let group = ownedProcessGroup { kill(-group, SIGTERM) }
+        else if process.isRunning { process.terminate() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.25) { [self] in
+            lock.lock()
+            defer { lock.unlock() }
+            if let group = ownedProcessGroup { kill(-group, SIGKILL) }
+            else if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
+        lock.unlock()
+    }
+
+    func terminateRemainingGroupMembers() {
+        lock.lock()
+        defer { lock.unlock() }
+        if let group = ownedProcessGroup { kill(-group, SIGKILL) }
+        ownedProcessGroup = nil
+    }
+
+    func checkCompletion() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if cancelled { throw CancellationError() }
+        if timedOut { throw LlamaCppRuntimeError.timedOut }
+    }
+}
+
+/// Nonblocking readers let teardown finish even if a wrapper's descendants
+/// inherit its output pipes. Waiting for EOF would turn a finite timeout into
+/// an unbounded wait after the direct child has already terminated.
+private final class LlamaProcessOutput: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "recordly.llama.output")
+    private let stdoutHandle: FileHandle
+    private let stderrHandle: FileHandle
+    private var stdout = Data()
+    private var stderr = Data()
+    private var finished = false
+    private var stdoutSource: DispatchSourceRead?
+    private var stderrSource: DispatchSourceRead?
+
+    init(stdout: FileHandle, stderr: FileHandle) {
+        stdoutHandle = stdout
+        stderrHandle = stderr
+        for handle in [stdout, stderr] {
+            let flags = fcntl(handle.fileDescriptor, F_GETFL)
+            _ = fcntl(handle.fileDescriptor, F_SETFL, flags | O_NONBLOCK)
+        }
+        let outSource = DispatchSource.makeReadSource(fileDescriptor: stdout.fileDescriptor, queue: queue)
+        let errSource = DispatchSource.makeReadSource(fileDescriptor: stderr.fileDescriptor, queue: queue)
+        stdoutSource = outSource
+        stderrSource = errSource
+        outSource.setEventHandler { [weak self] in self?.drain(stdout: true) }
+        errSource.setEventHandler { [weak self] in self?.drain(stdout: false) }
+        outSource.resume()
+        errSource.resume()
+    }
+
+    private func drain(stdout isStdout: Bool) {
+        guard !finished else { return }
+        let fd = isStdout ? stdoutHandle.fileDescriptor : stderrHandle.fileDescriptor
+        var bytes = [UInt8](repeating: 0, count: 64 * 1024)
+        // Bound each handler/drain turn even if a descendant continuously writes.
+        for _ in 0..<64 {
+            let count = bytes.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress!, $0.count) }
+            if count > 0 {
+                if isStdout { stdout.append(contentsOf: bytes.prefix(count)) }
+                else { stderr.append(contentsOf: bytes.prefix(count)) }
+            } else if count < 0 && errno == EINTR { continue }
+            else { break }
+        }
+    }
+
+    func finish() -> (stdout: Data, stderr: Data) {
+        queue.sync {
+            drain(stdout: true)
+            drain(stdout: false)
+            finished = true
+            stdoutSource?.cancel()
+            stderrSource?.cancel()
+            try? stdoutHandle.close()
+            try? stderrHandle.close()
+            return (stdout, stderr)
+        }
+    }
+}
+
 struct FoundationLlamaProcessExecutor: LlamaProcessExecutor {
     private let processTimeoutSeconds: TimeInterval
 
@@ -19,105 +146,49 @@ struct FoundationLlamaProcessExecutor: LlamaProcessExecutor {
     }
 
     func run(executableURL: URL, arguments: [String], stdinData: Data? = nil) async throws -> LlamaProcessResult {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                process.executableURL = executableURL
-                process.arguments = arguments
-
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-
-                if stdinData != nil {
-                    process.standardInput = Pipe()
-                }
-
-                do {
-                    var stdoutData = Data()
-                    var stderrData = Data()
-                    let stdoutLock = NSLock()
-                    let stderrLock = NSLock()
-                    let timeoutLock = NSLock()
-                    var didTimeout = false
-                    let streamReadGroup = DispatchGroup()
-                    let timeoutTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-
-                    streamReadGroup.enter()
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                        stdoutLock.lock()
-                        stdoutData = data
-                        stdoutLock.unlock()
-                        streamReadGroup.leave()
-                    }
-
-                    streamReadGroup.enter()
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        let data = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                        stderrLock.lock()
-                        stderrData = data
-                        stderrLock.unlock()
-                        streamReadGroup.leave()
-                    }
-
-                    timeoutTimer.schedule(deadline: .now() + processTimeoutSeconds)
-                    timeoutTimer.setEventHandler {
-                        timeoutLock.lock()
-                        didTimeout = true
-                        timeoutLock.unlock()
-
-                        if process.isRunning {
-                            process.terminate()
-                            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
-                                if process.isRunning {
-                                    kill(process.processIdentifier, SIGKILL)
-                                }
-                            }
-                        }
-                    }
-                    timeoutTimer.resume()
-
-                    try process.run()
-
-                    if let stdinData,
-                       let stdinPipe = process.standardInput as? Pipe {
-                        stdinPipe.fileHandleForWriting.write(stdinData)
-                        try? stdinPipe.fileHandleForWriting.close()
-                    }
-
-                    process.waitUntilExit()
-                    timeoutTimer.cancel()
-                    streamReadGroup.wait()
-
-                    timeoutLock.lock()
-                    let timedOut = didTimeout
-                    timeoutLock.unlock()
-
-                    stdoutLock.lock()
-                    let capturedStdout = stdoutData
-                    stdoutLock.unlock()
-
-                    stderrLock.lock()
-                    let capturedStderr = stderrData
-                    stderrLock.unlock()
-
-                    if timedOut {
-                        continuation.resume(throwing: SummarizationError.cancelled)
+        let control = LlamaProcessControl()
+        return try await withTaskCancellationHandler(operation: {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let process = control.process
+                    process.executableURL = executableURL
+                    process.arguments = arguments
+                    let stdoutPipe = Pipe()
+                    let stderrPipe = Pipe()
+                    let stdinPipe = Pipe()
+                    process.standardOutput = stdoutPipe
+                    process.standardError = stderrPipe
+                    // Never inherit the app's stdin. Empty input means immediate EOF.
+                    process.standardInput = stdinPipe
+                    do {
+                        try control.launch()
+                    } catch {
+                        if error is CancellationError { continuation.resume(throwing: error) }
+                        else { continuation.resume(throwing: LlamaCppRuntimeError.runtimeLaunchFailed(error.localizedDescription)) }
                         return
                     }
-
-                    continuation.resume(returning: LlamaProcessResult(
-                        exitCode: process.terminationStatus,
-                        stdout: String(data: capturedStdout, encoding: .utf8) ?? "",
-                        stderr: String(data: capturedStderr, encoding: .utf8) ?? ""
-                    ))
-                } catch {
-                    continuation.resume(throwing: error)
+                    let output = LlamaProcessOutput(stdout: stdoutPipe.fileHandleForReading, stderr: stderrPipe.fileHandleForReading)
+                    let timeoutTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+                    timeoutTimer.schedule(deadline: .now() + processTimeoutSeconds)
+                    timeoutTimer.setEventHandler { control.stop(timeout: true) }
+                    timeoutTimer.resume()
+                    if let stdinData, !stdinData.isEmpty { stdinPipe.fileHandleForWriting.write(stdinData) }
+                    try? stdinPipe.fileHandleForWriting.close()
+                    process.waitUntilExit()
+                    timeoutTimer.cancel()
+                    control.terminateRemainingGroupMembers()
+                    let captured = output.finish()
+                    do {
+                        try control.checkCompletion()
+                        let result = LlamaProcessResult(exitCode: process.terminationStatus,
+                            stdout: String(data: captured.stdout, encoding: .utf8) ?? "",
+                            stderr: String(data: captured.stderr, encoding: .utf8) ?? "")
+                        continuation.resume(returning: result)
+                    } catch { continuation.resume(throwing: error) }
                 }
             }
-        }
+        }, onCancel: { control.stop(timeout: false) })
     }
 }
 
@@ -159,6 +230,7 @@ struct ProcessLlamaCppRunner: LlamaCppRunner {
             "-m", configuration.modelURL.path,
             "--file", promptFileURL.path,
             "--no-display-prompt",
+            "--single-turn",
             "--ctx-size", "\(runtime.contextSize)",
             "--temp", String(runtime.temperature),
             "--top-p", String(runtime.topP),
@@ -181,11 +253,20 @@ struct ProcessLlamaCppRunner: LlamaCppRunner {
                 return retryResult.stdout
             }
             let message = retryResult.stderr.isEmpty ? "exit code \(retryResult.exitCode)" : retryResult.stderr
-            throw SummarizationError.inferenceFailed(message: message)
+            throw processFailure(message)
         }
 
         let message = result.stderr.isEmpty ? "exit code \(result.exitCode)" : result.stderr
-        throw SummarizationError.inferenceFailed(message: message)
+        throw processFailure(message)
+    }
+
+    private func processFailure(_ message: String) -> Error {
+        let normalized = message.lowercased()
+        if normalized.contains("failed to load model") || normalized.contains("error loading model")
+            || normalized.contains("failed to load gguf") || normalized.contains("unknown model architecture") {
+            return LlamaCppRuntimeError.modelLoadFailed(message)
+        }
+        return SummarizationError.inferenceFailed(message: message)
     }
 
     private func normalizedRuntimeSettings(_ settings: SummarizationRuntimeSettings) -> SummarizationRuntimeSettings {
@@ -209,46 +290,22 @@ struct ProcessLlamaCppRunner: LlamaCppRunner {
 
 func resolveLlamaBinaryURL(
     fileManager: FileManager = .default,
-    environment: [String: String] = ProcessInfo.processInfo.environment
+    environment: [String: String] = [:],
+    configuredPath: String? = nil
 ) throws -> URL {
-    let binaryNames = ["llama-cli", "main"]
-    var candidateURLs: [URL] = []
-
-    if let resourceURL = Bundle.main.resourceURL {
-        candidateURLs.append(contentsOf: binaryNames.flatMap { name in
-            [
-                resourceURL.appendingPathComponent("Binaries/\(name)"),
-                resourceURL.appendingPathComponent(name)
-            ]
-        })
+    // The environment argument remains source-compatible for legacy callers;
+    // production resolution deliberately never depends on a shell's PATH.
+    guard let configuredPath, !configuredPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw LlamaCppRuntimeError.executableNotConfigured
     }
-
-    let currentDirectoryURL = URL(fileURLWithPath: fileManager.currentDirectoryPath)
-    candidateURLs.append(contentsOf: binaryNames.map { name in
-        currentDirectoryURL.appendingPathComponent(name)
-    })
-
-    candidateURLs.append(contentsOf: [
-        "/usr/local/bin",
-        "/opt/homebrew/bin"
-    ].flatMap { directory in
-        binaryNames.map { name in
-            URL(fileURLWithPath: directory).appendingPathComponent(name)
-        }
-    })
-
-    if let path = environment["PATH"], !path.isEmpty {
-        let directories = path.split(separator: ":").map(String.init)
-        candidateURLs.append(contentsOf: directories.flatMap { directory in
-            binaryNames.map { name in
-                URL(fileURLWithPath: directory).appendingPathComponent(name)
-            }
-        })
+    guard configuredPath.hasPrefix("/") else {
+        throw LlamaCppRuntimeError.executableNotExecutable(URL(fileURLWithPath: configuredPath))
     }
-
-    for candidate in candidateURLs where fileManager.isExecutableFile(atPath: candidate.path) {
-        return candidate
+    let url = URL(fileURLWithPath: configuredPath)
+    guard fileManager.fileExists(atPath: url.path) else { throw LlamaCppRuntimeError.executableMissing(url) }
+    let values = try? url.resolvingSymlinksInPath().resourceValues(forKeys: [.isRegularFileKey])
+    guard values?.isRegularFile == true, fileManager.isExecutableFile(atPath: url.path) else {
+        throw LlamaCppRuntimeError.executableNotExecutable(url)
     }
-
-    throw SummarizationError.binaryMissing
+    return url
 }

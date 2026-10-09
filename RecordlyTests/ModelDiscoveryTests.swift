@@ -128,7 +128,7 @@ final class ModelDiscoveryTests: XCTestCase {
         )
         XCTAssertEqual(
             Set(manager.listLocalOptions(kind: .summarization).map { $0.url.lastPathComponent }),
-            ["summary.gguf", "generic.bin", "whisper-large.bin"]
+            ["summary.gguf"]
         )
     }
 
@@ -183,6 +183,50 @@ final class ModelDiscoveryTests: XCTestCase {
         )
 
         XCTAssertTrue(manager.listLocalOptions(kind: .asr).isEmpty)
+    }
+
+    @MainActor
+    func testMissingSelectedModelPreferenceSurvivesRefresh() {
+        let manager = makeManager(appSupportRoot: nil, sharedRoot: nil, projectDirectories: [])
+        let selectedPath = tempDirectory.appendingPathComponent("missing.gguf").path
+        manager.selectedSummarizationModelID = selectedPath
+        XCTAssertNil(manager.selectedLocalOption(kind: .summarization))
+        XCTAssertEqual(manager.selectedSummarizationModelID, selectedPath)
+    }
+
+    @MainActor
+    func testSelectedPathResolvesEvenWhenCatalogDeduplicatesItsBasename() throws {
+        let appSupport = tempDirectory.appendingPathComponent("support")
+        let project = tempDirectory.appendingPathComponent("project")
+        _ = try createModel(named: "summary.gguf", in: appSupport.appendingPathComponent("summarization"))
+        let selected = try createModel(named: "summary.gguf", in: project)
+        let manager = makeManager(appSupportRoot: appSupport, sharedRoot: nil, projectDirectories: [project])
+        manager.selectedSummarizationModelID = selected.path
+        XCTAssertEqual(manager.listLocalOptions(kind: .summarization).count, 1)
+        XCTAssertEqual(manager.selectedLocalOption(kind: .summarization)?.url, selected)
+    }
+
+    func testRegistryLoadsResourcesSubdirectoryFromBundle() throws {
+        let bundleDirectory = tempDirectory.appendingPathComponent("Registry.bundle")
+        let resources = bundleDirectory.appendingPathComponent("Contents/Resources/Resources")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        try Data("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>test.registry</string></dict></plist>".utf8)
+            .write(to: bundleDirectory.appendingPathComponent("Contents/Info.plist"))
+        let original = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Recordly/Resources/model-registry.json")
+        try FileManager.default.copyItem(at: original, to: resources.appendingPathComponent("model-registry.json"))
+        let bundle = try XCTUnwrap(Bundle(url: bundleDirectory))
+        XCTAssertFalse(ModelRegistry(bundle: bundle).loadModels().isEmpty)
+    }
+
+    @MainActor
+    func testLegacyBinContainingGGUFRemainsDiscoverable() throws {
+        let directory = tempDirectory.appendingPathComponent("legacy")
+        let model = try createModel(named: "model.bin", in: directory)
+        try Data([0x47, 0x47, 0x55, 0x46, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]).write(to: model)
+        let manager = makeManager(appSupportRoot: nil, sharedRoot: nil, projectDirectories: [directory])
+        XCTAssertEqual(manager.listLocalOptions(kind: .summarization).map { $0.url.resolvingSymlinksInPath() }, [model.resolvingSymlinksInPath()])
+        XCTAssertNoThrow(try GGUFModelValidator.validate(model))
     }
 
     @MainActor

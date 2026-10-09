@@ -57,7 +57,10 @@ struct DefaultInferenceEngineFactory: InferenceEngineFactory {
     func makeSummarizationEngine(for profile: InferenceRuntimeProfile) throws -> any SummarizationEngine {
         switch profile.stageSelection.backend(for: .summarization) {
         case .llamaCpp:
-            return LlamaCppSummarizationEngine()
+            let executableURL = profile.llamaExecutableURL
+            return LlamaCppSummarizationEngine(runner: ProcessLlamaCppRunner(resolveBinaryURL: {
+                try resolveLlamaBinaryURL(configuredPath: executableURL?.path)
+            }))
         case .mlxLm:
             return MlxSummarizationEngine()
         case let backend:

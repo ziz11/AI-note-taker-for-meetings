@@ -80,6 +80,20 @@ final class ModelSettingsViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.isFluidDiarizationModelReady)
     }
 
+    func testExecutableConfigurationPersistsAndMissingSelectionRemainsVisible() {
+        let manager = makeModelManager(asrDirectory: nil, summarizationDirectory: nil)
+        let missing = tempDirectory.appendingPathComponent("missing.gguf").path
+        manager.selectedSummarizationModelID = missing
+        let viewModel = ModelSettingsViewModel(modelManager: manager,
+            fluidAudioModelProvider: StubFluidAudioASRModelProvider(state: .needsDownload),
+            fluidAudioDiarizationModelProvider: StubFluidAudioDiarizationModelProvider(state: .needsDownload))
+        viewModel.configureLlamaExecutable(path: " /tmp/explicit/llama-cli ")
+        XCTAssertEqual(manager.llamaExecutablePath, "/tmp/explicit/llama-cli")
+        XCTAssertEqual(viewModel.llamaExecutablePath, "/tmp/explicit/llama-cli")
+        XCTAssertEqual(viewModel.selectedSummarizationModelID, missing)
+        XCTAssertTrue(viewModel.summarizationReadinessMessage.contains(missing))
+    }
+
     private func makeModelManager(
         asrDirectory: URL?,
         summarizationDirectory: URL?

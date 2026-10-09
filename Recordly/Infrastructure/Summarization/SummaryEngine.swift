@@ -28,6 +28,7 @@ enum SummarizationError: LocalizedError, Equatable {
     case outputParseFailed
     case emptyOutput
     case cancelled
+    case timedOut
 
     var errorDescription: String? {
         switch self {
@@ -45,6 +46,8 @@ enum SummarizationError: LocalizedError, Equatable {
             return "Summarization produced empty output."
         case .cancelled:
             return "Summarization was cancelled."
+        case .timedOut:
+            return "Summarization timed out."
         }
     }
 }
