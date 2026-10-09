@@ -8,6 +8,8 @@ enum DiarizationRuntimeError: LocalizedError, Equatable {
     case malformedOutput
     case emptySegments
     case timedOut
+    case runtimeBusy
+    case runtimeQuarantined
     case cancelled
 
     var errorDescription: String? {
@@ -29,6 +31,10 @@ enum DiarizationRuntimeError: LocalizedError, Equatable {
             return "Diarization runner returned empty segments."
         case .timedOut:
             return "Diarization timed out."
+        case .runtimeBusy:
+            return "Diarization manager is still processing an earlier request."
+        case .runtimeQuarantined:
+            return "Diarization manager is quarantined after a timeout or cancellation. Restart the app before retrying diarization."
         case .cancelled:
             return "Diarization was cancelled."
         }

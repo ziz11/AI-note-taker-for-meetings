@@ -105,12 +105,30 @@ struct DiarizationEngineConfiguration: Sendable {
     var modelURL: URL?
 }
 
+struct PreparedDiarizationWindow: Sendable {
+    var audioURL: URL
+    var track: TrackKind
+    var startFrame: Int64
+    var frameCount: Int64
+}
+
 protocol DiarizationEngine {
+    func diarize(window: PreparedDiarizationWindow, sessionID: UUID,
+                 configuration: DiarizationEngineConfiguration) async throws -> DiarizationDocument
     func diarize(
         systemAudioURL: URL,
         sessionID: UUID,
         configuration: DiarizationEngineConfiguration
     ) async throws -> DiarizationDocument
+}
+
+extension DiarizationEngine {
+    func diarize(window: PreparedDiarizationWindow, sessionID: UUID,
+                 configuration: DiarizationEngineConfiguration) async throws -> DiarizationDocument {
+        guard window.track == .system, window.startFrame >= 0, window.frameCount > 0,
+              window.frameCount <= SessionAudioRangeReader.maximumFrames else { throw DiarizationRuntimeError.invalidInput }
+        return try await diarize(systemAudioURL: window.audioURL, sessionID: sessionID, configuration: configuration)
+    }
 }
 
 struct SummarizationConfiguration: Sendable {

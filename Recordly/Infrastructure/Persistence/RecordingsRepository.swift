@@ -18,15 +18,18 @@ final class RecordingsRepository: RecordingsPersistence {
     private let fileManager: FileManager
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+    private let sessionDirectoryProvider: ((UUID) throws -> URL)?
     private var transcriptCache: [UUID: String]
     private var summaryCache: [UUID: String]
 
     init(
         fileManager: FileManager = .default,
         decoder: JSONDecoder? = nil,
-        encoder: JSONEncoder? = nil
+        encoder: JSONEncoder? = nil,
+        sessionDirectoryProvider: ((UUID) throws -> URL)? = nil
     ) {
         self.fileManager = fileManager
+        self.sessionDirectoryProvider = sessionDirectoryProvider
 
         if let decoder {
             self.decoder = decoder
@@ -74,7 +77,8 @@ final class RecordingsRepository: RecordingsPersistence {
     }
 
     func sessionDirectory(for id: UUID) throws -> URL {
-        try AppPaths.sessionDirectory(for: id)
+        if let sessionDirectoryProvider { return try sessionDirectoryProvider(id) }
+        return try AppPaths.sessionDirectory(for: id)
     }
 
     func save(_ recording: RecordingSession) throws {
@@ -182,11 +186,20 @@ final class RecordingsRepository: RecordingsPersistence {
             if fileManager.fileExists(atPath: destinationURL.path) {
                 try fileManager.removeItem(at: destinationURL)
             }
-            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            if sourceURL.lastPathComponent == "inference",
+               (try sourceURL.resourceValues(forKeys: [.isDirectoryKey])).isDirectory == true {
+                try fileManager.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+                for artifact in try fileManager.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil) where artifact.lastPathComponent != "temporary" {
+                    try fileManager.copyItem(at: artifact, to: destinationURL.appendingPathComponent(artifact.lastPathComponent))
+                }
+            } else {
+                try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            }
         }
         if fileManager.fileExists(atPath: destinationDirectory.appendingPathComponent("audio").path) {
             try SessionAudioStore.rebindCopy(in: destinationDirectory, from: sourceID, to: destinationID)
         }
+        try SessionSpeakerIdentityStore.rebindCopy(in: destinationDirectory, from: sourceID, to: destinationID)
     }
 
     func playableAudioURL(for recording: RecordingSession) throws -> URL? {
