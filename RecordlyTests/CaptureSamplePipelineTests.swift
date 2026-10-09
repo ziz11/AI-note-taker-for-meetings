@@ -57,12 +57,45 @@ final class CaptureSamplePipelineTests: XCTestCase {
         XCTAssertEqual(events.value, ["arrived", "written"])
     }
 
+    func testCommitObserverRunsOnlyAfterSuccessfulWrite() async throws {
+        let events = LockedBox<[String]>([])
+
+        do {
+            try await CaptureSampleCommitGate.perform(
+                write: {
+                    throw TestWriteError.failed
+                },
+                onCommit: {
+                    events.mutate { $0.append("heartbeat") }
+                }
+            )
+            XCTFail("Expected the failed write to propagate")
+        } catch {
+            XCTAssertEqual(events.value, [])
+        }
+
+        try await CaptureSampleCommitGate.perform(
+            write: {
+                events.mutate { $0.append("written") }
+            },
+            onCommit: {
+                events.mutate { $0.append("heartbeat") }
+            }
+        )
+
+        XCTAssertEqual(events.value, ["written", "heartbeat"])
+    }
+
     func testMeteringThrottleLimitsRate() {
         let throttle = MeteringThrottle(interval: 60)
         XCTAssertTrue(throttle.due())
         XCTAssertFalse(throttle.due())
         XCTAssertFalse(throttle.due())
     }
+}
+
+private enum TestWriteError: Error {
+    case failed
 }
 
 private final class LockedBox<Value>: @unchecked Sendable {
