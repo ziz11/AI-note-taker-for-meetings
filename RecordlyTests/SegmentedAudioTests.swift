@@ -1,8 +1,64 @@
 import AVFoundation
+import Darwin
 import XCTest
 @testable import Recordly
 
 final class SegmentedAudioTests: XCTestCase {
+    func testRangeReaderMemoryDoesNotScaleWithEightHourTimeline() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SessionAudioStore(directory: root, sessionID: UUID())
+        let writer = SegmentedTrackWriter(kind: .system, store: store, committer: SessionAudioCommitter(store: store))
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+        let source = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000)!
+        source.frameLength = 48_000
+        source.floatChannelData![0].initialize(repeating: 0.1, count: 48_000)
+        try await writer.append(pcmBuffer: source, presentationTime: .zero)
+        _ = await writer.finalize()
+        var manifest = try store.load()
+        let first = try XCTUnwrap(manifest.segments.first)
+        // Sparse but valid long-session metadata: each bounded window exercises
+        // actual AAC decoding as well as gap fill, without generating eight hours
+        // of waveform solely to measure reader lifetime.
+        for index in 1..<576 {
+            var segment = SessionAudioSegment(track: .system, index: index, startFrame: Int64(index * 50 * 48_000), frameCount: first.frameCount)
+            segment.state = .committed
+            segment.contentHash = first.contentHash
+            try FileManager.default.copyItem(at: store.finalURL(for: first), to: store.finalURL(for: segment))
+            manifest.segments.append(segment)
+        }
+        manifest.captureEndFrame = 8 * 3_600 * 48_000
+        try store.save(manifest)
+        let reader = SessionAudioRangeReader(manifest: manifest, directory: root)
+        func readWindow(_ index: Int) throws -> UInt64 {
+            try autoreleasepool {
+                let pcm = try reader.read(track: .system, startFrame: Int64(index * 50 * 48_000), frameCount: 60 * 48_000)
+                XCTAssertEqual(pcm.frameLength, 60 * 48_000)
+                return try Self.residentBytes()
+            }
+        }
+        var shortPeak: UInt64 = 0
+        for index in 0..<12 { shortPeak = max(shortPeak, try readWindow(index)) }
+        var longPeak = shortPeak
+        for index in 12..<575 { longPeak = max(longPeak, try readWindow(index)) }
+        // The fixture isolates reader PCM lifetime. Models and capture queues are
+        // deliberately outside this measurement; transcript metadata may grow.
+        print("V2_READER_MEMORY timeline_hours=8 windows=575 short_peak_bytes=\(shortPeak) long_peak_bytes=\(longPeak)")
+        XCTAssertLessThan(longPeak, shortPeak + 32 * 1_024 * 1_024)
+    }
+
+    private static func residentBytes() throws -> UInt64 {
+        var info = mach_task_basic_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        guard status == KERN_SUCCESS else { throw NSError(domain: NSMachErrorDomain, code: Int(status)) }
+        return UInt64(info.resident_size)
+    }
+
     func testSlowPublicationHasBoundedBacklogAndStopDrainsIt() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
