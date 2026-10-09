@@ -47,6 +47,82 @@ final class SegmentedAudioTests: XCTestCase {
         XCTAssertLessThan(longPeak, shortPeak + 32 * 1_024 * 1_024)
     }
 
+    func testCompactionPreservesBytesMetadataAndIsIdempotent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("closed.m4a")
+        let bytes = Data((0..<100_003).map { UInt8($0 % 251) })
+        try bytes.write(to: url)
+        try Self.preallocateClosedFixture(url)
+        let modified = Date(timeIntervalSince1970: 1_000_000)
+        try FileManager.default.setAttributes([.modificationDate: modified, .posixPermissions: 0o640], ofItemAtPath: url.path)
+        let saved = try ClosedAudioAllocation.reclaim(at: url)
+        XCTAssertGreaterThan(saved, 1_000_000)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        XCTAssertEqual(attributes[.modificationDate] as? Date, modified)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o640)
+        XCTAssertEqual(try ClosedAudioAllocation.reclaim(at: url), 0)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).map(\.lastPathComponent), [url.lastPathComponent])
+    }
+
+    func testCompactionWriteFailurePreservesOriginal() throws {
+        guard geteuid() != 0 else { throw XCTSkip("Permission fixture requires non-root user") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("closed.m4a")
+        let bytes = Data(repeating: 42, count: 100_003)
+        try bytes.write(to: url)
+        try Self.preallocateClosedFixture(url)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: root.path)
+        XCTAssertThrowsError(try ClosedAudioAllocation.reclaim(at: url))
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).map(\.lastPathComponent), [url.lastPathComponent])
+    }
+
+    func testRecoveryRemovesOnlyOwnedInterruptedCompactionCopies() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SessionAudioStore(directory: root, sessionID: UUID())
+        let segment = SessionAudioSegment(track: .system, index: 0, startFrame: 0, frameCount: 4_800)
+        try store.prepare(segment)
+        try writeAudio(to: store.pendingURL(for: segment), frames: 4_800)
+        try store.publish(segment)
+        let track = store.finalURL(for: segment).deletingLastPathComponent()
+        let owned = track.appendingPathComponent(".recordly-allocation-\(UUID().uuidString).tmp")
+        let unrelated = track.appendingPathComponent(".recordly-allocation-user.tmp")
+        let matchingDirectory = track.appendingPathComponent(".recordly-allocation-\(UUID().uuidString).tmp")
+        try FileManager.default.createDirectory(at: matchingDirectory, withIntermediateDirectories: true)
+        let sentinel = matchingDirectory.appendingPathComponent("keep")
+        try Data([9]).write(to: sentinel)
+        let matchingLink = track.appendingPathComponent(".recordly-allocation-\(UUID().uuidString).tmp")
+        try Data([1, 2, 3]).write(to: owned)
+        try Data([4, 5]).write(to: unrelated)
+        try FileManager.default.createSymbolicLink(at: matchingLink, withDestinationURL: unrelated)
+        XCTAssertEqual(try store.reconcile().segments.first?.state, .committed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: owned.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
+        XCTAssertEqual(try Data(contentsOf: sentinel), Data([9]))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: matchingLink.path), unrelated.path)
+    }
+
+    private static func preallocateClosedFixture(_ url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        var allocation = fstore_t()
+        allocation.fst_flags = UInt32(F_ALLOCATEALL | F_ALLOCATEPERSIST)
+        allocation.fst_posmode = F_PEOFPOSMODE
+        allocation.fst_length = 2 * 1024 * 1024
+        guard fcntl(handle.fileDescriptor, F_PREALLOCATE, &allocation) == 0 else {
+            throw XCTSkip("Fixture volume does not support persistent preallocation")
+        }
+    }
+
     private static func residentBytes() throws -> UInt64 {
         var info = mach_task_basic_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
@@ -278,6 +354,12 @@ final class SegmentedAudioTests: XCTestCase {
         XCTAssertEqual(manifest.segments.count, 4)
         XCTAssertEqual(manifest.durationFrames, 48_000 * 181)
         let bytes = try manifest.segments.reduce(0) { sum, segment in sum + (try store.finalURL(for: segment).resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) }
+        for segment in manifest.segments {
+            var attributes = stat()
+            XCTAssertEqual(lstat(store.finalURL(for: segment).path, &attributes), 0)
+            XCTAssertLessThanOrEqual(Int64(attributes.st_blocks) * 512, attributes.st_size + 64 * 1024,
+                "Closed AAC chunks must not retain encoder preallocation.")
+        }
         ordinary.sort()
         let perHour = Double(bytes) / 181 * 3_600 / 1_000_000
         print("V2_MEASURE fixture_seconds=181 tracks=2 bytes=\(bytes) MB_per_hour=\(perHour) encode_wall_seconds=\(Date().timeIntervalSince(began)) append_p95_ms=\(ordinary[Int(Double(ordinary.count - 1) * 0.95)]) rotation_max_ms=\(rotations.max() ?? 0)")
@@ -304,8 +386,17 @@ final class SegmentedAudioTests: XCTestCase {
                 if !child.isRunning { break }
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
-            if child.isRunning { child.terminate(); XCTFail("Crash fixture hung at \(point)") }
-            child.waitUntilExit()
+            if child.isRunning {
+                kill(child.processIdentifier, SIGKILL)
+                XCTFail("Crash fixture hung at \(point)")
+                for _ in 0..<200 {
+                    if !child.isRunning { break }
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+            }
+            // isRunning is already false: waitUntilExit can deadlock in Foundation
+            // when its termination notification and async XCTest race.
+            guard !child.isRunning else { XCTFail("Child did not terminate"); continue }
             XCTAssertEqual(child.terminationReason, .uncaughtSignal, point)
             XCTAssertEqual(child.terminationStatus, 9, point)
             let recovered = try SessionAudioStore(directory: root, sessionID: id).reconcile()

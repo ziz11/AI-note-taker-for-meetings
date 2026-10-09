@@ -1,5 +1,6 @@
 import AVFoundation
 import CryptoKit
+import Darwin
 import Foundation
 
 enum SessionAudioError: Error {
@@ -106,6 +107,10 @@ struct SessionAudioStore {
         guard let file = try? AVAudioFile(forReading: pending), file.length > 0 else { throw SessionAudioError.invalidAudio }
         if segment.frameCount == 0 { segment.frameCount = file.length }
         guard file.length == segment.frameCount else { throw SessionAudioError.invalidAudio }
+        file.close()
+        var allocationWarning: String?
+        do { _ = try ClosedAudioAllocation.reclaim(at: pending) }
+        catch { allocationWarning = "Chunk storage compaction skipped: \(segment.id): \(error.localizedDescription)" }
         segment.state = .committed
         segment.contentHash = try hash(pending)
         // Persist full timing before publication; recovery recognizes a readable pending file too.
@@ -119,6 +124,7 @@ struct SessionAudioStore {
         } else {
             manifest = SessionAudioManifest(sessionID: sessionID, hostTimeOrigin: hostTimeOrigin)
         }
+        if let allocationWarning { manifest.diagnostics.append(allocationWarning) }
         manifest.segments.removeAll { $0.id == segment.id }
         manifest.segments.append(segment)
         manifest.segments.sort { ($0.startFrame, $0.track.rawValue, $0.index) < ($1.startFrame, $1.track.rawValue, $1.index) }
@@ -137,6 +143,16 @@ struct SessionAudioStore {
         }
         let enumerator = FileManager.default.enumerator(at: directory.appendingPathComponent("audio"), includingPropertiesForKeys: nil)
         while let url = enumerator?.nextObject() as? URL {
+            if ClosedAudioAllocation.isOwnedTemporary(url),
+               ["microphone", "system"].contains(url.deletingLastPathComponent().lastPathComponent),
+               url.deletingLastPathComponent().deletingLastPathComponent().standardizedFileURL == directory.appendingPathComponent("audio").standardizedFileURL,
+               let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+               values.isRegularFile == true, values.isSymbolicLink == false {
+                // Only our interrupted byte-copy is disposable; the source chunk
+                // remains intact until atomic installation succeeds.
+                try? FileManager.default.removeItem(at: url)
+                continue
+            }
             guard url.lastPathComponent.hasSuffix(".m4a.json") else { continue }
             do {
                 let sidecar = try JSONDecoder().decode(AudioChunkSidecar.self, from: Data(contentsOf: url))
@@ -233,4 +249,74 @@ actor SessionAudioCommitter {
     let store: SessionAudioStore
     init(store: SessionAudioStore) { self.store = store }
     func publish(_ segment: SessionAudioSegment) throws { try store.publish(segment) }
+}
+
+/// AVFoundation can leave large allocated extents on a closed AAC container.
+/// Copy only its logical bytes, verify them, then atomically install the smaller
+/// file. Runs at background chunk publication, never on the capture ingress path.
+enum ClosedAudioAllocation {
+    private static let temporaryPrefix = ".recordly-allocation-"
+
+    static func isOwnedTemporary(_ url: URL) -> Bool {
+        url.pathExtension == "tmp" && url.lastPathComponent.hasPrefix(temporaryPrefix)
+            && UUID(uuidString: String(url.deletingPathExtension().lastPathComponent.dropFirst(temporaryPrefix.count))) != nil
+    }
+
+    @discardableResult
+    static func reclaim(at url: URL) throws -> Int64 {
+        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw posixError() }
+        let input = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? input.close() }
+        var before = stat()
+        guard fstat(descriptor, &before) == 0 else { throw posixError() }
+        guard (before.st_mode & S_IFMT) == S_IFREG else { throw SessionAudioError.invalidAudio }
+        let allocated = Int64(before.st_blocks) * 512
+        guard allocated - before.st_size > 64 * 1024 else { return 0 }
+
+        let temporary = url.deletingLastPathComponent().appendingPathComponent(temporaryPrefix + UUID().uuidString + ".tmp")
+        let destinationDescriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard destinationDescriptor >= 0 else { throw posixError() }
+        let output = FileHandle(fileDescriptor: destinationDescriptor, closeOnDealloc: true)
+        defer {
+            try? output.close()
+            try? FileManager.default.removeItem(at: temporary)
+        }
+        var originalHash = SHA256()
+        while let bytes = try input.read(upToCount: 128 * 1024), !bytes.isEmpty {
+            try Task.checkCancellation()
+            originalHash.update(data: bytes)
+            try output.write(contentsOf: bytes)
+        }
+        guard fcopyfile(descriptor, destinationDescriptor, nil, copyfile_flags_t(COPYFILE_METADATA)) == 0 else { throw posixError() }
+        try output.synchronize()
+        try output.close()
+
+        let verification = try FileHandle(forReadingFrom: temporary)
+        defer { try? verification.close() }
+        var copiedHash = SHA256()
+        while let bytes = try verification.read(upToCount: 128 * 1024), !bytes.isEmpty {
+            try Task.checkCancellation()
+            copiedHash.update(data: bytes)
+        }
+        var current = stat()
+        var compacted = stat()
+        guard lstat(url.path, &current) == 0, lstat(temporary.path, &compacted) == 0 else { throw posixError() }
+        guard current.st_dev == before.st_dev, current.st_ino == before.st_ino,
+              current.st_size == before.st_size, compacted.st_size == before.st_size,
+              current.st_mtimespec.tv_sec == before.st_mtimespec.tv_sec,
+              current.st_mtimespec.tv_nsec == before.st_mtimespec.tv_nsec,
+              current.st_ctimespec.tv_sec == before.st_ctimespec.tv_sec,
+              current.st_ctimespec.tv_nsec == before.st_ctimespec.tv_nsec,
+              originalHash.finalize() == copiedHash.finalize() else { throw SessionAudioError.invalidAudio }
+        let saved = allocated - Int64(compacted.st_blocks) * 512
+        guard saved > 0 else { return 0 }
+        try Task.checkCancellation()
+        guard rename(temporary.path, url.path) == 0 else { throw posixError() }
+        return saved
+    }
+
+    private static func posixError() -> NSError {
+        NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+    }
 }
