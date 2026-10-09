@@ -2,6 +2,15 @@ import XCTest
 @testable import Recordly
 
 final class CaptureSamplePipelineTests: XCTestCase {
+    func testRetiredGenerationIsRejectedBeforeWriteAndHeartbeat() async throws {
+        let events = LockedBox<[String]>([])
+        try await CaptureSampleCommitGate.perform(accept: { false }, write: {
+            events.mutate { $0.append("written") }
+        }, onCommit: {
+            events.mutate { $0.append("heartbeat") }
+        })
+        XCTAssertEqual(events.value, [])
+    }
     func testDeliversElementsInOrderAndDrainsOnFinish() async {
         let received = LockedBox<[Int]>([])
         let pipeline = CaptureSamplePipeline<Int>(bufferLimit: 128) { value in

@@ -407,10 +407,12 @@ final class RecordingsStore: ObservableObject {
 
     func togglePlayback(for recording: RecordingSession) {
         guard !viewState.runtime.isRecording else { return }
-        do {
-            try playbackController.togglePlayback(for: recording)
+        Task { @MainActor in
+          do {
+            try await playbackController.togglePlayback(for: recording)
         } catch {
             handleTranscriptionError(error)
+          }
         }
     }
 
@@ -423,18 +425,22 @@ final class RecordingsStore: ObservableObject {
     }
 
     func seekPlayback(for recording: RecordingSession, to progress: Double) {
-        do {
-            try playbackController.seek(for: recording, to: progress)
+        Task { @MainActor in
+          do {
+            try await playbackController.seek(for: recording, to: progress)
         } catch {
-            present(error)
+            if !(error is CancellationError) { present(error) }
+          }
         }
     }
 
     func skipPlayback(for recording: RecordingSession, by offset: TimeInterval) {
-        do {
-            try playbackController.skip(for: recording, by: offset)
+        Task { @MainActor in
+          do {
+            try await playbackController.skip(for: recording, by: offset)
         } catch {
-            present(error)
+            if !(error is CancellationError) { present(error) }
+          }
         }
     }
 
@@ -558,6 +564,26 @@ final class RecordingsStore: ObservableObject {
 
     func exportAudio(for recording: RecordingSession) {
         guard !previewMode else { return }
+
+        if recording.assets.audioManifestFile != nil {
+            let savePanel = NSSavePanel()
+            savePanel.title = "Export Audio"
+            savePanel.prompt = "Export"
+            savePanel.nameFieldStringValue = "\(sanitizedFileName(recording.title)).m4a"
+            savePanel.allowedContentTypes = [.mpeg4Audio]
+            guard savePanel.runModal() == .OK, let destination = savePanel.url else { return }
+            Task { @MainActor in
+                let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("recordly-export-\(UUID()).m4a")
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                do {
+                    let directory = try workflow.sessionDirectory(for: recording.id)
+                    let manifest = try SessionAudioStore(directory: directory, sessionID: recording.id).load()
+                    try await SessionAudioComposition.export(manifest: manifest, directory: directory, to: temporary)
+                    try copyItemReplacingIfNeeded(from: temporary, to: destination)
+                } catch { if !(error is CancellationError) { present(error) } }
+            }
+            return
+        }
 
         do {
             guard let sourceURL = try workflow.playableAudioURL(for: recording) else {
@@ -1509,6 +1535,7 @@ final class RecordingsStore: ObservableObject {
 
     private func shouldSchedulePlaybackMix(for recording: RecordingSession) -> Bool {
         guard recording.source == .liveCapture,
+              recording.assets.audioManifestFile == nil,
               recording.assets.mergedCallFile == nil,
               recording.assets.microphoneFile != nil || recording.assets.systemAudioFile != nil else {
             return false

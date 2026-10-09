@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 enum SessionAudioError: Error {
-    case invalidMetadata, unsupportedVersion, invalidAudio, rotationBacklog
+    case invalidMetadata, unsupportedVersion, invalidAudio, invalidInput, publicationFailed, rotationBacklog
 }
 
 enum AudioSegmentState: String, Codable, Sendable {
@@ -50,7 +50,8 @@ struct SessionAudioManifest: Codable, Sendable {
     var hostTimeOrigin: Double = 0
     var segments: [SessionAudioSegment] = []
     var diagnostics: [String] = []
-    var durationFrames: Int64 { segments.map(\.endFrame).max() ?? 0 }
+    var captureEndFrame: Int64? = nil
+    var durationFrames: Int64 { max(segments.map(\.endFrame).max() ?? 0, captureEndFrame ?? 0) }
 }
 
 private struct AudioChunkSidecar: Codable {
@@ -66,6 +67,7 @@ struct SessionAudioStore {
     let directory: URL
     let sessionID: UUID
     var hostTimeOrigin: Double = 0
+    var faultInjector: (@Sendable (String) -> Void)? = nil
     var manifestURL: URL { directory.appendingPathComponent("audio-manifest.json") }
 
     func finalURL(for segment: SessionAudioSegment) -> URL { directory.appendingPathComponent(segment.fileName) }
@@ -108,7 +110,9 @@ struct SessionAudioStore {
         segment.contentHash = try hash(pending)
         // Persist full timing before publication; recovery recognizes a readable pending file too.
         try writeSidecar(segment)
+        faultInjector?("before-rename")
         try FileManager.default.moveItem(at: pending, to: finalURL(for: segment))
+        faultInjector?("after-rename")
         var manifest: SessionAudioManifest
         if FileManager.default.fileExists(atPath: manifestURL.path) {
             manifest = try load()
@@ -118,6 +122,7 @@ struct SessionAudioStore {
         manifest.segments.removeAll { $0.id == segment.id }
         manifest.segments.append(segment)
         manifest.segments.sort { ($0.startFrame, $0.track.rawValue, $0.index) < ($1.startFrame, $1.track.rawValue, $1.index) }
+        faultInjector?("before-manifest")
         try save(manifest)
     }
 
@@ -145,6 +150,7 @@ struct SessionAudioStore {
             } catch { manifest.diagnostics.append("Invalid sidecar: \(url.lastPathComponent)") }
         }
         for index in manifest.segments.indices {
+            try Task.checkCancellation()
             var segment = manifest.segments[index]
             let final = finalURL(for: segment)
             let pending = pendingURL(for: segment)
@@ -203,11 +209,22 @@ struct SessionAudioStore {
         try writeSidecar(segment)
     }
 
+    static func rebindCopy(in directory: URL, from sourceID: UUID, to destinationID: UUID) throws {
+        var manifest = try SessionAudioStore(directory: directory, sessionID: sourceID).reconcile()
+        manifest.sessionID = destinationID
+        let destination = SessionAudioStore(directory: directory, sessionID: destinationID, hostTimeOrigin: manifest.hostTimeOrigin)
+        for segment in manifest.segments { try destination.checkpoint(segment) }
+        try destination.save(manifest)
+    }
+
     private func hash(_ url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let bytes = try handle.read(upToCount: 64 * 1024), !bytes.isEmpty { hasher.update(data: bytes) }
+        while let bytes = try handle.read(upToCount: 64 * 1024), !bytes.isEmpty {
+            try Task.checkCancellation()
+            hasher.update(data: bytes)
+        }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

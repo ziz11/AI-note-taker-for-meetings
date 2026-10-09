@@ -149,6 +149,8 @@ enum TranscriptionAudioProvenance: String, Codable, CaseIterable, Hashable {
 }
 
 struct RecordingAssets: Codable, Hashable {
+    var audioManifestFile: String? = nil
+    var audioTracks: [String]? = nil
     var microphoneFile: String? = nil
     var systemAudioFile: String? = nil
     var mergedCallFile: String? = nil
@@ -332,7 +334,7 @@ extension RecordingSession {
     var transcriptSourceLabel: String {
         switch source {
         case .liveCapture:
-            if assets.systemAudioFile != nil {
+            if assets.systemAudioFile != nil || assets.audioTracks?.contains("system") == true {
                 return "System + Mic"
             }
             return "Mic"
@@ -344,7 +346,7 @@ extension RecordingSession {
     var primaryAudioFileName: String? {
         switch source {
         case .liveCapture:
-            return assets.mergedCallFile ?? assets.microphoneFile ?? assets.systemAudioFile
+            return assets.audioManifestFile ?? assets.mergedCallFile ?? assets.microphoneFile ?? assets.systemAudioFile
         case .importedAudio:
             return assets.importedAudioFile
         }
@@ -358,6 +360,13 @@ extension RecordingSession {
     }
 
     func playbackFileName(for source: PlaybackAudioSource) -> String? {
+        if let manifest = assets.audioManifestFile {
+            switch source {
+            case .mixed: return assets.audioTracks?.isEmpty == false ? manifest : nil
+            case .microphone: return assets.audioTracks?.contains("microphone") == true ? manifest : nil
+            case .system: return assets.audioTracks?.contains("system") == true ? manifest : nil
+            }
+        }
         switch self.source {
         case .importedAudio:
             return source == .mixed ? assets.importedAudioFile : nil
@@ -374,6 +383,7 @@ extension RecordingSession {
     }
 
     var isMixedTrackProcessing: Bool {
+        guard assets.audioManifestFile == nil else { return false }
         guard source == .liveCapture else { return false }
         guard assets.mergedCallFile == nil else { return false }
         guard assets.microphoneFile != nil || assets.systemAudioFile != nil else { return false }
@@ -392,7 +402,7 @@ extension RecordingSession {
             return .live
         }
 
-        if assets.microphoneFile != nil {
+        if assets.microphoneFile != nil || assets.audioTracks?.contains("microphone") == true {
             return .recorded
         }
 
@@ -404,11 +414,11 @@ extension RecordingSession {
             return .missing
         }
 
-        if lifecycleState == .recording, assets.systemAudioFile != nil {
+        if lifecycleState == .recording, assets.systemAudioFile != nil || assets.audioTracks?.contains("system") == true {
             return .live
         }
 
-        if assets.systemAudioFile != nil {
+        if assets.systemAudioFile != nil || assets.audioTracks?.contains("system") == true {
             return .recorded
         }
 

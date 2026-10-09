@@ -135,6 +135,8 @@ final class RecordingWorkflowController {
 
         var updatedRecording = recording
         updatedRecording.assets.microphoneFile = captureArtifacts.microphoneFile
+        updatedRecording.assets.audioManifestFile = captureArtifacts.audioManifestFile
+        updatedRecording.assets.audioTracks = captureArtifacts.audioTracks
         updatedRecording.assets.systemAudioFile = captureArtifacts.systemAudioFile
         updatedRecording.assets.connectorNotesFile = captureArtifacts.connectorNotesFile
         updatedRecording.notes = captureArtifacts.note ?? "Recording in progress."
@@ -176,13 +178,21 @@ final class RecordingWorkflowController {
 
         var updatedRecording = recording
         updatedRecording.duration = duration
+        updatedRecording.assets.audioManifestFile = captureArtifacts.audioManifestFile
+        updatedRecording.assets.audioTracks = captureArtifacts.audioTracks
         updatedRecording.lifecycleState = runTranscription ? .processing : .ready
         updatedRecording.transcriptState = runTranscription ? .queued : .idle
         updatedRecording.assets.microphoneFile = captureArtifacts.microphoneFile
         updatedRecording.assets.systemAudioFile = captureArtifacts.systemAudioFile
         updatedRecording.assets.mergedCallFile = captureArtifacts.mergedCallFile
         updatedRecording.assets.connectorNotesFile = captureArtifacts.connectorNotesFile ?? updatedRecording.assets.connectorNotesFile
-        updatedRecording.notes = runTranscription ? "Audio saved. Preparing transcript." : "Audio saved."
+        updatedRecording.notes = captureArtifacts.note ?? (runTranscription ? "Audio saved. Preparing transcript." : "Audio saved.")
+        if captureArtifacts.audioManifestFile != nil,
+           let directory = try? repository.sessionDirectory(for: recording.id),
+           let manifest = try? SessionAudioStore(directory: directory, sessionID: recording.id).load() {
+            updatedRecording.duration = Double(manifest.durationFrames) / 48_000
+            updatedRecording.assets.degradedReasons = manifest.diagnostics.isEmpty ? nil : manifest.diagnostics
+        }
         try repository.save(updatedRecording)
 
         var transcriptionResult: TranscriptionResult?
@@ -201,6 +211,13 @@ final class RecordingWorkflowController {
                 }
                 processingError = nil
             } catch {
+                if error is CancellationError || Task.isCancelled {
+                    updatedRecording.transcriptState = .idle
+                    updatedRecording.lifecycleState = .ready
+                    updatedRecording.notes = "Transcription cancelled. Audio is saved."
+                    try? repository.save(updatedRecording)
+                    throw CancellationError()
+                }
                 updatedRecording.transcriptState = .failed
                 updatedRecording.lifecycleState = .failed
                 updatedRecording.notes = transcriptionFailureNote(for: error)
@@ -532,6 +549,26 @@ final class RecordingWorkflowController {
         for index in recordings.indices {
             let id = recordings[index].id
             guard let sessionDirectory = try? repository.sessionDirectory(for: id) else {
+                continue
+            }
+
+            if FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("audio").path) {
+                do {
+                    let manifest = try SessionAudioStore(directory: sessionDirectory, sessionID: id).reconcile()
+                    let artifacts = AudioCaptureService.segmentedArtifacts(manifest)
+                    recordings[index].assets.audioManifestFile = artifacts.audioManifestFile
+                    recordings[index].assets.audioTracks = artifacts.audioTracks
+                    recordings[index].assets.mergedCallFile = nil
+                    recordings[index].duration = Double(manifest.durationFrames) / 48_000
+                    if recordings[index].lifecycleState == .recording || recordings[index].lifecycleState == .processing {
+                        recordings[index].lifecycleState = artifacts.audioTracks?.isEmpty == false ? .ready : .failed
+                        recordings[index].notes = "Recovered segmented recording. " + manifest.diagnostics.joined(separator: " ")
+                    }
+                    try repository.save(recordings[index])
+                } catch {
+                    recordings[index].notes = "Segmented audio recovery failed: \(error.localizedDescription)"
+                    try? repository.save(recordings[index])
+                }
                 continue
             }
 

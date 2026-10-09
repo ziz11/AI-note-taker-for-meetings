@@ -2,9 +2,11 @@ import Foundation
 
 enum CaptureSampleCommitGate {
     static func perform(
+        accept: () async -> Bool = { true },
         write: () async throws -> Void,
         onCommit: () async -> Void
     ) async rethrows {
+        guard await accept() else { return }
         try await write()
         await onCommit()
     }

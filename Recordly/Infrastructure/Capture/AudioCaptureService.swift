@@ -14,6 +14,8 @@ private enum LiveCaptureArtifactNames {
 }
 
 struct CaptureArtifacts {
+    var audioManifestFile: String? = nil
+    var audioTracks: [String]? = nil
     var microphoneFile: String?
     var systemAudioFile: String?
     var mergedCallFile: String?
@@ -514,27 +516,14 @@ actor PCMTrackWriter: TrackWriting {
             return
         }
 
-        let space = staging.frameCapacity - stagedFrames
-        if incoming <= space {
-            dstChannel.advanced(by: Int(stagedFrames)).update(from: srcChannel, count: Int(incoming))
-            stagedFrames += incoming
+        var offset: AVAudioFrameCount = 0
+        while offset < incoming {
+            let count = min(incoming - offset, staging.frameCapacity - stagedFrames)
+            dstChannel.advanced(by: Int(stagedFrames)).update(from: srcChannel.advanced(by: Int(offset)), count: Int(count))
+            stagedFrames += count
+            offset += count
             staging.frameLength = stagedFrames
-        } else {
-            // Fill remaining space, flush, then stage the rest.
-            if space > 0 {
-                dstChannel.advanced(by: Int(stagedFrames)).update(from: srcChannel, count: Int(space))
-                stagedFrames += space
-                staging.frameLength = stagedFrames
-            }
-            try flushStagingBufferThrowing()
-            let remainder = incoming - space
-            dstChannel.update(from: srcChannel.advanced(by: Int(space)), count: Int(remainder))
-            stagedFrames = remainder
-            staging.frameLength = stagedFrames
-        }
-
-        if stagedFrames >= flushThresholdFrames {
-            try flushStagingBufferThrowing()
+            if stagedFrames >= flushThresholdFrames { try flushStagingBufferThrowing() }
         }
     }
 
@@ -583,6 +572,7 @@ actor PCMTrackWriter: TrackWriting {
         if sourceFormat == nil || sourceFormat != inputFormat {
             sourceFormat = inputFormat
             converter = AVAudioConverter(from: inputFormat, to: outputFormat)
+            converter?.primeMethod = .none
         }
 
         guard let converter else {
@@ -590,12 +580,16 @@ actor PCMTrackWriter: TrackWriting {
         }
 
         let ratio = outputFormat.sampleRate / inputFormat.sampleRate
-        let capacity = AVAudioFrameCount(Double(inputBuffer.frameLength) * ratio) + 8
+        let capacity = AVAudioFrameCount((Double(inputBuffer.frameLength) * ratio).rounded(.up))
         guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
             throw PCMWriterError.conversionFailed
         }
 
         var conversionError: NSError?
+        if inputFormat.sampleRate == outputFormat.sampleRate {
+            try converter.convert(to: outputBuffer, from: inputBuffer)
+            return outputBuffer
+        }
         var consumed = false
         converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
             if consumed {
@@ -846,6 +840,11 @@ final class ScreenCaptureStreamLifecycle: @unchecked Sendable {
     private var forwardedStops: Set<ObjectIdentifier> = []
     private var pendingStops: Set<ObjectIdentifier> = []
 
+    var activeGeneration: UInt64? {
+        lock.lock(); defer { lock.unlock() }
+        return currentStreamGeneration
+    }
+
     func beginCaptureRequest() -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
@@ -992,6 +991,7 @@ enum ScreenCaptureStreamReplacement {
 
 @MainActor
 protocol ScreenAudioStreaming: AnyObject {
+    var currentStreamGeneration: UInt64? { get }
     var microphoneViaStreamEnabled: Bool { get }
     var onUnexpectedStop: (@MainActor (String) -> Void)? { get set }
 
@@ -1007,6 +1007,7 @@ protocol ScreenAudioStreaming: AnyObject {
 
 @MainActor
 final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioStreaming {
+    var currentStreamGeneration: UInt64? { lifecycle.activeGeneration }
     private final class OutputRouter: NSObject, SCStreamOutput {
         var generationForStream: ((SCStream) -> UInt64?)?
         var onSystemSample: ((CMSampleBuffer, UInt64) -> Void)?
@@ -1129,7 +1130,7 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let config = SCStreamConfiguration()
         config.capturesAudio = true
-        config.captureMicrophone = true
+        config.captureMicrophone = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         config.excludesCurrentProcessAudio = false
         config.sampleRate = Int(PCMTrackWriter.canonicalSampleRate)
         config.channelCount = Int(PCMTrackWriter.canonicalChannels)
@@ -1152,11 +1153,12 @@ final class ScreenCaptureAudioService: NSObject, SCStreamDelegate, ScreenAudioSt
         // "stream output NOT found. Dropping frame".
         try? stream.addStreamOutput(router, type: .screen, sampleHandlerQueue: screenDiscardQueue)
 
-        do {
-            try stream.addStreamOutput(router, type: .microphone, sampleHandlerQueue: sampleQueue)
-            microphoneViaStreamEnabled = true
-        } catch {
-            microphoneViaStreamEnabled = false
+        microphoneViaStreamEnabled = false
+        if config.captureMicrophone {
+            do {
+                try stream.addStreamOutput(router, type: .microphone, sampleHandlerQueue: sampleQueue)
+                microphoneViaStreamEnabled = true
+            } catch { microphoneViaStreamEnabled = false }
         }
 
         lifecycle.install(stream)
@@ -1239,7 +1241,10 @@ final class AudioCaptureService: AudioCaptureEngine {
     private let screenCaptureService: any ScreenAudioStreaming
     private let recoveryPolicy: CaptureRecoveryPolicy
     private let screenCapturePermissionCoordinator = ScreenCapturePermissionCoordinator()
-    private let fallbackMicrophoneRecorder = FallbackMicrophoneRecorder()
+    private let fallbackMicrophoneRecorder = SegmentedMicrophoneCapture()
+    private var audioStore: SessionAudioStore?
+    private var failedCaptureChannels: Set<String> = []
+    private var drainingGeneration: UInt64?
     private let clock = ContinuousClock()
 
     private var isRunning = false
@@ -1271,7 +1276,7 @@ final class AudioCaptureService: AudioCaptureEngine {
     }
 
     private func recordSampleArrival(for channel: CaptureChannel, generation: UInt64) {
-        guard screenCaptureService.isCurrentStreamGeneration(generation) else {
+        guard !failedCaptureChannels.contains(channel.rawValue), screenCaptureService.isCurrentStreamGeneration(generation) else {
             return
         }
         healthRuntime?.receiveHeartbeat(
@@ -1287,26 +1292,26 @@ final class AudioCaptureService: AudioCaptureEngine {
         }
 
         let hasMicrophoneAccess = await AVCaptureDevice.requestAccess(for: .audio)
-        guard hasMicrophoneAccess else {
-            throw AudioCaptureError.microphonePermissionDenied
-        }
 
         // Ensure system capture permission is requested before trying to start ScreenCaptureKit.
 
         let sessionID = UUID(uuidString: sessionDirectory.lastPathComponent) ?? UUID()
 
-        let microphoneTemporaryURL = sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneTemporary)
-        let systemTemporaryURL = sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemTemporary)
-        let microphoneDurableURL = sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable)
-        let systemDurableURL = sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable)
+        let origin = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+        let store = SessionAudioStore(directory: sessionDirectory, sessionID: sessionID, hostTimeOrigin: origin)
+        let committer = SessionAudioCommitter(store: store)
 
         do {
             try await metadataStore.createSession(id: sessionID, in: sessionDirectory)
+            try store.save(SessionAudioManifest(sessionID: sessionID, hostTimeOrigin: origin))
+            self.audioStore = store
+            self.failedCaptureChannels = []
             var streamStartError: Error?
-            var systemCaptureAttempted = false
             var didStartStreamCapture = false
-            var micWriter: MirroredTrackWriter?
-            var sysWriter: MirroredTrackWriter?
+            let micWriter = MirroredTrackWriter(temporary: SegmentedTrackWriter(kind: .microphone, store: store, committer: committer), durable: nil)
+            let sysWriter = MirroredTrackWriter(temporary: SegmentedTrackWriter(kind: .system, store: store, committer: committer), durable: nil)
+            self.microphoneWriter = micWriter
+            self.systemWriter = sysWriter
 
             // Avoid CGRequestScreenCaptureAccess() here. When multiple dev copies share one
             // bundle identifier, the system-managed "quit and reopen" flow can relaunch a
@@ -1314,33 +1319,8 @@ final class AudioCaptureService: AudioCaptureEngine {
             let hasSystemCapturePermission = screenCapturePermissionCoordinator.hasSystemRecordingPermission()
 
             if hasSystemCapturePermission {
-                let streamMicWriter = try MirroredTrackWriter(
-                    temporary: PCMTrackWriter(
-                        kind: .microphone,
-                        fileName: LiveCaptureArtifactNames.microphoneTemporary,
-                        fileURL: microphoneTemporaryURL
-                    ),
-                    durable: PCMTrackWriter(
-                        kind: .microphone,
-                        fileName: LiveCaptureArtifactNames.microphoneDurable,
-                        fileURL: microphoneDurableURL
-                    )
-                )
-                let streamSysWriter = try MirroredTrackWriter(
-                    temporary: PCMTrackWriter(
-                        kind: .system,
-                        fileName: LiveCaptureArtifactNames.systemTemporary,
-                        fileURL: systemTemporaryURL
-                    ),
-                    durable: PCMTrackWriter(
-                        kind: .system,
-                        fileName: LiveCaptureArtifactNames.systemDurable,
-                        fileURL: systemDurableURL
-                    )
-                )
-                micWriter = streamMicWriter
-                sysWriter = streamSysWriter
-                systemCaptureAttempted = true
+                let streamMicWriter = micWriter
+                let streamSysWriter = sysWriter
                 // Buffers flow through single-consumer pipelines off the main actor;
                 // UI/metering state hops back to MainActor at most every 100 ms.
                 let systemMeter = MeteringThrottle()
@@ -1350,6 +1330,9 @@ final class AudioCaptureService: AudioCaptureEngine {
                         do {
                             let level = sample.buffer.normalizedLevel
                             try await CaptureSampleCommitGate.perform(
+                                accept: { [weak self] in
+                                    await self?.acceptsSample(channel: .system, generation: sample.generation) == true
+                                },
                                 write: {
                                     _ = try await streamSysWriter.appendPreservingCanonical(
                                         sampleBuffer: sample.buffer
@@ -1373,6 +1356,7 @@ final class AudioCaptureService: AudioCaptureEngine {
                             guard let self else { return }
                             await MainActor.run {
                                 self.systemLevelValue = 0
+                                self.captureWriteFailed(channel: "system", error: error, in: sessionDirectory)
                             }
                         }
                     }
@@ -1384,6 +1368,9 @@ final class AudioCaptureService: AudioCaptureEngine {
                         do {
                             let level = sample.buffer.normalizedLevel
                             try await CaptureSampleCommitGate.perform(
+                                accept: { [weak self] in
+                                    await self?.acceptsSample(channel: .microphone, generation: sample.generation) == true
+                                },
                                 write: {
                                     _ = try await streamMicWriter.appendPreservingCanonical(
                                         sampleBuffer: sample.buffer
@@ -1403,7 +1390,9 @@ final class AudioCaptureService: AudioCaptureEngine {
                                 }
                             )
                         } catch {
-                            // Keep recording alive if one buffer fails to convert.
+                            await streamMicWriter.recordDiagnostic("microphone append failed: \(error.localizedDescription)")
+                            guard let self else { return }
+                            await MainActor.run { self.captureWriteFailed(channel: "microphone", error: error, in: sessionDirectory) }
                         }
                     }
                 )
@@ -1436,14 +1425,20 @@ final class AudioCaptureService: AudioCaptureEngine {
                 systemStatusLabelValue = "Permission denied"
             }
 
-            if streamStartError != nil || !systemCaptureAttempted || !screenCaptureService.microphoneViaStreamEnabled {
-                didStartStreamCapture = false
-                try? await screenCaptureService.stopCapture()
-                micWriter = nil
-                sysWriter = nil
-                removeInvalidFileIfPresent(microphoneDurableURL)
-                removeInvalidFileIfPresent(systemDurableURL)
-                try fallbackMicrophoneRecorder.startRecording(to: microphoneTemporaryURL)
+            if !hasMicrophoneAccess && !didStartStreamCapture {
+                throw streamStartError ?? AudioCaptureError.microphonePermissionDenied
+            }
+            if hasMicrophoneAccess && (!didStartStreamCapture || !screenCaptureService.microphoneViaStreamEnabled) {
+                if !didStartStreamCapture {
+                    try? await screenCaptureService.stopCapture()
+                    await self.systemSamplePipeline?.finish()
+                    self.systemSamplePipeline = nil
+                }
+                await self.microphoneSamplePipeline?.finish()
+                self.microphoneSamplePipeline = nil
+                try fallbackMicrophoneRecorder.start(writer: micWriter, onFailure: { [weak self] error in
+                    Task { @MainActor in self?.captureWriteFailed(channel: "microphone", error: error, in: sessionDirectory) }
+                })
                 if let streamStartError {
                     try await metadataStore.appendNote(
                         "ScreenCaptureKit start failed (\(streamStartError.localizedDescription)). Falling back to mic-only capture.",
@@ -1457,12 +1452,12 @@ final class AudioCaptureService: AudioCaptureEngine {
                 }
             }
 
-            self.microphoneWriter = didStartStreamCapture ? micWriter : nil
-            self.systemWriter = didStartStreamCapture ? sysWriter : nil
+            self.microphoneWriter = micWriter
+            self.systemWriter = sysWriter
             self.activeSessionDirectory = sessionDirectory
             self.activeSessionID = sessionID
-            self.microphoneFileName = LiveCaptureArtifactNames.microphoneDurable
-            self.systemAudioFileName = didStartStreamCapture ? LiveCaptureArtifactNames.systemDurable : nil
+            self.microphoneFileName = nil
+            self.systemAudioFileName = nil
             self.isRunning = true
 
             if didStartStreamCapture {
@@ -1490,19 +1485,26 @@ final class AudioCaptureService: AudioCaptureEngine {
             }
 
             return CaptureArtifacts(
-                microphoneFile: LiveCaptureArtifactNames.microphoneDurable,
-                systemAudioFile: didStartStreamCapture ? LiveCaptureArtifactNames.systemDurable : nil,
+                audioManifestFile: "audio-manifest.json",
+                audioTracks: (hasMicrophoneAccess ? ["microphone"] : []) + (didStartStreamCapture ? ["system"] : []),
+                microphoneFile: nil,
+                systemAudioFile: nil,
                 mergedCallFile: nil,
                 connectorNotesFile: "capture-session.json",
                 note: streamStartError == nil
-                    ? "Recording microphone and system audio to temporary CAF and durable M4A tracks."
+                    ? "Recording available audio sources to compact AAC chunks."
                     : "Recording microphone only. System capture permissions are unavailable."
             )
         } catch {
+            try? await screenCaptureService.stopCapture()
             await self.systemSamplePipeline?.finish()
             await self.microphoneSamplePipeline?.finish()
             self.systemSamplePipeline = nil
             self.microphoneSamplePipeline = nil
+            if let microphoneWriter { _ = await microphoneWriter.finalize() }
+            if let systemWriter { _ = await systemWriter.finalize() }
+            await fallbackMicrophoneRecorder.stop()
+            self.audioStore = nil
             self.microphoneWriter = nil
             self.systemWriter = nil
             self.activeSessionDirectory = nil
@@ -1608,6 +1610,8 @@ final class AudioCaptureService: AudioCaptureEngine {
             throw AudioCaptureError.noActiveCapture
         }
 
+        drainingGeneration = screenCaptureService.currentStreamGeneration
+        let captureEndSeconds = CMClockGetTime(CMClockGetHostTimeClock()).seconds
         let watchdogTask = healthWatchdogTask
         let unexpectedStopTask = healthUnexpectedStopTask
         healthWatchdogTask?.cancel()
@@ -1631,6 +1635,8 @@ final class AudioCaptureService: AudioCaptureEngine {
 
         defer {
             isRunning = false
+            drainingGeneration = nil
+            audioStore = nil
             microphoneWriter = nil
             systemWriter = nil
             systemSamplePipeline = nil
@@ -1644,12 +1650,16 @@ final class AudioCaptureService: AudioCaptureEngine {
             diagnosticPersistenceTask = nil
         }
 
-        try await metadataStore.updateStatus(.finalizingTracks, in: sessionDirectory)
-        try? await fallbackMicrophoneRecorder.stopRecording()
-
-        // Drain buffered samples before finalizing so tail audio isn't lost.
-        await systemSamplePipeline?.finish()
-        await microphoneSamplePipeline?.finish()
+        let finalization = await CaptureFinalizationCoordinator.finish(
+            stopSources: { await self.fallbackMicrophoneRecorder.stop() },
+            drainSources: {
+                await self.systemSamplePipeline?.finish()
+                await self.microphoneSamplePipeline?.finish()
+            },
+            beginMetadata: { try await self.metadataStore.updateStatus(.finalizingTracks, in: sessionDirectory) },
+            writers: [microphoneWriter, systemWriter].compactMap { $0 },
+            updateMetadata: { try await self.metadataStore.updateTrack($0, in: sessionDirectory) }
+        )
         if let systemSamplePipeline, systemSamplePipeline.droppedCount > 0 {
             try? await metadataStore.appendNote(
                 "system pipeline dropped \(systemSamplePipeline.droppedCount) buffers",
@@ -1663,75 +1673,53 @@ final class AudioCaptureService: AudioCaptureEngine {
             )
         }
 
-        var microphoneRequiresDurableExport = false
-        if let microphoneWriter {
-            microphoneRequiresDurableExport = await microphoneWriter.requiresDurableExport()
-            if let micStats = await microphoneWriter.finalize().first {
-                try await metadataStore.updateTrack(micStats, in: sessionDirectory)
-            }
+        guard let audioStore else { throw SessionAudioError.invalidMetadata }
+        var manifest = try audioStore.reconcile()
+        let elapsed = captureEndSeconds - manifest.hostTimeOrigin
+        if elapsed.isFinite, elapsed >= 0, elapsed < Double(Int64.max / 48_000) {
+            manifest.captureEndFrame = Int64((elapsed * 48_000).rounded())
         }
+        manifest.diagnostics += finalization.persistenceDiagnostics
+        manifest.diagnostics += finalization.tracks.flatMap { $0.diagnostics }
+        manifest.diagnostics += failedCaptureChannels.sorted().map { "\($0) capture degraded by a write failure." }
+        manifest.diagnostics = Array(Set(manifest.diagnostics)).sorted()
+        do { try await metadataStore.updateStatus(.ready, in: sessionDirectory) }
+        catch { manifest.diagnostics.append("Ready metadata failed: \(error.localizedDescription)") }
+        try audioStore.save(manifest)
+        guard manifest.segments.contains(where: { $0.state == .committed }) else { throw AudioCaptureError.recorderFailedToFinalize }
+        return Self.segmentedArtifacts(manifest, note: "Audio saved. Chunk playback is ready.")
+    }
 
-        var systemRequiresDurableExport = false
-        if let systemWriter {
-            systemRequiresDurableExport = await systemWriter.requiresDurableExport()
-            if let systemStats = await systemWriter.finalize().first {
-                try await metadataStore.updateTrack(systemStats, in: sessionDirectory)
-            }
+    static func segmentedArtifacts(_ manifest: SessionAudioManifest, note: String? = nil) -> CaptureArtifacts {
+        let tracks = Set(manifest.segments.filter { $0.state == .committed }.map { $0.track.rawValue }).sorted()
+        return CaptureArtifacts(audioManifestFile: "audio-manifest.json", audioTracks: tracks,
+                                microphoneFile: nil, systemAudioFile: nil, mergedCallFile: nil,
+                                connectorNotesFile: "capture-session.json",
+                                note: ([note].compactMap { $0 } + manifest.diagnostics).joined(separator: "\n"))
+    }
+
+    private func acceptsSample(channel: CaptureChannel, generation: UInt64) -> Bool {
+        !failedCaptureChannels.contains(channel.rawValue) && (screenCaptureService.isCurrentStreamGeneration(generation) || generation == drainingGeneration)
+    }
+
+    private func captureWriteFailed(channel: String, error: Error, in directory: URL) {
+        guard CaptureWriteFailurePolicy.isTerminal(error), failedCaptureChannels.insert(channel).inserted else { return }
+        let healthy = Set([CaptureChannel.microphone, .system].filter {
+            !failedCaptureChannels.contains($0.rawValue) && ($0 != .microphone || screenCaptureService.microphoneViaStreamEnabled)
+        })
+        if healthy.isEmpty { healthRuntime?.stop() }
+        else { healthRuntime?.start(requiredChannels: healthy, at: clock.now) }
+        systemStatusLabelValue = "Audio write error"
+        diagnosticPersistenceTask = Task { [metadataStore] in
+            try? await metadataStore.appendNote("\(channel) storage degraded: \(error.localizedDescription)", in: directory)
         }
-
-        var preferCanonicalMicrophone = false
-        do {
-            try await exportDurableTrackIfNeeded(
-                from: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneTemporary),
-                to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.microphoneDurable),
-                forceReplace: microphoneRequiresDurableExport
-            )
-        } catch {
-            preferCanonicalMicrophone = true
-            try? await metadataStore.appendNote(
-                "Microphone durable export failed: \(error.localizedDescription)",
-                in: sessionDirectory
-            )
-        }
-        var preferCanonicalSystem = false
-        if systemAudioFileName != nil {
-            do {
-                try await exportDurableTrackIfNeeded(
-                    from: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemTemporary),
-                    to: sessionDirectory.appendingPathComponent(LiveCaptureArtifactNames.systemDurable),
-                    forceReplace: systemRequiresDurableExport
-                )
-            } catch {
-                preferCanonicalSystem = true
-                try? await metadataStore.appendNote(
-                    "System durable export failed: \(error.localizedDescription)",
-                    in: sessionDirectory
-                )
-            }
-        }
-
-        try await metadataStore.updateStatus(.readyForMix, in: sessionDirectory)
-
-        return CaptureArtifacts(
-            microphoneFile: preferredUsableTrackFileName(
-                durable: microphoneFileName,
-                canonical: LiveCaptureArtifactNames.microphoneTemporary,
-                preferCanonical: preferCanonicalMicrophone,
-                in: sessionDirectory
-            ),
-            systemAudioFile: preferredUsableTrackFileName(
-                durable: systemAudioFileName,
-                canonical: LiveCaptureArtifactNames.systemTemporary,
-                preferCanonical: preferCanonicalSystem,
-                in: sessionDirectory
-            ),
-            mergedCallFile: nil,
-            connectorNotesFile: "capture-session.json",
-            note: "Audio saved. Mixed playback is being prepared."
-        )
     }
 
     func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
+        if FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent("audio").path),
+           let id = UUID(uuidString: sessionDirectory.lastPathComponent) {
+            return Self.segmentedArtifacts(try SessionAudioStore(directory: sessionDirectory, sessionID: id).reconcile())
+        }
         let mergeResult = try await mergeService.mergeSession(in: sessionDirectory)
         return CaptureArtifacts(
             microphoneFile: preferredUsableTrackFileName(
@@ -1823,11 +1811,16 @@ final class AudioCaptureService: AudioCaptureEngine {
     }
 
     var systemAudioStatusLabel: String {
-        healthRuntime?.snapshot.statusLabel ?? systemStatusLabelValue
+        failedCaptureChannels.isEmpty ? (healthRuntime?.snapshot.statusLabel ?? systemStatusLabelValue) : "Audio write error: " + failedCaptureChannels.sorted().joined(separator: ", ")
     }
 
     var captureHealth: CaptureHealthSnapshot {
-        healthRuntime?.snapshot ?? CaptureHealthSnapshot(
+        if !failedCaptureChannels.isEmpty {
+            return CaptureHealthSnapshot(phase: .failed(message: systemAudioStatusLabel),
+                                         affectedChannels: Set(failedCaptureChannels.compactMap(CaptureChannel.init(rawValue:))),
+                                         statusLabel: systemAudioStatusLabel)
+        }
+        return healthRuntime?.snapshot ?? CaptureHealthSnapshot(
             phase: .idle,
             affectedChannels: [],
             statusLabel: systemStatusLabelValue
@@ -1852,6 +1845,16 @@ final class AudioCaptureService: AudioCaptureEngine {
         }
 
         for sessionDirectory in sessionDirectories {
+            if fileManager.fileExists(atPath: sessionDirectory.appendingPathComponent("audio").path),
+               let id = UUID(uuidString: sessionDirectory.lastPathComponent) {
+                do {
+                    let manifest = try SessionAudioStore(directory: sessionDirectory, sessionID: id).reconcile()
+                    try? await metadataStore.updateStatus(manifest.segments.contains { $0.state == .committed } ? .ready : .mixError, in: sessionDirectory)
+                } catch {
+                    try? await metadataStore.appendNote("Segmented recovery failed: \(error.localizedDescription)", in: sessionDirectory)
+                }
+                continue
+            }
             let metadataURL = sessionDirectory.appendingPathComponent("capture-session.json")
             guard fileManager.fileExists(atPath: metadataURL.path) else {
                 continue

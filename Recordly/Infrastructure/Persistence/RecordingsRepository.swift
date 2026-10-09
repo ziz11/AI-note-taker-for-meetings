@@ -184,6 +184,9 @@ final class RecordingsRepository: RecordingsPersistence {
             }
             try fileManager.copyItem(at: sourceURL, to: destinationURL)
         }
+        if fileManager.fileExists(atPath: destinationDirectory.appendingPathComponent("audio").path) {
+            try SessionAudioStore.rebindCopy(in: destinationDirectory, from: sourceID, to: destinationID)
+        }
     }
 
     func playableAudioURL(for recording: RecordingSession) throws -> URL? {
