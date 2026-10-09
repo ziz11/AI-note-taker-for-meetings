@@ -950,7 +950,8 @@ final class RecordingsStoreSummarizationTests: XCTestCase {
         XCTAssertEqual(store.viewState.runtime.activityStatus, "Ready")
         XCTAssertEqual(store.viewState.runtime.sidebarStatus, "Ready")
         XCTAssertEqual(store.selectedRecording?.assets.summaryFile, "summary.md")
-        XCTAssertEqual(store.selectedRecording?.notes, "Summary is ready.")
+        XCTAssertTrue(store.selectedRecording?.notes.hasPrefix("Template summary saved.") == true)
+        XCTAssertTrue(store.selectedRecording?.notes.contains("No summarization models installed") == true)
     }
 }
 
