@@ -274,6 +274,101 @@ struct SessionSpeakerIdentityStore {
         return resolution(resolved)
     }
 
+    /// Adjacent padded windows sometimes give a short boundary turn a noisy
+    /// embedding. They still observe the same physical speech. Link only mutual,
+    /// unambiguous temporal matches on verified identical audio/model evidence.
+    /// Short turns never seed or modify a voice profile through this path.
+    func linkSharedTurns(in windows: [PersistedInferenceWindow], document: inout SessionSpeakerIdentityDocument) throws -> [String: String] {
+        func duration(_ ranges: [(Int, Int)]) -> Int {
+            var count = 0, cursor = Int.min
+            for (a, b) in ranges.sorted(by: { $0.0 < $1.0 }) where a < b {
+                count += max(0, b - max(a, cursor)); cursor = max(cursor, b)
+            }
+            return count
+        }
+        func alias(_ window: PersistedInferenceWindow, _ label: String) -> String {
+            "\(window.provenance.window.id)|\(window.diarizationRunID!.uuidString)|\(label)"
+        }
+        func ownedLabels(_ window: PersistedInferenceWindow) -> Set<String> {
+            let w = window.provenance.window
+            return Set((window.diarization?.segments ?? []).filter {
+                $0.startMs + w.offsetMs < w.ownershipEndMs && $0.endMs + w.offsetMs > w.ownershipStartMs
+            }.map(\.speaker))
+        }
+        let ordered = windows.filter { $0.diarization != nil && $0.diarizationRunID != nil }
+            .sorted { $0.provenance.window.inputStartFrame < $1.provenance.window.inputStartFrame }
+        var proposals: [String: Set<String>] = [:]
+        for (left, right) in zip(ordered, ordered.dropFirst()) {
+            try Task.checkCancellation()
+            let p = left.provenance, q = right.provenance
+            let lower = max(p.window.inputStartFrame, q.window.inputStartFrame)
+            let upper = min(p.window.inputEndFrame, q.window.inputEndFrame)
+            guard lower < upper, p.sessionID == q.sessionID, p.timelineVersion == q.timelineVersion,
+                  p.hostTimeOrigin == q.hostTimeOrigin, p.sampleRate == q.sampleRate,
+                  p.window.track == .system, q.window.track == .system,
+                  p.diarizationBackend == q.diarizationBackend,
+                  let artifact = p.diarizationArtifactFingerprint, artifact == q.diarizationArtifactFingerprint,
+                  p.settings.diarizationSettingsIdentity == q.settings.diarizationSettingsIdentity,
+                  left.diarization?.embeddingArtifactFingerprint == artifact,
+                  right.diarization?.embeddingArtifactFingerprint == artifact,
+                  let space = left.diarization?.embeddingSpace, space == right.diarization?.embeddingSpace else { continue }
+            let audio = p.audio.filter { $0.startFrame < upper && $0.startFrame + $0.frameCount > lower }
+            let otherAudio = q.audio.filter { $0.startFrame < upper && $0.startFrame + $0.frameCount > lower }
+            guard !audio.isEmpty, audio == otherAudio,
+                  audio.allSatisfy({ $0.contentHash != nil && $0.state == .committed }) else { continue }
+            func ranges(_ window: PersistedInferenceWindow) -> [String: [(Int, Int)]] {
+                var result: [String: [(Int, Int)]] = [:]
+                for turn in window.diarization!.segments {
+                    let a = max(Int(lower / 48), turn.startMs + window.provenance.window.offsetMs)
+                    let b = min(Int(upper / 48), turn.endMs + window.provenance.window.offsetMs)
+                    if a < b { result[turn.speaker, default: []].append((a, b)) }
+                }
+                return result
+            }
+            let l = ranges(left), r = ranges(right)
+            for (label, intervals) in l {
+                let matches = r.filter { _, other in
+                    let common = duration(intervals.flatMap { a, b in other.map { (max(a, $0.0), min(b, $0.1)) } })
+                    return common >= 750 && Double(common) / Double(max(duration(intervals), duration(other))) >= 0.80
+                }
+                guard matches.count == 1, let (otherLabel, otherIntervals) = matches.first else { continue }
+                let reverse = l.filter { _, candidate in
+                    let common = duration(candidate.flatMap { a, b in otherIntervals.map { (max(a, $0.0), min(b, $0.1)) } })
+                    return common >= 750 && Double(common) / Double(max(duration(candidate), duration(otherIntervals))) >= 0.80
+                }
+                guard reverse.count == 1,
+                      let leftID = document.aliases[alias(left, label)], let rightID = document.aliases[alias(right, otherLabel)] else { continue }
+                for (local, voice, window, localLabel) in [(leftID, rightID, left, label), (rightID, leftID, right, otherLabel)] {
+                    guard document.identities[local]?.continuity == .windowLocalOnly,
+                          document.identities[voice]?.continuity == .sessionMatched,
+                          ownedLabels(window).contains(localLabel) else { continue }
+                    proposals[local, default: []].insert(voice)
+                }
+            }
+        }
+        var links = proposals.compactMapValues { $0.count == 1 ? $0.first : nil }
+        // Distinct owned groups in one window must stay distinct, including
+        // conflicting proposals discovered from opposite padding boundaries.
+        for window in ordered {
+            let owned = ownedLabels(window).compactMap { label -> String? in document.aliases[alias(window, label)] }
+            for (_, group) in Dictionary(grouping: owned, by: { links[$0] ?? $0 }) where Set(group).count > 1 {
+                for id in group { links[id] = nil }
+            }
+        }
+        for (voice, locals) in Dictionary(grouping: links.keys, by: { links[$0]! }) {
+            let names = Set(([voice] + locals).compactMap { document.identities[$0]?.displayName })
+            if names.count > 1 { for local in locals { links[local] = nil } }
+            else if let name = names.first { document.identities[voice]?.displayName = name }
+        }
+        for (local, voice) in links where document.identities[local]?.displayName == document.identities[voice]?.displayName {
+            // The user now edits the shared identity. Do not retain a stale
+            // local name that could resurrect a cleared name on the next rebuild.
+            document.identities[local]?.displayName = nil
+        }
+        for (key, id) in document.aliases { if let voice = links[id] { document.aliases[key] = voice } }
+        return links
+    }
+
     func evidenceKey(_ provenance: WindowInferenceProvenance, document: SessionSpeakerIdentityDocument) throws -> String {
         try InferenceFingerprint.encode(LocalSpeakerScope(provenance: provenance,
             scopeSessionID: document.identityScopeSessionID ?? document.sessionID))

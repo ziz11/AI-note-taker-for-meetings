@@ -80,6 +80,7 @@ struct SegmentedTranscriptionPipeline {
         var candidates: [WindowTranscriptCandidate] = []
         var completedASR: [TrackKind: Int] = [:]
         var diarizationSegments: [DiarizationSegment] = []
+        var speakerWindows: [PersistedInferenceWindow] = []
         var degraded: [PipelineDegradationReason] = manifest.diagnostics.isEmpty ? [] : [.captureDiagnostics]
         var diarization: (any DiarizationEngine)?
         var diarizationUnavailable = diarizationArtifactFailure
@@ -223,6 +224,7 @@ struct SegmentedTranscriptionPipeline {
                     if let document = result.diarization, let runID = result.diarizationRunID {
                         let resolution = try identityStore.resolveWindow(diarization: document, runID: runID,
                             provenance: provenance, document: &identities)
+                        speakerWindows.append(PersistedInferenceWindow(provenance: provenance, diarization: document, diarizationRunID: runID))
                         speakerIdentities = resolution.identities
                         voicedGroups += resolution.voicedGroups
                         unresolvedGroups += resolution.unresolvedGroups
@@ -249,6 +251,39 @@ struct SegmentedTranscriptionPipeline {
                     try writeInferenceJSON(report, to: reportURL)
                 }
             }
+            // Shared-turn relinking needs the following window too. Keep only
+            // bounded diarization metadata; no additional PCM or SDK work.
+            let beforeLinking = identities
+            let linkingWindows = speakerWindows
+            let linked = try await MainActor.run {
+                var snapshot = beforeLinking
+                let latest = try identityStore.load()
+                for (id, identity) in latest.identities where snapshot.identities[id] != nil {
+                    snapshot.identities[id]?.displayName = identity.displayName
+                }
+                let links = try identityStore.linkSharedTurns(in: linkingWindows, document: &snapshot)
+                try identityStore.save(snapshot)
+                return (snapshot, links)
+            }
+            identities = linked.0
+            for index in candidates.indices {
+                if let oldID = candidates[index].segment.speakerId, let newID = linked.1[oldID], let identity = identities.identities[newID] {
+                    candidates[index].segment.speakerId = newID
+                    candidates[index].segment.speaker = identity.displayName ?? identity.defaultLabel
+                }
+            }
+            for index in diarizationSegments.indices {
+                if let newID = linked.1[diarizationSegments[index].speaker] { diarizationSegments[index].speaker = newID }
+            }
+            voicedGroups = 0
+            unresolvedGroups = systemWindowCount - speakerWindows.count
+            for window in speakerWindows {
+                let resolution = try identityStore.resolveWindow(diarization: window.diarization!, runID: window.diarizationRunID!,
+                    provenance: window.provenance, document: &identities)
+                voicedGroups += resolution.voicedGroups
+                unresolvedGroups += resolution.unresolvedGroups
+            }
+            report.diagnostics.append("Speaker alignment: union-of-turns and timed-word splitting v1; shared-audio boundary links: \(linked.1.count).")
             if report.windowFailures.contains(where: { $0.stage == "diarization" }) { appendDegradation(.diarizationDegraded, to: &degraded) }
             if report.windowFailures.contains(where: { $0.stage == "asr" && $0.track == .microphone }) { appendDegradation(.micASRFailedFallbackUsed, to: &degraded) }
             if report.windowFailures.contains(where: { $0.stage == "asr" && $0.track == .system }) { appendDegradation(.systemASRFailedFallbackUsed, to: &degraded) }
@@ -396,28 +431,82 @@ struct SegmentedTranscriptionPipeline {
                 words = nil
             }
             guard start < end, !text.isEmpty else { continue }
-            var speaker = window.track == .microphone ? "You" : "Remote"
-            var speakerID = window.track == .microphone ? "me" : "remote_unknown"
-            var role: SpeakerRole = window.track == .microphone ? .me : .unknown
-            var speakerConfidence: Double?
-            if window.track == .system, let diarization {
-                let localStart = start - window.offsetMs
-                let localEnd = end - window.offsetMs
-                if let best = diarization.segments.max(by: { overlap($0.startMs, $0.endMs, localStart, localEnd) < overlap($1.startMs, $1.endMs, localStart, localEnd) }),
-                   Double(overlap(best.startMs, best.endMs, localStart, localEnd)) / Double(max(localEnd - localStart, 1)) >= 0.25 {
-                    guard let identity = speakerIdentities[best.speaker] else { continue }
-                    speaker = identity.displayName ?? identity.defaultLabel
-                    speakerID = identity.id
-                    role = .remote
-                    speakerConfidence = best.confidence
+            // A timed ASR phrase can contain several speaker turns. Resolve its
+            // words before grouping them, rather than attaching the whole phrase
+            // to whichever single diarization interval happens to be longest.
+            let whole = window.track == .system ? alignedSpeaker(start: start, end: end,
+                offset: window.offsetMs, diarization: diarization, identities: speakerIdentities) : nil
+            var groups: [(words: [ASRWord]?, identity: SessionSpeakerIdentity?, confidence: Double?)] = []
+            if window.track == .system, let words, let diarization {
+                var matches = words.map { word in alignedSpeaker(start: word.startMs, end: word.endMs,
+                    offset: window.offsetMs, diarization: diarization, identities: speakerIdentities) ?? whole }
+                var cursor = 0
+                while cursor < words.count {
+                    guard matches[cursor] == nil else { cursor += 1; continue }
+                    let first = cursor
+                    while cursor < words.count && matches[cursor] == nil { cursor += 1 }
+                    guard first > 0, cursor < words.count, let before = matches[first - 1], let after = matches[cursor],
+                          before.0.id == after.0.id,
+                          words[cursor].startMs - words[first - 1].endMs <= 2_000 else { continue }
+                    let lower = words[first..<cursor].map(\.startMs).min()!
+                    let upper = words[first..<cursor].map(\.endMs).max()!
+                    let conflicting = diarization.segments.contains { turn in
+                        overlap(lower, upper, turn.startMs + window.offsetMs, turn.endMs + window.offsetMs) > 0 &&
+                            speakerIdentities[turn.speaker]?.id != before.0.id
+                    }
+                    // Interpolate a short pause only between two known words of
+                    // the same voice, never over a voice change or overlap.
+                    if !conflicting { for index in first..<cursor { matches[index] = before } }
                 }
+                for (index, word) in words.enumerated() {
+                    let match = matches[index]
+                    if let last = groups.last, last.identity?.id == match?.0.id {
+                        groups[groups.count - 1].words?.append(word)
+                    } else { groups.append(([word], match?.0, match?.1)) }
+                }
+            } else { groups = [(words, whole?.0, whole?.1)] }
+            for group in groups {
+                let groupStart = group.words?.map(\.startMs).min() ?? start
+                let groupEnd = group.words?.map(\.endMs).max() ?? end
+                let groupText = group.words.map { $0.map { $0.word.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }.joined(separator: " ") } ?? text
+                guard !groupText.isEmpty else { continue }
+                let speaker = window.track == .microphone ? "You" : (group.identity?.displayName ?? group.identity?.defaultLabel ?? "Remote")
+                let speakerID = window.track == .microphone ? "me" : (group.identity?.id ?? "remote_unknown")
+                let role: SpeakerRole = window.track == .microphone ? .me : (group.identity == nil ? .unknown : .remote)
+                let eventID = "event_" + InferenceFingerprint.digest(Data("\(try provenance.fingerprint)|\(groupStart):\(groupEnd)|\(groupText)".utf8))
+                let segment = TranscriptSegment(id: eventID, channel: window.track.transcriptChannel, speaker: speaker, speakerRole: role, speakerId: speakerID,
+                    startMs: groupStart, endMs: groupEnd, text: groupText, confidence: local.confidence, language: local.language,
+                    speakerConfidence: group.confidence, words: group.words)
+                output.append(WindowTranscriptCandidate(segment: segment, provenance: provenance, sourceStartMs: sourceStart, sourceEndMs: sourceEnd, hasWordTiming: hasWords))
             }
-            let eventID = "event_" + InferenceFingerprint.digest(Data("\(try provenance.fingerprint)|\(start):\(end)|\(text)".utf8))
-            let segment = TranscriptSegment(id: eventID, channel: window.track.transcriptChannel, speaker: speaker, speakerRole: role, speakerId: speakerID,
-                startMs: start, endMs: end, text: text, confidence: local.confidence, language: local.language, speakerConfidence: speakerConfidence, words: words)
-            output.append(WindowTranscriptCandidate(segment: segment, provenance: provenance, sourceStartMs: sourceStart, sourceEndMs: sourceEnd, hasWordTiming: hasWords))
         }
         return output
+    }
+
+    /// Union each identity's turns: pauses and overlapping observations cannot
+    /// lower coverage by fragmenting speech, or inflate it by counting twice.
+    /// Multiple audible identities require word timing; untimed text stays unknown.
+    private func alignedSpeaker(start: Int, end: Int, offset: Int, diarization: DiarizationDocument?,
+                                identities: [String: SessionSpeakerIdentity]) -> (SessionSpeakerIdentity, Double?)? {
+        guard start < end, let diarization else { return nil }
+        var ranges: [String: [(Int, Int)]] = [:]
+        var confidence: [String: Double] = [:]
+        for turn in diarization.segments {
+            guard let identity = identities[turn.speaker] else { continue }
+            let a = max(start, turn.startMs + offset), b = min(end, turn.endMs + offset)
+            guard a < b else { continue }
+            ranges[identity.id, default: []].append((a, b))
+            if let value = turn.confidence { confidence[identity.id] = min(confidence[identity.id] ?? value, value) }
+        }
+        guard ranges.count == 1, let (id, intervals) = ranges.first else { return nil }
+        var covered = 0, cursor = Int.min
+        for (a, b) in intervals.sorted(by: { $0.0 < $1.0 }) {
+            covered += max(0, b - max(a, cursor)); cursor = max(cursor, b)
+        }
+        guard Double(covered) / Double(end - start) >= 0.25,
+              let identity = identities.values.first(where: { $0.id == id }) else { return nil }
+        return (identity, confidence[id])
     }
 
     /// Ownership coverage resolves overlapping timed word alternatives. Without word timing, resolve only

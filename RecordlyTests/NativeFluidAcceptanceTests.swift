@@ -63,6 +63,18 @@ final class NativeFluidAcceptanceTests: XCTestCase {
         XCTAssertFalse(voiceIDs.isEmpty, "Native bounded windows must supply usable session voice evidence")
         let firstTranscript = try decoder.decode(TranscriptDocument.self,
             from: Data(contentsOf: output.appendingPathComponent("transcript.json")))
+        if environment["RECORDLY_NATIVE_COMPARE_CACHED_WORDS"] == "1" {
+            let baseline = try decoder.decode(TranscriptDocument.self,
+                from: Data(contentsOf: source.appendingPathComponent("transcript.json")))
+            func timedWords(_ document: TranscriptDocument) -> [String] {
+                document.segments.flatMap { segment in (segment.words ?? []).map {
+                    "\(segment.channel.rawValue)|\($0.startMs):\($0.endMs)|\($0.word)"
+                } }.sorted()
+            }
+            XCTAssertEqual(timedWords(firstTranscript), timedWords(baseline), "Speaker splitting must preserve every cached token and its timing")
+            let baselineVoiceIDs = Set(baseline.segments.compactMap(\.speakerId).filter { $0.hasPrefix("remote_voice_") })
+            XCTAssertTrue(baselineVoiceIDs.isSubset(of: voiceIDs), "Existing session voice IDs must survive alignment changes")
+        }
         let originalEvents = firstTranscript.segments.map { "\($0.id):\($0.speakerId ?? ""):\($0.startMs):\($0.endMs)" }
         let selectedID = try XCTUnwrap(firstTranscript.segments.compactMap(\.speakerId).first { voiceIDs.contains($0) })
         try store.rename(speakerID: selectedID, to: "Native acceptance speaker")

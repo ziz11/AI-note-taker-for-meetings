@@ -1094,6 +1094,137 @@ final class SegmentedInferenceTests: XCTestCase {
         XCTAssertEqual(words.map(\.startMs), [10_000, 60_000])
     }
 
+    func testFragmentedSingleVoiceUsesUnionOfTurnsInsteadOfLongestTurn() async throws {
+        try addAudio(track: .system, startSeconds: 0, seconds: 50)
+        let asr = SegmentedTestASREngine()
+        asr.customSegments = { _, _, _ in [ASRSegment(id: "phrase", startMs: 0, endMs: 40_000,
+            text: "A phrase with pauses", confidence: nil, language: "en", words: nil)] }
+        let diar = SegmentedTestDiarizationEngine()
+        diar.customSegments = (0..<4).map { DiarizationSegment(id: "turn-\($0)", speaker: "A",
+            startMs: $0 * 10_000, endMs: $0 * 10_000 + 4_000, confidence: 0.9) }
+        _ = try await process(asr: asr, diarization: diar)
+        let segment = try XCTUnwrap(readTranscript().segments.first)
+        XCTAssertTrue(segment.speakerId?.hasPrefix("remote_local_") == true)
+        XCTAssertEqual(segment.text, "A phrase with pauses")
+    }
+
+    func testTimedASRPhraseSplitsAtSpeakerChangesWithoutLosingWords() async throws {
+        try addAudio(track: .system, startSeconds: 0, seconds: 50)
+        let words = [ASRWord(word: "Alice", startMs: 1_000, endMs: 2_000, confidence: nil),
+                     ASRWord(word: "Bob", startMs: 11_000, endMs: 12_000, confidence: nil),
+                     ASRWord(word: "AliceAgain", startMs: 21_000, endMs: 22_000, confidence: nil)]
+        let asr = SegmentedTestASREngine()
+        asr.customSegments = { _, _, _ in [ASRSegment(id: "phrase", startMs: 1_000, endMs: 22_000,
+            text: "Alice Bob AliceAgain", confidence: nil, language: "en", words: words)] }
+        let diar = SegmentedTestDiarizationEngine()
+        diar.customSegments = [DiarizationSegment(id: "a1", speaker: "A", startMs: 0, endMs: 5_000, confidence: 0.9),
+                               DiarizationSegment(id: "b", speaker: "B", startMs: 10_000, endMs: 15_000, confidence: 0.9),
+                               DiarizationSegment(id: "a2", speaker: "A", startMs: 20_000, endMs: 25_000, confidence: 0.9)]
+        _ = try await process(asr: asr, diarization: diar)
+        let segments = try readTranscript().segments
+        XCTAssertEqual(segments.map(\.text), words.map(\.word))
+        XCTAssertEqual(segments.flatMap { $0.words ?? [] }, words)
+        XCTAssertEqual(segments.first?.speakerId, segments.last?.speakerId)
+        XCTAssertNotEqual(segments.first?.speakerId, segments.dropFirst().first?.speakerId)
+        XCTAssertTrue(segments.allSatisfy { $0.speakerId != "remote_unknown" })
+    }
+
+    func testUntimedMultipleVoicesAndNonOverlappingSpeechRemainUnknown() async throws {
+        try addAudio(track: .system, startSeconds: 0, seconds: 50)
+        let asr = SegmentedTestASREngine()
+        asr.customSegments = { _, _, _ in [ASRSegment(id: "multi", startMs: 0, endMs: 20_000,
+            text: "Cannot split untimed text", confidence: nil, language: "en", words: nil),
+            ASRSegment(id: "gap", startMs: 30_000, endMs: 35_000,
+            text: "Keep unaligned text", confidence: nil, language: "en", words: [
+                ASRWord(word: "Keep", startMs: 30_000, endMs: 31_000, confidence: nil)])] }
+        let diar = SegmentedTestDiarizationEngine()
+        diar.customSegments = [DiarizationSegment(id: "a", speaker: "A", startMs: 0, endMs: 12_000, confidence: 0.9),
+                               DiarizationSegment(id: "b", speaker: "B", startMs: 12_000, endMs: 20_000, confidence: 0.9)]
+        _ = try await process(asr: asr, diarization: diar)
+        XCTAssertTrue(try readTranscript().segments.allSatisfy { $0.speakerId == "remote_unknown" })
+        XCTAssertEqual(try readTranscript().segments.count, 2)
+    }
+
+    func testShortBoundaryTurnReusesSharedAudioIdentityAndPreservesName() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        let previous = try sharedTurnWindow(owner: 0, label: "A", turns: [(1_000, 8_000), (49_500, 51_500)], vector: unitVoice(0))
+        let short = try sharedTurnWindow(owner: 50_000, label: "B", turns: [(4_500, 6_500)], vector: unitVoice(1))
+        let voice = try store.resolveWindow(diarization: XCTUnwrap(previous.diarization), runID: XCTUnwrap(previous.diarizationRunID),
+            provenance: previous.provenance, document: &identities).identities["A"]!
+        let local = try store.resolveWindow(diarization: XCTUnwrap(short.diarization), runID: XCTUnwrap(short.diarizationRunID),
+            provenance: short.provenance, document: &identities).identities["B"]!
+        XCTAssertTrue(local.id.hasPrefix("remote_local_"))
+        identities.identities[local.id]?.displayName = "Alice"
+        let links = try store.linkSharedTurns(in: [previous, short], document: &identities)
+        XCTAssertEqual(links[local.id], voice.id, "The same physical turn is stronger evidence than a short noisy embedding")
+        XCTAssertEqual(identities.identities[voice.id]?.displayName, "Alice")
+        XCTAssertEqual(identities.aliases["\(short.provenance.window.id)|\(short.diarizationRunID!.uuidString)|B"], voice.id)
+        XCTAssertNil(identities.identities[local.id]?.displayName, "A retired local name must not override later edits to the shared identity")
+        identities.identities[voice.id]?.displayName = nil
+        try store.beginRebuild(provenances: [previous.provenance, short.provenance], document: &identities)
+        for window in [previous, short] {
+            _ = try store.resolveWindow(diarization: XCTUnwrap(window.diarization), runID: XCTUnwrap(window.diarizationRunID),
+                provenance: window.provenance, document: &identities)
+        }
+        _ = try store.linkSharedTurns(in: [previous, short], document: &identities)
+        XCTAssertNil(identities.identities[voice.id]?.displayName, "Clearing the migrated name must survive a rebuild")
+    }
+
+    func testSharedTurnRejectsDifferentAudioAndCooccurringSpeakerCollision() throws {
+        for changedAudio in [false, true] {
+            let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+            var identities = SessionSpeakerIdentityDocument(sessionID: sessionID)
+            let previous = try sharedTurnWindow(owner: 0, label: "A", turns: [(1_000, 8_000), (49_500, 51_500)], vector: unitVoice(0))
+            var short = try sharedTurnWindow(owner: 50_000, label: "B", turns: [(4_500, 6_500)], vector: unitVoice(1))
+            if changedAudio { short.provenance.audio[0].contentHash = "replaced" }
+            else {
+                short.diarization?.segments.append(.init(id: "other", speaker: "C", startMs: 10_000, endMs: 20_000, confidence: 0.9))
+                short.diarization?.voiceObservations?.append(.init(speaker: "C", startMs: 10_000, endMs: 20_000, embedding: unitVoice(0)))
+            }
+            _ = try store.resolveWindow(diarization: XCTUnwrap(previous.diarization), runID: XCTUnwrap(previous.diarizationRunID),
+                provenance: previous.provenance, document: &identities)
+            let local = try store.resolveWindow(diarization: XCTUnwrap(short.diarization), runID: XCTUnwrap(short.diarizationRunID),
+                provenance: short.provenance, document: &identities).identities["B"]!
+            XCTAssertTrue(try store.linkSharedTurns(in: [previous, short], document: &identities).isEmpty)
+            XCTAssertEqual(identities.aliases["\(short.provenance.window.id)|\(short.diarizationRunID!.uuidString)|B"], local.id)
+        }
+    }
+
+    private func sharedTurnWindow(owner: Int, label: String, turns: [(Int, Int)], vector: [Float]) throws -> PersistedInferenceWindow {
+        var provenance = try voiceProvenance(startMs: owner)
+        provenance.window.inputStartFrame = Int64(max(0, owner - 5_000)) * 48
+        provenance.window.inputEndFrame = Int64(owner + 55_000) * 48
+        provenance.audio = [WindowAudioFingerprint(id: sessionID, contentHash: "same-audio", track: .system,
+            startFrame: 0, frameCount: 120 * 48_000, state: .committed, sampleRate: 48_000, codec: "aac", gaps: [])]
+        var diar = try voiceDocument(label: label, vector: vector)
+        diar.segments = turns.enumerated().map { .init(id: "turn-\($0.offset)", speaker: label,
+            startMs: $0.element.0, endMs: $0.element.1, confidence: 0.9) }
+        diar.voiceObservations = turns.map { .init(speaker: label, startMs: $0.0, endMs: $0.1, embedding: vector) }
+        return PersistedInferenceWindow(provenance: provenance, diarization: diar, diarizationRunID: UUID())
+    }
+
+    func testShortPauseBetweenSameVoiceWordsDoesNotCreateRemoteFragment() async throws {
+        try addAudio(track: .system, startSeconds: 0, seconds: 50)
+        let words = [ASRWord(word: "Before", startMs: 4_500, endMs: 5_000, confidence: nil),
+                     ASRWord(word: "pause", startMs: 5_400, endMs: 5_900, confidence: nil),
+                     ASRWord(word: "after", startMs: 6_000, endMs: 6_500, confidence: nil),
+                     ASRWord(word: "transition", startMs: 15_000, endMs: 16_000, confidence: nil),
+                     ASRWord(word: "Bob", startMs: 21_000, endMs: 22_000, confidence: nil)]
+        let asr = SegmentedTestASREngine()
+        asr.customSegments = { _, _, _ in [ASRSegment(id: "phrase", startMs: 4_500, endMs: 22_000,
+            text: "Before pause after transition Bob", confidence: nil, language: "en", words: words)] }
+        let diar = SegmentedTestDiarizationEngine()
+        diar.customSegments = [DiarizationSegment(id: "a1", speaker: "A", startMs: 0, endMs: 5_000, confidence: 0.9),
+                               DiarizationSegment(id: "a2", speaker: "A", startMs: 6_000, endMs: 15_000, confidence: 0.9),
+                               DiarizationSegment(id: "b", speaker: "B", startMs: 20_000, endMs: 25_000, confidence: 0.9)]
+        _ = try await process(asr: asr, diarization: diar)
+        let segments = try readTranscript().segments
+        XCTAssertEqual(segments.map(\.text), ["Before pause after", "transition", "Bob"])
+        XCTAssertEqual(segments.first?.words, Array(words.prefix(3)))
+        XCTAssertEqual(segments.dropFirst().first?.speakerId, "remote_unknown", "A gap at a change of voice has no unambiguous owner")
+    }
+
     private func unitVoice(_ index: Int) -> [Float] {
         var value = [Float](repeating: 0, count: 256); value[index] = 1; return value
     }
