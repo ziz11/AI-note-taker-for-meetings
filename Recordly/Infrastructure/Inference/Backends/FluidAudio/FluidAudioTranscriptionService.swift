@@ -57,7 +57,8 @@ final class FluidAudioTranscriber: FluidAudioTranscribing {
             return manager
         }
 
-        let models = try await AsrModels.load(from: modelDirectoryURL, configuration: nil, version: .v3)
+        // Provisioning belongs to the provider; inference loads exactly the validated v3 assets.
+        let models = try AsrModels.loadLocal(from: modelDirectoryURL, version: .v3, encoderPrecision: .int8)
         let manager = AsrManager(config: .default, models: models)
         cachedManager = manager
         cachedModelPath = modelPath

@@ -20,6 +20,63 @@ final class FluidAudioASREngineTests: XCTestCase {
         tempDirectory = nil
     }
 
+    @MainActor
+    func testProviderUsesSDKCacheFolderRatherThanRepositorySlug() throws {
+        _ = try createFluidModelDirectory(named: "parakeet-tdt-0.6b-v3-coreml")
+        let actualSDKCache = try createFluidModelDirectory(named: "parakeet-tdt-0.6b-v3")
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory })
+        XCTAssertEqual(try provider.resolveForRuntime().resolvingSymlinksInPath(), actualSDKCache.resolvingSymlinksInPath())
+        try FileManager.default.removeItem(at: actualSDKCache)
+        provider.refreshState()
+        XCTAssertEqual(provider.state, .needsDownload, "Repository slug decoy must not count as SDK-managed v3")
+    }
+
+    @MainActor
+    func testProviderResolvesCanonicalV3RatherThanFirstAlphabeticalModel() throws {
+        _ = try createFluidModelDirectory(named: "aaa-parakeet-ultra")
+        let v3 = try createFluidModelDirectory(named: "parakeet-tdt-0.6b-v3")
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory })
+        XCTAssertEqual(try provider.resolveForRuntime().resolvingSymlinksInPath(), v3.resolvingSymlinksInPath())
+    }
+
+    @MainActor
+    func testProviderRejectsUltraWhenV3IsMissing() throws {
+        _ = try createFluidModelDirectory(named: "parakeet-ultra-coreml")
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory })
+        XCTAssertEqual(provider.state, .needsDownload)
+        XCTAssertThrowsError(try provider.resolveForRuntime())
+    }
+
+    func testCacheFingerprintInvalidatesPreviousSDKResults() throws {
+        let model = try createFluidModelDirectory(named: "fingerprint")
+        let fingerprint = FluidAudioASREngine().cacheFingerprint(configuration: .init(modelURL: model))
+        XCTAssertTrue(fingerprint.contains("sdk:0.17.7"))
+        XCTAssertNotEqual(fingerprint, "\(model.standardizedFileURL.path)|backend:fluidaudio|v3")
+    }
+
+    @MainActor
+    func testProviderRejectsStagedWeightsInsideCompletedLookingV3Bundle() throws {
+        let directory = try createFluidModelDirectory(named: "parakeet-tdt-0.6b-v3")
+        let weights = directory.appendingPathComponent("Encoder.mlmodelc/weights")
+        try FileManager.default.createDirectory(at: weights, withIntermediateDirectories: true)
+        try Data("unfinished".utf8).write(to: weights.appendingPathComponent("weight.bin.partial"))
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory })
+        XCTAssertEqual(provider.state, .needsDownload)
+        XCTAssertThrowsError(try provider.resolveForRuntime())
+    }
+
+    func testModelValidatorRejectsEmptyCompiledMarker() throws {
+        let directory = try createFluidModelDirectory(named: "empty-compiled-marker")
+        try Data().write(to: directory.appendingPathComponent("Decoder.mlmodelc/coremldata.bin"))
+        XCTAssertFalse(FluidAudioModelValidator.isValidModelDirectory(directory))
+    }
+
+    func testModelValidatorRejectsInterruptedCompiledBundle() throws {
+        let directory = try createFluidModelDirectory(named: "interrupted-v3")
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("Encoder.mlmodelc/coremldata.bin"))
+        XCTAssertFalse(FluidAudioModelValidator.isValidModelDirectory(directory))
+    }
+
     func testModelValidatorAcceptsCompleteStagedDirectory() throws {
         let modelDirectory = try createFluidModelDirectory(named: "fluid-v3")
         XCTAssertTrue(FluidAudioModelValidator.isValidModelDirectory(modelDirectory))
@@ -478,6 +535,7 @@ final class FluidAudioASREngineTests: XCTestCase {
             let markerURL = directory.appendingPathComponent(marker)
             if marker.hasSuffix(".mlmodelc") {
                 try FileManager.default.createDirectory(at: markerURL, withIntermediateDirectories: true)
+                try Data("compiled-layout".utf8).write(to: markerURL.appendingPathComponent("coremldata.bin"))
             } else {
                 try Data("marker".utf8).write(to: markerURL)
             }

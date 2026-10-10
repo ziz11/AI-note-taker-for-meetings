@@ -43,9 +43,11 @@ final class FluidAudioASRModelProvider: ObservableObject, FluidAudioASRModelProv
     @Published private(set) var state: FluidAudioModelProvisioningState = .needsDownload
 
     private let fileManager: FileManager
+    private let modelsRoot: () -> URL?
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, modelsRoot: @escaping () -> URL? = AppPaths.fluidAudioSDKModelsDirectory) {
         self.fileManager = fileManager
+        self.modelsRoot = modelsRoot
         refreshState()
     }
 
@@ -107,18 +109,14 @@ final class FluidAudioASRModelProvider: ObservableObject, FluidAudioASRModelProv
     }
 
     private func resolveProvisionedModelDirectory() -> URL? {
-        guard let modelsRoot = AppPaths.fluidAudioSDKModelsDirectory() else {
+        guard let modelsRoot = self.modelsRoot() else {
             return nil
         }
 
-        let candidateDirectories = (try? fileManager.contentsOfDirectory(
-            at: modelsRoot,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        )) ?? []
-
-        return candidateDirectories
-            .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
-            .first(where: { FluidAudioModelValidator.isValidModelDirectory($0, fileManager: fileManager) })
+        // The SDK cache contains multiple ASR families with compatible-looking assets.
+        // Recordly selects v3 explicitly; discovery order must never select Ultra/Redux/v2.
+        let modelDirectory = modelsRoot.appendingPathComponent(FluidAudioRuntimeIdentity.asrCacheFolder, isDirectory: true)
+        return FluidAudioModelValidator.isValidModelDirectory(modelDirectory, fileManager: fileManager)
+            ? modelDirectory : nil
     }
 }

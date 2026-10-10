@@ -76,17 +76,16 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
 
     private var cachedManager: (any OfflineDiarizationManaging)?
     private let managerFactory: () -> any OfflineDiarizationManaging
-    private let fileManager: FileManager
     private let installedModelChecker: () -> Bool
 
     init(
         managerFactory: @escaping () -> any OfflineDiarizationManaging = makeDefaultFluidAudioDiarizationManager,
-        hasInstalledModelOnDisk: (() -> Bool)? = nil
+        hasInstalledModelOnDisk: (() -> Bool)? = nil,
+        modelsRoot: @escaping () -> URL? = AppPaths.fluidAudioSDKModelsDirectory
     ) {
         self.managerFactory = managerFactory
-        self.fileManager = .default
         self.installedModelChecker = hasInstalledModelOnDisk ?? {
-            Self.hasInstalledModelOnDisk(fileManager: .default)
+            Self.hasInstalledModelOnDisk(modelsRoot: modelsRoot())
         }
         refreshState()
     }
@@ -95,13 +94,13 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
     init(
         preparedManager: any OfflineDiarizationManaging,
         managerFactory: @escaping () -> any OfflineDiarizationManaging = makeDefaultFluidAudioDiarizationManager,
-        hasInstalledModelOnDisk: (() -> Bool)? = nil
+        hasInstalledModelOnDisk: (() -> Bool)? = nil,
+        modelsRoot: @escaping () -> URL? = AppPaths.fluidAudioSDKModelsDirectory
     ) {
         self.cachedManager = preparedManager
         self.managerFactory = managerFactory
-        self.fileManager = .default
         self.installedModelChecker = hasInstalledModelOnDisk ?? {
-            Self.hasInstalledModelOnDisk(fileManager: .default)
+            Self.hasInstalledModelOnDisk(modelsRoot: modelsRoot())
         }
         self.state = .ready
     }
@@ -172,18 +171,34 @@ final class FluidAudioDiarizationModelProvider: ObservableObject, FluidAudioDiar
         return .needsDownload
     }
 
-    private static func hasInstalledModelOnDisk(fileManager: FileManager) -> Bool {
-        guard let modelsRoot = AppPaths.fluidAudioSDKModelsDirectory() else {
+    private static func hasInstalledModelOnDisk(modelsRoot: URL?) -> Bool {
+        guard let modelsRoot else {
             return false
         }
 
-        let contents = (try? fileManager.contentsOfDirectory(
-            at: modelsRoot,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        )) ?? []
+        let directory = modelsRoot.appendingPathComponent(FluidAudioRuntimeIdentity.diarizationCacheFolder, isDirectory: true)
+        let bundles = ["Segmentation.mlmodelc", "FBank.mlmodelc", "Embedding.mlmodelc", "PldaRho.mlmodelc"]
+        guard bundles.allSatisfy({ name in
+            FluidAudioModelValidator.isValidCompiledModel(at: directory.appendingPathComponent(name))
+        }) else { return false }
 
-        return !contents.isEmpty
+        // Offline VBx requires PLDA psi alongside the four compiled models.
+        // An online-only install or an interrupted download must not report ready.
+        let parameters = directory.appendingPathComponent("plda-parameters.json")
+        guard let data = try? Data(contentsOf: parameters),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tensors = json["tensors"] as? [String: Any],
+              let psi = tensors["psi"] as? [String: Any],
+              let base64 = psi["data_base64"] as? String,
+              let decoded = Data(base64Encoded: base64, options: [.ignoreUnknownCharacters]),
+              !decoded.isEmpty,
+              decoded.count.isMultiple(of: MemoryLayout<Float>.size) else { return false }
+        return decoded.withUnsafeBytes { bytes in
+            (0..<(decoded.count / MemoryLayout<Float>.size)).allSatisfy { index in
+                let value = bytes.loadUnaligned(fromByteOffset: index * MemoryLayout<Float>.size, as: Float.self)
+                return value.isFinite && value > 0
+            }
+        }
     }
 }
 
