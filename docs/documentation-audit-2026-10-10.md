@@ -83,3 +83,7 @@ The documentation audit checks every local Markdown target, balanced backtick fe
 | [third-party/FluidAudio-0.17.7/NemoTextProcessing-THIRD-PARTY-LICENSES.md](../third-party/FluidAudio-0.17.7/NemoTextProcessing-THIRD-PARTY-LICENSES.md) | Preserved byte-for-byte; upstream license or verbatim archived source |
 | [third-party/FluidAudio-0.17.7/fastcluster-LICENSE.md](../third-party/FluidAudio-0.17.7/fastcluster-LICENSE.md) | Preserved byte-for-byte; upstream license or verbatim archived source |
 | [third-party/FluidAudio-0.17.7/vbx-LICENSE.md](../third-party/FluidAudio-0.17.7/vbx-LICENSE.md) | Preserved byte-for-byte; upstream license or verbatim archived source |
+
+## Speaker alignment follow-up
+
+After the 64-file documentation snapshot above, two Markdown references were added: [speaker transcript alignment](speaker-transcript-alignment.md) and [its standalone manifest](../releases/standalone-2026-10-10-speaker-alignment/README.md). Project status, recording verification, README/index, SDK verification/changelog and the previous release's notice were updated with the corrected mapping, native repeat/name evidence and fixed archive integrity. Historical test counts and old release artifacts remain labeled as historical; vendor notices are unchanged.

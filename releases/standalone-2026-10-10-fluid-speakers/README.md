@@ -1,6 +1,6 @@
 # Recordly standalone — FluidAudio and session speakers
 
-> Reviewed 2026-10-10. Current installed local release. The fixed binary/archive/tag are unchanged by later documentation updates; complete speaker accuracy remains unverified. See [current project status](../../docs/project-status.md).
+> Reviewed 2026-10-10. Previous local release; superseded by [speaker alignment](../standalone-2026-10-10-speaker-alignment/README.md). The fixed binary/archive/tag are unchanged by later documentation updates; complete speaker accuracy remains unverified. See [current project status](../../docs/project-status.md).
 
 [Download the standalone app](Recordly-0beaacb-local.zip).
 

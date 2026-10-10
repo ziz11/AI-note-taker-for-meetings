@@ -13,8 +13,9 @@ Reviewed **2026-10-10**. [Project status](project-status.md) is the current deli
 - [ASR migration status](asr-migration-status.md) — delivered migration and actual remaining limits.
 - [SDK changelog](fluidaudio-upgrade-changelog.md) — pinned 0.14.0 → 0.17.7 upstream changes; enabled versus available features.
 - [SDK/speaker verification](fluid-speaker-verification.md) — matching constraints and native acceptance evidence.
+- [Transcript speaker alignment](speaker-transcript-alignment.md) — fragmented-turn mapping, timed speaker changes and shared boundary continuity.
 - [Requested recording verification](recording-7C943EA0-verification.md) — in-place repeats, saved-name probe, audio integrity and partial continuity.
-- [Latest standalone](../releases/standalone-2026-10-10-fluid-speakers/README.md) — installed local release, source and fixed archive checksum.
+- [Latest standalone](../releases/standalone-2026-10-10-speaker-alignment/README.md) — installed local release, source and fixed archive checksum.
 - [Third-party notices](../THIRD_PARTY_LICENSES.md) — licensed runtime dependencies.
 
 ## Delivered feature reports with historical measurements

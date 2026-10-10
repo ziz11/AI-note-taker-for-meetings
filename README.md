@@ -8,7 +8,7 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 
 See [project status](docs/project-status.md) for delivery, validation and open work, and the [Markdown audit](docs/documentation-audit-2026-10-10.md) for historical-document status.
 
-`develop` and `master` contain the delivered code; the latest standalone is installed in Applications. Session speaker matching is **partial**, not a guarantee that every participant has one ID. Reprocessing the requested recording preserved all 87 segments and existing mappings; 15 of 35 remote transcript segments use session voice IDs. [Recording verification](docs/recording-7C943EA0-verification.md).
+`develop` and `master` contain the delivered code; the latest standalone is installed in Applications. Session speaker matching is **partial**, not a guarantee that every participant has one ID. The speaker-alignment correction preserved every cached token/time and established voice ID; 94.35% of remote tokens now have session IDs. All 143 resulting segments and identities are stable on repeat; four original problem windows remain unresolved. [Recording verification](docs/recording-7C943EA0-verification.md).
 
 - New live recordings use compact segmented AAC storage, recovery reconciliation, native timeline playback, and explicit combined export. Existing single-file recordings remain supported.
 - Import-audio flow is supported.
@@ -93,7 +93,7 @@ requirement must be certificate-backed rather than CDHash-only.
 
 ### Packaging
 
-Latest verified local build: [FluidAudio 0.17.7 and session speakers standalone](releases/standalone-2026-10-10-fluid-speakers/README.md).
+Latest verified local build: [Speaker alignment standalone](releases/standalone-2026-10-10-speaker-alignment/README.md).
 
 Build a locally signed Release app and ZIP without opening Xcode:
 

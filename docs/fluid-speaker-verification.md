@@ -43,7 +43,7 @@ These measurements establish that the exact SDK runs on this Mac, that voice evi
 
 No real audio or voice-vector fixture is committed to the repository. Optional native-evidence acceptance uses a local temporary JSON path.
 
-## Session matching and standalone delivery
+## Initial session matching and standalone delivery (superseded coverage)
 
 Session matching source: `cf8edc3`, with a subsequent default-root provisioning fix. The final full source suite ran **362 tests, 0 failures, 3 skips**. Skips are one pre-existing optional check and two opt-in native checks without local fixture environment variables. Independent spec and quality reviews approved the code. Regressions first exposed stale rebuild aliases, padding-only continuity counts, renames during both final publication callbacks and missing fresh-install artifact paths; all were fixed.
 
@@ -69,10 +69,14 @@ The ZIP is **23,927,266 bytes**, SHA-256 `b697238a613444adb002ceb32d38f565161cca
 
 The previous standalone release remains tracked for rollback. User recordings and voice-vector measurements are not included in either archive.
 
-## Original recording processed in place
+## Initial original recording processed in place (superseded coverage)
 
 The subsequent [original-recording verification](recording-7C943EA0-verification.md) used the current workflow/composition and installed user models. Two passes preserved all 87 full transcript segment objects and all identities/aliases. Three profiles were reused in 19, 7 and 2 distinct windows. Of 35 system-channel segments, 15 have session voice IDs and 20 remain local/unknown; this remains **partiallyMatched**, not verified full meeting-wide identity accuracy.
 
 No custom names existed before processing. On a separate copy, an assigned name survived for all 11 segments of the selected speaker and in JSON/TXT/SRT. All 48 original AAC hashes were unchanged. The installed standalone was reopened; transcript and identity files remained byte-identical. One additional native acceptance test and an independent artifact audit passed. GUI permission was unavailable, so processing was invoked through a temporary test harness rather than a button in the installed binary.
 
 Observed in-place timings: 235.56 seconds first pass, 53.54 seconds repeat, 53.40 seconds copy rename probe. These differ from the isolated copied-recording timings above and must not be presented as the same benchmark. App-hosted launch recovery can overlap work; no controlled full-app speed claim follows from these numbers.
+
+## Transcript alignment follow-up
+
+Source `5268b03` corrects the fragmented-turn/whole-phrase mapping issue and links one short shared-audio boundary turn. The SDK and embedding gates above are unchanged. Full suite: **368 tests, 0 failures, 3 optional skips**. Final original-recording/repeat/name-copy acceptance and an independent artifact audit passed. **4,193/4,444 remote tokens (94.35%)** now have session voice IDs; all cached tokens/times, established voice IDs and 48 audio hashes remain unchanged. All 143 complete output segments and identities are stable on repeat, with the copied test name preserved in 23 segments. Four original problem windows remain without reliable global assignment. See [current recording verification](recording-7C943EA0-verification.md), [alignment policy](speaker-transcript-alignment.md), and [latest standalone](../releases/standalone-2026-10-10-speaker-alignment/README.md).

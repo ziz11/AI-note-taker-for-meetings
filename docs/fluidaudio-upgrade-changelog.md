@@ -58,3 +58,7 @@ The eight-speaker limit belongs to the new **streaming Nemotron diarizer**, not 
 ## Acceptance and delivery
 
 Recordly's verification report records the exact test counts, native model run, measured standalone size and source revision. Upstream benchmark numbers are not local acceptance results. The previous standalone archive remains available for rollback; models and recordings live outside the application bundle.
+
+## Recordly alignment follow-up — 2026-10-10
+
+The SDK remains pinned to 0.17.7. Application source `5268b03` fixes whole-phrase speaker assignment, unions fragmented turns, splits timed text at voice changes, and links confirmed shared-audio boundary speech without relaxing embedding thresholds. Current native evidence reaches 94.35% remote token attribution and preserves repeat IDs, names and audio. See [alignment analysis](speaker-transcript-alignment.md) and [recording verification](recording-7C943EA0-verification.md). This is an application mapping fix, not an upstream SDK update.
