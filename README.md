@@ -83,6 +83,8 @@ requirement must be certificate-backed rather than CDHash-only.
 
 ### Packaging
 
+Latest verified local build: [FluidAudio 0.17.7 and session speakers standalone](releases/standalone-2026-10-10-fluid-speakers/README.md).
+
 Build a locally signed Release app and ZIP without opening Xcode:
 
 ```bash

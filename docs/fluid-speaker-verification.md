@@ -59,4 +59,10 @@ The processed copy used **82,502,175 logical bytes / 83,177,472 allocated bytes*
 
 For the installed v3 package, the missing verified `JointDecisionv3.mlmodelc` was added; SHA-256 confirmed all **23 previously installed files** unchanged. The fresh-install adapter also resolves the SDK default directory before the first download, so loaded voice evidence has an artifact path without restarting.
 
-Signed artifact details are added below after verification.
+## Signed standalone artifact
+
+The signed Release source is `0beaacb04eb2f00984155f07fc96ec9472d3b4cf`. [The release manifest](../releases/standalone-2026-10-10-fluid-speakers/README.md) records the archive and SHA-256. Both the built and extracted app passed `codesign --verify --deep --strict` using `Recordly Local Development`; the designated requirement is certificate-backed. The app includes the FluidAudio resource bundle and exact upstream dependency notices, and its dynamic dependencies are system libraries/frameworks.
+
+The ZIP is **23,927,266 bytes**, SHA-256 `b697238a613444adb002ceb32d38f565161cca629bbd5039d7c411251f44edba`; the app is **53,462,686 logical bytes**. Compared with the previous 6,187,339-byte ZIP, this is a material increase from the new SDK/default NeMo static dependency. Default normalization was retained rather than silently disabled. The bundle contains arm64 and x86_64 architectures; native inference acceptance was on Apple Silicon, and macOS 15 remains the app minimum. Running the app requires no Xcode.
+
+The previous standalone release remains tracked for rollback. User recordings and voice-vector measurements are not included in either archive.
