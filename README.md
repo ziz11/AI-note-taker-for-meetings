@@ -12,7 +12,7 @@ Recordly is a local-first macOS app for call capture with session-based storage 
   - users select the active model per task
   - provider/runtime grouping stays explicit
 - Inference architecture is backend-agnostic and stage-driven (`contracts -> runtime profile -> selector/factory -> backend modules`).
-- ASR inference is FluidAudio-only in this branch. `FluidAudioASREngine` uses the FluidAudio SDK (v3, CoreML-based) through thin backend-local adapters.
+- ASR inference is FluidAudio-only in this branch. `FluidAudioASREngine` uses the FluidAudio SDK 0.17.7 (Parakeet v3, Core ML) through thin backend-local adapters.
 - ASR model provisioning is SDK-managed via `FluidAudioASRModelProvider`. Models are downloaded and cached by the SDK, not picked from local `.bin` files.
 - Legacy ASR preference keys (`selectedASRBackend`, `selectedASRLanguage`) are preserved for migration compatibility only and do not affect active runtime language/backend behavior.
 - Default diarization inference is FluidAudio-based via `FluidAudioDiarizationEngine`, with degraded fallback when model/output is unavailable.
@@ -25,7 +25,7 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 - If the FluidAudio diarization package is missing, transcription can still run, but remote speaker labeling degrades.
 - V2 processing shows separate transcription/diarization window counters, explicit failures/skips/cache reuse, and monotonic overall progress.
 - Successful microphone or system windows survive failure of the other track. Failed ranges and missing audio are recorded as degradation. Cancellation remains cancellation.
-- Segmented inference owns 50-second intervals with up to 5 seconds of context on each side. Each temporary PCM input is at most 60 seconds. Window caches resume successful stages and validate provenance. Remote speaker continuity across windows is explicitly unresolved; local speaker renames persist independently of raw backend labels.
+- Segmented inference owns 50-second intervals with up to 5 seconds of context on each side. Each temporary PCM input is at most 60 seconds. Window caches resume successful stages and validate provenance. Compatible voice evidence matches returning remote speakers across windows of one recording and preserves their names. Short, overlapping or ambiguous evidence remains explicitly window-local. See [speaker verification](docs/fluid-speaker-verification.md).
 - Transcript rendering falls back to segment text when backend token timings look syllabified or subword-like.
 - Persisted transcript/srt/json artifacts and recovery flow remain unchanged.
 - Transcription flows are recoverable; completed window work is reused when provenance matches.
@@ -137,6 +137,7 @@ See [Audio Pipeline V2 verification report](docs/audio-pipeline-v2-report.md) fo
 - `docs/README.md` — index of current reference docs vs historical notes
 - `ARCHITECTURE.md` — file tree, inference architecture, orchestration boundaries
 - `AGENTS.md` — agent rules, ownership boundaries, change routing, extension checklists
+- [`docs/fluidaudio-upgrade-changelog.md`](docs/fluidaudio-upgrade-changelog.md) — upstream 0.14.0 → 0.17.7 changes and enabled features
 - `docs/model-integration.md` — model resolution, local model policy, runtime selection details
 - `docs/inference-context.md` — compact canonical inference context for backend changes and agent prompts
 - `docs/prompts/2026-03-11-model-settings-screen-redesign.md` — current Models settings redesign brief

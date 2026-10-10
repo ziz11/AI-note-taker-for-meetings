@@ -1,8 +1,24 @@
 import XCTest
 @testable import Recordly
 
+#if arch(arm64) && canImport(FluidAudio)
+import FluidAudio
+#endif
+
 @MainActor
 final class FluidAudioDiarizationModelProviderTests: XCTestCase {
+    func testFreshInstallAdapterResolvesSDKDefaultArtifactBeforeDownloading() throws {
+#if arch(arm64) && canImport(FluidAudio)
+        let adapter = FluidAudioOfflineDiarizationManagerAdapter(modelsRoot: nil)
+        let expected = OfflineDiarizerModels.defaultModelsDirectory()
+            .appendingPathComponent(FluidAudioRuntimeIdentity.diarizationCacheFolder, isDirectory: true)
+        XCTAssertEqual(adapter.modelDirectoryURL?.standardizedFileURL, expected.standardizedFileURL,
+            "Fresh provisioning needs the eventual loaded artifact path without an app restart")
+#else
+        throw XCTSkip("FluidAudio default model discovery requires Apple Silicon.")
+#endif
+    }
+
     func testUnrelatedModelDirectoryDoesNotClaimOfflineDiarizationReady() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

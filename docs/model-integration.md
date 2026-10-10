@@ -12,9 +12,9 @@ Model management and inference runtime are split by responsibility:
 
 Concrete backend modules:
 
-- ASR: `FluidAudioASREngine` (FluidAudio SDK v3, CoreML-based)
+- ASR: `FluidAudioASREngine` (FluidAudio 0.17.7, Parakeet v3, Core ML)
 - Diarization: `FluidAudioDiarizationEngine` (default local path), `CliDiarizationEngine` retained for legacy runtime routing
-- Summarization: `LlamaCppSummarizationEngine` (`llama-cli`)
+- Summarization: disabled placeholder; retained backend code is not invoked by the workflow.
 
 The active ASR stack in this branch is FluidAudio-only. Whisper / `whisper.cpp` local `.bin` selection is no longer part of the runtime ASR flow.
 `ASRLanguage` is no longer part of active ASR runtime contracts; the runtime profile carries only model URL/backend data for ASR execution.
@@ -33,7 +33,7 @@ Default stage mapping is composed in `DefaultInferenceComposition`:
 - `audioCapture -> nativeCapture`
 - `asr -> fluidAudio`
 - `diarization -> fluidAudio`
-- `summarization -> llamaCpp`
+- `summarization -> disabled`
 - `vad -> disabled`
 
 ## ASR model provisioning (FluidAudio)
@@ -42,7 +42,7 @@ ASR model management is SDK-managed, not local-file based:
 
 - `FluidAudioASRModelProvider` resolves provisioned models from `~/Library/Application Support/FluidAudio/Models/<version>/`.
 - Models are downloaded via `AsrModels.downloadAndLoad(version: .v3)` which handles caching internally.
-- A valid model directory contains: `parakeet_vocab.json`, `Preprocessor.mlmodelc`, `Encoder.mlmodelc`, `Decoder.mlmodelc`, `JointDecision.mlmodelc`.
+- A valid model directory contains: `parakeet_vocab.json`, `Preprocessor.mlmodelc`, `Encoder.mlmodelc`, `Decoder.mlmodelc`, `JointDecisionv3.mlmodelc`.
 - `FluidAudioModelValidator` validates model directories before use.
 - Missing ASR model is a hard block for transcription.
 
@@ -52,7 +52,7 @@ ASR model management is SDK-managed, not local-file based:
 - Summarization: selected model IDs are persisted by model kind. Runtime profile selector reads local selection via `ModelManager`.
 - Diarization: runtime profile selection only checks provider readiness; runtime engine creation is delegated to `DefaultInferenceEngineFactory` with `FluidAudioDiarizationModelProvider`.
 - Missing FluidAudio diarization package degrades speaker labeling rather than blocking transcription; runtime availability reports `.degradedNoDiarization` and workflow can continue.
-- Missing summarization model triggers fallback summary generation.
+- Summarization controls are placeholders; no summary runtime or fallback generation is invoked.
 
 Compatibility note:
 
@@ -80,14 +80,12 @@ Legacy diarization `.bin` selections are not auto-converted and degrade cleanly 
 
 ## Summarization runtime
 
-Select a compatible GGUF and save the absolute `llama-cli` executable path in Models settings (`model.summarization.llamaExecutablePath`). Selection retains the exact picked artifact URL even when discovery contains duplicate basenames. Missing selected files remain visible and distinct from no selection/no installed models. Bundled registry discovery supports the resource directory layout.
-
-The runner invokes the configured executable directly with a single turn and EOF input, bounded output, timeout and process cancellation. It does not depend on Finder inheriting Homebrew or shell PATH. The workflow writes a template fallback with the actual reason; cancellation is propagated.
-
-An existing MLX backend remains available through selector/factory for MLX directories containing `config.json`, tokenizer data and a monolithic `model.safetensors`. It requires an external Python/`mlx_lm.generate` environment. Sharded weights, explicit Python runtime packaging and bounded prompt/context handling remain limitations. This change retains llama.cpp as the chosen standalone runtime and adds no redundant MLX provider.
+Summarization is disabled in `DefaultInferenceComposition` and the workflow. Buttons preserve the recording and do not invoke llama.cpp or MLX. The transcript tab is selected by default. Historical model preferences and backend types remain for compatibility, not as an active generation path.
 
 ## ASR audio boundary policy
 
 New live recordings use durable segmented AAC and short semantic inference-window CAFs (at most 60 seconds). FluidAudio adapters prepare SDK PCM from these windows. Storage boundaries do not reset the transcript timeline. Legacy single-file CAF/FLAC/M4A inputs continue through existing adapters.
 
 See `audio-pipeline-v2-report.md` for acceptance evidence and unverified real-model cases.
+
+See [FluidAudio upgrade changelog](fluidaudio-upgrade-changelog.md) for upstream changes and enabled model choices.

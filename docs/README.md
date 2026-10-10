@@ -10,6 +10,8 @@ This index separates current reference docs from archival notes so the repo's Ma
 - [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — project structure, ownership boundaries, and inference architecture.
 - [`../AGENTS.md`](../AGENTS.md) — mandatory change-routing and ownership rules for future agents.
 - [`inference-context.md`](inference-context.md) — compact canonical inference context for backend, routing, and audio-boundary changes.
+- [`fluidaudio-upgrade-changelog.md`](fluidaudio-upgrade-changelog.md) — official SDK release changes and Recordly feature selection.
+- [`fluid-speaker-verification.md`](fluid-speaker-verification.md) — SDK migration, session speaker matching and native acceptance evidence.
 - [`model-integration.md`](model-integration.md) — model provisioning, runtime selection, and local-model policy.
 - [`asr-migration-status.md`](asr-migration-status.md) — ASR migration status plus remaining limitations.
 - [`prompts/2026-03-11-model-settings-screen-redesign.md`](prompts/2026-03-11-model-settings-screen-redesign.md) — active Models settings UX brief.

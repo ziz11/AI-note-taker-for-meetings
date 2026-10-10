@@ -111,7 +111,7 @@ New live sessions persist a v2 `audio-manifest.json` and independent AAC chunks 
 
 Native compositions play the logical timeline; full mixed M4A is explicit export only. Old CAF/M4A and imported-file sessions retain the legacy path. Transcript/SRT/summary locations remain compatible.
 
-Remote speaker labels are local to an inference run and window. Names persist against stable local identity evidence, while multi-window continuity is explicitly unresolved. See `audio-pipeline-v2-report.md`.
+Backend speaker labels are local to an inference run and window. Model-scoped 256-dimensional voice observations allow the segmented identity store to match returning remote speakers within a recording. Matching requires enough exclusive owned speech, similarity and a runner-up margin, with one-to-one local-group constraints. Insufficient or ambiguous evidence stays window-local. Reprocessing rebuilds aliases from current evidence and retains compatible named anchors; exact-turn local names remain stored. SDK/model changes invalidate incompatible evidence, so old local names are not automatically attached to new voice profiles. See `fluid-speaker-verification.md` and `fluidaudio-upgrade-changelog.md`.
 
 ## Current behavior to preserve
 

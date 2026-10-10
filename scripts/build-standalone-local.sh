@@ -24,8 +24,15 @@ mkdir -p "$TASK_OUTPUT"
 xcodebuild build -project "$TASK_ROOT/Recordly.xcodeproj" -scheme Recordly \
   -configuration Release -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath "$TASK_OUTPUT" -clonedSourcePackagesDirPath "$TASK_PACKAGES" \
+  -packageAuthorizationProvider netrc \
   CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$TASK_IDENTITY" DEVELOPMENT_TEAM=''
 TASK_APP="$TASK_OUTPUT/Build/Products/Release/Recordly.app"
+cp "$TASK_ROOT/THIRD_PARTY_LICENSES.md" "$TASK_APP/Contents/Resources/THIRD_PARTY_LICENSES.md"
+mkdir -p "$TASK_APP/Contents/Resources/ThirdPartyLicenses"
+cp -R "$TASK_ROOT/third-party/FluidAudio-0.17.7" "$TASK_APP/Contents/Resources/ThirdPartyLicenses/"
+# Seal the added notices while preserving the build's signing metadata.
+codesign --force --sign "$TASK_IDENTITY" \
+  --preserve-metadata=identifier,entitlements,requirements,flags,runtime "$TASK_APP"
 codesign --verify --deep --strict "$TASK_APP"
 TASK_REVISION="$(git -C "$TASK_ROOT" rev-parse --short HEAD)"
 TASK_ARCHIVE="$TASK_OUTPUT/Recordly-$TASK_REVISION-local.zip"

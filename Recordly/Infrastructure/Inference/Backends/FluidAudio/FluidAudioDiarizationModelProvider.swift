@@ -38,8 +38,9 @@ final class FluidAudioOfflineDiarizationManagerAdapter: OfflineDiarizationManagi
     private var loadedArtifactFingerprint: String?
 
     init(modelsRoot: URL? = AppPaths.fluidAudioSDKModelsDirectory()) {
-        self.modelsRoot = modelsRoot
-        self.modelDirectoryURL = modelsRoot?.appendingPathComponent(FluidAudioRuntimeIdentity.diarizationCacheFolder, isDirectory: true)
+        let resolvedModelsRoot = modelsRoot ?? OfflineDiarizerModels.defaultModelsDirectory()
+        self.modelsRoot = resolvedModelsRoot
+        self.modelDirectoryURL = resolvedModelsRoot.appendingPathComponent(FluidAudioRuntimeIdentity.diarizationCacheFolder, isDirectory: true)
         var config = OfflineDiarizerConfig.default
         config.exposeChunkEmbeddings = true
         self.manager = OfflineDiarizerManager(config: config)

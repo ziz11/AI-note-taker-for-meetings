@@ -1,5 +1,7 @@
 # Audio Pipeline V2 delivery and verification
 
+SDK and speaker follow-up: [FluidAudio upgrade and session speaker verification](fluid-speaker-verification.md) supersedes the baseline runtime/speaker limitations below. The original delivery measurements remain historical evidence.
+
 Feature branch: `feature/audio_pipeline_v2`.
 Base develop: `59a0b28856b222638d0ed0aada6e63df615b9aec` (matched origin/develop when prepared).
 The final branch SHA is available with `git rev-parse HEAD` and in the delivery message; develop is not merged or rewritten.

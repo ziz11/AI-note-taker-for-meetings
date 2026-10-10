@@ -171,7 +171,7 @@ capture buffers + shared host-clock origin
 
 `SessionAudioStore` reconciles the versioned manifest with trustworthy chunk sidecars. Timeline offsets, valid frames and gaps remain independent of AAC decoder durations. `SessionAudioComposition` provides native playback and explicit combined export. Legacy CAF/M4A adapters remain available.
 
-`SegmentedTranscriptionPipeline` owns window orchestration through existing engine contracts. `WindowInferenceCache` validates audio, model and configuration provenance. `SessionSpeakerIdentityStore` separates persisted display names from inference-run aliases; continuity across windows remains unresolved. See `docs/audio-pipeline-v2-report.md` for limits.
+`SegmentedTranscriptionPipeline` owns window orchestration through existing engine contracts. `WindowInferenceCache` validates audio, model and configuration provenance. `SessionSpeakerIdentityStore` separates persisted display names from inference-run aliases and matches model-scoped voice evidence across windows of one recording. It rebuilds aliases from current evidence, retains compatible named anchors, and keeps ambiguous or insufficient groups window-local. Only bounded exclusive speech contributes to profiles; no cross-recording voice database is created. See `docs/fluid-speaker-verification.md` for verification and limits.
 
 Summarization resolves the selected artifact and saved absolute executable path through the selector/factory. Readiness distinguishes absent selection/models, invalid artifacts and unusable runtime. The workflow preserves the reason when writing a template fallback and propagates cancellation.
 
