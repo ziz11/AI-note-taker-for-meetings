@@ -1,5 +1,7 @@
 # Audio Pipeline V2 design
 
+> Reviewed 2026-10-10. Historical plan/requirements. V2 A/B implemented and integrated into develop/master. Speaker continuity is now partial, not universally resolved. Original milestone C generation was subsequently disabled by user direction; hardware/long-session acceptance remains open. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 Approved requirements: `2026-10-09-audio-pipeline-v2-request.md`. Base develop: 59a0b28856b222638d0ed0aada6e63df615b9aec.
 
 ## Existing flow

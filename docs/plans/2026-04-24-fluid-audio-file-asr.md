@@ -1,5 +1,7 @@
 # FluidAudio File ASR Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. File/audio-boundary migration delivered; V2 feeds bounded CAF windows and the active SDK is 0.17.7. Original SDK/code examples are historical. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Move Recordly's FluidAudio ASR path from Recordly-owned manual VAD/30s buffer chunking to FluidAudio's native file/batch transcription path so the SDK owns long-audio chunking, disk-backed processing, model-specific decoding, and progress behavior.

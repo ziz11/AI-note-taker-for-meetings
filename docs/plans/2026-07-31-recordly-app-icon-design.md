@@ -1,5 +1,7 @@
 # Recordly App Icon Design
 
+> Reviewed 2026-10-10. Historical plan/requirements. App-icon implementation and generator are present in the delivered build. This is a historical design/implementation record. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 ## Goal
 
 Replace the current glassy recording-button icon with a quiet, minimal macOS app

@@ -1,8 +1,14 @@
 # Recordly
 
+> Reviewed 2026-10-10. Current reference. Evidence and open acceptance limits are tracked centrally. See [current project status](docs/project-status.md).
+
 Recordly is a local-first macOS app for call capture with session-based storage and deterministic on-device post-processing.
 
-## Current status (October 2026)
+## Current status (2026-10-10)
+
+See [project status](docs/project-status.md) for delivery, validation and open work, and the [Markdown audit](docs/documentation-audit-2026-10-10.md) for historical-document status.
+
+`develop` and `master` contain the delivered code; the latest standalone is installed in Applications. Session speaker matching is **partial**, not a guarantee that every participant has one ID. Reprocessing the requested recording preserved all 87 segments and existing mappings; 15 of 35 remote transcript segments use session voice IDs. [Recording verification](docs/recording-7C943EA0-verification.md).
 
 - New live recordings use compact segmented AAC storage, recovery reconciliation, native timeline playback, and explicit combined export. Existing single-file recordings remain supported.
 - Import-audio flow is supported.
@@ -31,6 +37,10 @@ Recordly is a local-first macOS app for call capture with session-based storage 
 - Transcription flows are recoverable; completed window work is reused when provenance matches.
 
 ## Prerequisites
+
+- **Runtime:** macOS 15+; native speech inference is verified on Apple Silicon (M3 Pro). A universal executable does not establish Intel speech-runtime support.
+
+- **Runtime:** macOS 15+; native speech inference is verified on Apple Silicon (M3 Pro). A universal executable does not establish Intel speech-runtime support.
 
 - **Summarization:** temporarily disabled; it needs no model or executable configuration.
 - **Local Debug signing identity** (for Xcode Run): create the repository's persistent self-signed `Recordly Local Development` identity as described below. No Apple Developer account is required.
@@ -99,8 +109,7 @@ The script uses the persistent `Recordly Local Development` identity and require
 1. Build and run app.
 2. Open `Models` (top-right toolbar button).
 3. Download the FluidAudio v3 model (one-time, SDK-managed).
-4. Optionally select local model files for:
-   - `Speaker Separation Model` (optional, improves remote speaker labeling)
+4. Provision the FluidAudio Speaker Separation package in Models (optional; without it, remote labels degrade). The active diarizer is SDK-managed, not a user-picked `.bin`.
 5. Start live-recording or imported-audio transcription. Summary generation is disabled.
 
 Legacy model discovery locations remain supported for compatibility. Summary model discovery does not enable generation:
@@ -118,8 +127,8 @@ Legacy diarization `.bin` selections are not auto-migrated and degrade cleanly.
 - Sessions:
   - `~/Library/Application Support/Recordly/recordings/<session-id>/`
 - FluidAudio models (SDK-managed):
-  - `~/Library/Application Support/FluidAudio/Models/<version>/`
-- Local models (diarization, summarization):
+  - `~/Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v3/` and `~/Library/Application Support/FluidAudio/Models/speaker-diarization/`
+- Legacy/local model discovery (not the active SDK diarization cache; summaries remain disabled):
   - `~/Library/Application Support/Recordly/Models/<kind>/<model-id>/`
 
 ## Audio format decisions
@@ -144,7 +153,7 @@ See [Audio Pipeline V2 verification report](docs/audio-pipeline-v2-report.md) fo
 - `docs/inference-context.md` — compact canonical inference context for backend changes and agent prompts
 - `docs/prompts/2026-03-11-model-settings-screen-redesign.md` — current Models settings redesign brief
 - `docs/research/diarization-options.md` — diarization backend research (FluidAudio, sherpa-onnx, etc.)
-- `docs/plans/` — completed implementation plans (historical)
+- `docs/plans/` — dated plans with reviewed delivery/supersession notices; unverified acceptance is not marked complete
 
 ## Acknowledgments
 

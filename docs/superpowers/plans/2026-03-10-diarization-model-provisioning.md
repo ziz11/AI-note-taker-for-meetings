@@ -1,5 +1,7 @@
 # Diarization Model Provisioning Migration — Implementation Plan
 
+> Reviewed 2026-10-10. Historical spec/plan. Capability-specific ASR/diarization provisioning is delivered and upgraded to exact SDK 0.17.7 readiness; ModelManager retains legacy/summary compatibility only. Original checkboxes and examples are preserved as history. See [current project status](../../project-status.md).
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Create a separate `FluidAudioDiarizationModelProvider` that owns the `OfflineDiarizerManager` lifecycle, rename the existing provider to ASR-specific, remove diarization responsibility from `ModelManager`, and update all consumers.

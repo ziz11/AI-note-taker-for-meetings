@@ -1,5 +1,7 @@
 # Native Open-Source Speaker Diarization Options for a macOS App Without Python
 
+> Reviewed 2026-10-10. Historical research snapshot from 2026-03-07, not a new comparison of current alternative SDK releases. Recordly now ships FluidAudio 0.17.7 with offline Core ML diarization and conservative session matching. See [current project status](../project-status.md).
+
 ## Executive Summary
 
 This report compares modern speaker-diarization options for integration into a macOS application that should stay local-first and avoid a Python runtime in production.
@@ -191,3 +193,9 @@ For Recordly's current architecture and product direction:
 - choose `sherpa-onnx` first for a C/C++-centric or cross-language spike
 - keep all backend-specific format adaptation at the backend boundary
 - preserve the stage-driven, backend-agnostic orchestration model
+
+## Recordly decision and validation as of 2026-10-10
+
+The shipped implementation keeps Parakeet v3 ASR and FluidAudio offline Core ML diarization. Parakeet describes a model family; Core ML/MLX describe execution technologies, and using Parakeet does not itself imply MLX. This Recordly build uses Core ML through FluidAudio on Apple Silicon. Upstream Ultra/Redux availability is documented in the [pinned SDK changelog](../fluidaudio-upgrade-changelog.md); they have not replaced v3.
+
+Separate voice embeddings enable conservative session matching. The requested recording produced repeatable IDs/names, but only 15 of 35 system-channel transcript segments have session voice IDs. The remaining 20 are local/unknown. Prioritize annotated meeting-wide diarization evaluation over replacing the ASR model without a comparison. Alternative-provider descriptions above retain their original research date and were not re-benchmarked during this documentation update.

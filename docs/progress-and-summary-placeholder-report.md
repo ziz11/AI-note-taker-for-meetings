@@ -1,6 +1,8 @@
 # Transcription progress and summary placeholders
 
-Branch: `feature/audio_pipeline_v2`. Application changes build on `524551f`; develop/master remain at `59a0b28`.
+> Reviewed 2026-10-10. Delivered feature report. Original stage-specific measurements/test counts below are historical evidence; the feature is included in the current installed standalone. See [current project status](project-status.md).
+
+Implementation originated on `feature/audio_pipeline_v2` after `524551f`. It is now included in the delivered `develop`/`master` runtime and the installed FluidAudio 0.17.7 standalone. The verification counts below belong to this earlier implementation stage; the latest full suite is 362 tests, 0 failures, 3 skips. See [project status](project-status.md).
 
 ## Result
 

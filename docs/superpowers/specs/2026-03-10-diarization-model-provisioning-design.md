@@ -1,5 +1,7 @@
 # Diarization Model Provisioning Migration
 
+> Reviewed 2026-10-10. Historical spec/plan. Capability-specific ASR/diarization provisioning is delivered and upgraded to exact SDK 0.17.7 readiness; ModelManager retains legacy/summary compatibility only. Original checkboxes and examples are preserved as history. See [current project status](../../project-status.md).
+
 **Date:** 2026-03-10
 **Status:** Approved
 **Scope:** Separate capability-specific model provisioning for ASR and diarization; remove legacy diarization `.bin` discovery

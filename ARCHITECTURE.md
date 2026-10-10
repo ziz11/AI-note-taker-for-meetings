@@ -1,5 +1,7 @@
 # Recordly Architecture
 
+> Reviewed 2026-10-10. Current reference. Evidence and open acceptance limits are tracked centrally. See [current project status](docs/project-status.md).
+
 ## Structure
 
 ```text
@@ -34,8 +36,12 @@ Recordly/
   Infrastructure/
     Capture/
       AudioCaptureService.swift
-      SessionMergeService.swift
-      DirectPCMMixService.swift
+      SessionMergeService.swift (legacy single-file path)
+      DirectPCMMixService.swift (legacy path)
+      SegmentedTrackWriter.swift
+      SessionAudioManifest.swift
+      CaptureFinalizationCoordinator.swift
+      CaptureSamplePipeline.swift
     Inference/
       Contracts/
         InferenceStageContracts.swift
@@ -49,6 +55,8 @@ Recordly/
         DefaultInferenceComposition.swift
       Audio/
         AudioInput.swift
+        SessionAudioRangeReader.swift
+        SessionAudioComposition.swift
       Backends/
         FluidAudio/
           FluidAudioASREngine.swift
@@ -66,7 +74,11 @@ Recordly/
       TranscriptionPipeline.swift
       TranscriptMergeService.swift
       TranscriptRenderService.swift
-      SystemSpeakerMappingService.swift
+      SystemSpeakerMappingService.swift (legacy)
+      Segmented/
+        InferenceWindowPlan.swift
+        SegmentedTranscriptionPipeline.swift
+        WindowInferencePersistence.swift
       Models/
         ASRDocument.swift
         DiarizationDocument.swift
@@ -166,14 +178,14 @@ capture buffers + shared host-clock origin
   -> finalized sidecar / published file / atomic manifest
   -> SessionAudioRangeReader (bounded semantic windows)
   -> ASR / optional diarization / cached stage results
-  -> timeline events / local speaker identities / transcript
+  -> timeline events / session voice identities or local fallbacks / transcript
 ```
 
 `SessionAudioStore` reconciles the versioned manifest with trustworthy chunk sidecars. Timeline offsets, valid frames and gaps remain independent of AAC decoder durations. `SessionAudioComposition` provides native playback and explicit combined export. Legacy CAF/M4A adapters remain available.
 
 `SegmentedTranscriptionPipeline` owns window orchestration through existing engine contracts. `WindowInferenceCache` validates audio, model and configuration provenance. `SessionSpeakerIdentityStore` separates persisted display names from inference-run aliases and matches model-scoped voice evidence across windows of one recording. It rebuilds aliases from current evidence, retains compatible named anchors, and keeps ambiguous or insufficient groups window-local. Only bounded exclusive speech contributes to profiles; no cross-recording voice database is created. See `docs/fluid-speaker-verification.md` for verification and limits.
 
-Summarization resolves the selected artifact and saved absolute executable path through the selector/factory. Readiness distinguishes absent selection/models, invalid artifacts and unusable runtime. The workflow preserves the reason when writing a template fallback and propagates cancellation.
+Summarization is disabled by the app composition. Store/workflow summary entry points are no-ops: no runtime selection, inference or template fallback writes. Retained summary backends, preference fields and selector APIs are compatibility/test surfaces, not active product flow. Transcript is the default detail tab.
 
 Historical note:
 

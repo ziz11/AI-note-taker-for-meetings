@@ -1,5 +1,7 @@
 # Recordly Agent Rules
 
+> Reviewed 2026-10-10. Current reference. Evidence and open acceptance limits are tracked centrally. See [current project status](docs/project-status.md).
+
 ## Purpose
 
 This document defines how future agents should change Recordly.
@@ -48,7 +50,7 @@ Short rationale: Recordly is designed so new backends, runtime mappings, and pre
 
 ### Model layer
 
-- `ModelManager` owns model discovery, install state, selected model IDs, artifact resolution, and runtime settings persistence for diarization and summarization.
+- `ModelManager` retains local/legacy model discovery and summary preferences/settings. The active diarization package and prepared manager belong to `FluidAudioDiarizationModelProvider`; ASR provisioning belongs to its separate provider.
 - `FluidAudioASRModelProvider` owns ASR model provisioning (SDK-managed download/cache/resolve).
 - Model layers must not become orchestration centers.
 
@@ -119,7 +121,7 @@ Decide first whether the capability is cross-backend or backend-private.
 ### Model invariants
 
 - ASR model provisioning is SDK-managed via `FluidAudioASRModelProvider`. Do not force it into local-file picking patterns.
-- Diarization and summarization models remain local-file based via `ModelManager`.
+- Active diarization is SDK-managed through `FluidAudioDiarizationModelProvider`. Local diarization discovery is legacy compatibility. Summarization remains a disabled placeholder; retained local model preferences must not enable inference.
 - Treat model artifact resolution and backend selection as separate concerns.
 - Models settings UX must keep provider/runtime grouping explicit. Do not collapse provider-owned models into one flat undifferentiated picker.
 - Models settings UX must preserve two distinct user actions:
@@ -179,7 +181,7 @@ Important: there is no universal "best processed audio" for all stages. ASR ofte
 Current behavior to preserve unless explicitly changed:
 
 - diarization failure degrades speaker labeling but does not fail transcription
-- summarization failure falls back to template summary
+- summarization is disabled in app composition; direct Store/workflow summary calls are no-ops and must not resolve a runtime, invoke llama.cpp/MLX or write a template summary
 - Independent ASR failures preserve successful tracks/windows with explicit degraded ranges. Missing all usable ASR remains a failure; cancellation must propagate.
 
 ## Recovery and Persistence Rules

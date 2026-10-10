@@ -1,5 +1,7 @@
 # Agent Rollout Plan for Whisper → FluidAudio Migration
 
+> Reviewed 2026-10-10. Historical Whisper-to-FluidAudio rollout procedure. The backend migration is delivered. CAF/full-mix and summarization assumptions below are superseded by V2 AAC and disabled summaries. Do not execute this as the current rollout plan. See [current project status](../project-status.md).
+
 ## Purpose
 
 This document defines how to use Codex and Claude during the Recordly migration from Whisper-based ASR to FluidAudio-based speech inference, while preserving the current architecture, session lifecycle, artifact model, and recovery semantics.

@@ -1,5 +1,7 @@
 # ScreenCaptureKit Offline Merge Design
 
+> Reviewed 2026-10-10. Historical plan/requirements. Historical capture/merge design; new live sessions now use segmented AAC, native timeline playback and explicit combined export. Single-file merge is legacy. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 ## Context
 Current capture path relies on CoreAudio tap + realtime merge, which causes lock states and brittle synchronization when track starts/durations diverge.
 

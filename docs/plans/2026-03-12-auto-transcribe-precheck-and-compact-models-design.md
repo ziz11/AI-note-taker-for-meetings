@@ -1,5 +1,7 @@
 # Auto-Transcribe Precheck And Compact Models Design
 
+> Reviewed 2026-10-10. Historical plan/requirements. Precheck and queue/settings code exist; original UI acceptance claims require direct GUI validation. Current summary controls are disabled. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 **Date:** 2026-03-12
 
 ## Goal

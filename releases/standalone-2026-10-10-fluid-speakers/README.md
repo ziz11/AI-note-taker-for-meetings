@@ -1,5 +1,7 @@
 # Recordly standalone — FluidAudio and session speakers
 
+> Reviewed 2026-10-10. Current installed local release. The fixed binary/archive/tag are unchanged by later documentation updates; complete speaker accuracy remains unverified. See [current project status](../../docs/project-status.md).
+
 [Download the standalone app](Recordly-0beaacb-local.zip).
 
 Built in Release from source commit `0beaacb04eb2f00984155f07fc96ec9472d3b4cf`, with FluidAudio **0.17.7** at `503b4bd1bbf7220882de39fe8ae6716aae4132da`. App version: 0.1.0 (build 1). The bundle is universal (arm64/x86_64); on-device inference is tested on Apple M3 Pro and requires the application's Apple Silicon path. Minimum app deployment target: macOS 15.
@@ -38,3 +40,9 @@ Verify the download with:
 ```sh
 shasum -a 256 -c SHA256SUMS
 ```
+
+## Installation and subsequent recording verification
+
+On the development Mac, this exact executable was installed at `/Applications/Recordly.app`, replacing the old Debug process, and launched through LaunchServices. Subsequent original-recording processing used the current native workflow/code, followed by reopening this standalone. Saved transcript/identity files were unchanged after reopening.
+
+All 87 transcript segments and mappings were repeatable, and an assigned name survived 11 segments on an isolated copy. This does not establish complete meeting-wide accuracy: 15 of 35 system-channel segments use session voice IDs, while 20 remain local/unknown. See [recording verification](../../docs/recording-7C943EA0-verification.md). Later documentation updates do not rebuild or replace this fixed archive/tag.

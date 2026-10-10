@@ -1,5 +1,7 @@
 # ASR Whisper Coupling Migration Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Stage/backend separation and FluidAudio ASR migration delivered. Whisper is not an active runtime. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 ## Objective
 Remove backend-specific assumptions from shared inference contracts and composition layers so ASR backend migration can proceed without touching workflow/persistence semantics.
 

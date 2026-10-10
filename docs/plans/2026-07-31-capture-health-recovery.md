@@ -1,5 +1,7 @@
 # Capture Health Recovery and Alerting Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Capture health/retry/recovery implementation is present and covered by the delivered source suite. Extended hardware capture/energy acceptance remains open. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Detect a stopped or stalled ScreenCaptureKit audio stream, restore it within an eight-second retry window, and emit one short user-volume alert plus a persistent visual failure state when recovery fails.

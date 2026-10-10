@@ -1,5 +1,7 @@
 # Recordly App Icon Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. App-icon implementation and generator are present in the delivered build. This is a historical design/implementation record. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Replace Recordly's current app icon with the approved minimal graphite-and-gold cube and produce a verified Release bundle.

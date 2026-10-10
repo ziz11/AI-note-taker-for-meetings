@@ -1,5 +1,7 @@
 # Stable Local Debug Signing Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Persistent local signing is delivered for Debug and standalone; the app is installed and its launch was verified. This is not Developer ID/notarized distribution. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Make Xcode Run sign Recordly Debug builds with one persistent local self-signed identity so macOS permission grants survive rebuilds without a paid Apple Developer account.

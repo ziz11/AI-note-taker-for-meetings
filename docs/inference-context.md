@@ -1,5 +1,7 @@
 # Recordly Inference Context
 
+> Reviewed 2026-10-10. Current reference. Evidence and open acceptance limits are tracked centrally. See [current project status](project-status.md).
+
 Use this file as the primary context for inference-related work.
 
 Optimized for:
@@ -36,7 +38,7 @@ Default local stage map:
 - `audioCapture -> nativeCapture`
 - `asr -> fluidAudio`
 - `diarization -> fluidAudio`
-- `summarization -> llamaCpp`
+- `summarization -> disabled` in app composition (the generic contract default is overridden)
 - `vad -> disabled`
 
 ## Ownership boundaries
@@ -62,7 +64,7 @@ Factory and routing:
 
 Model layer:
 
-- `ModelManager` owns discovery, install state, selected model IDs, artifact resolution, and runtime settings persistence for diarization and summarization.
+- `ModelManager` retains local/legacy discovery and summary preferences/settings. The active diarization package and prepared manager are owned by `FluidAudioDiarizationModelProvider`.
 - `FluidAudioASRModelProvider` owns ASR model provisioning (SDK-managed download/cache/resolve).
 - Any legacy ASR preference fields that still exist are compatibility residue, not an active local-file Whisper path.
 - Model layers must not become orchestration or inference-execution layers.
@@ -133,13 +135,17 @@ Artifacts written by the pipeline:
 - `transcript.json`
 - `transcript.txt`
 - `transcript.srt`
-- ASR fingerprint cache files
+- `speaker-identities.json`
+- `inference/windows/` stage-output/provenance caches
+- `inference/report.json` diagnostics, continuity and reuse
+- Legacy ASR fingerprint cache files
 
 Summarization workflow:
 
-- `RecordingWorkflowController.summarize(...)` resolves summarization runtime through the selector and engine through the factory
-- success writes `summary.md`
-- if summarization is unavailable, missing, fails, or times out, workflow falls back to a template summary
+- `DefaultInferenceComposition` disables the summary stage.
+- `RecordingsStore` and `RecordingWorkflowController.summarize(...)` perform no generation, runtime resolution or artifact writes.
+- Buttons and auto-summary are disabled placeholders; Transcript opens by default. Existing summary files remain readable.
+- Retained llama.cpp/MLX contracts/backends and selector APIs are compatibility/test code, not an active app path.
 
 Partial failure rule:
 

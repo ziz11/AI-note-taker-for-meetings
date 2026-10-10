@@ -1,5 +1,7 @@
 # Capture Health Recovery and Alerting Design
 
+> Reviewed 2026-10-10. Historical plan/requirements. Capture health/retry/recovery implementation is present and covered by the delivered source suite. Extended hardware capture/energy acceptance remains open. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 **Date:** 2026-07-31
 
 ## Problem

@@ -1,5 +1,7 @@
 # Modular Provider Architecture Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Stage contracts, composition, selector and factory are delivered. Active providers are capability-specific SDK wrappers; summary runtime is disabled. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Stabilize the broken merge and land a modular provider architecture with user-visible provider selection for audio quality, ASR, diarization, and summarization while preserving Recordly's stage-driven boundaries.

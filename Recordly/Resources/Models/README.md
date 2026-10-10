@@ -1,26 +1,16 @@
-Place local model artifacts here only if you intentionally want to bundle them with the app.
+# Bundled model resources
 
-Examples:
-- summarization-compact-v1.bin
-- summarization-compact-v1.gguf
-- diarization-enhanced-v1/
+> Reviewed 2026-10-10. Current reference. Evidence and open acceptance limits are tracked centrally. See [current project status](../../../docs/project-status.md).
 
-Current development flow for Recordly does not read models from this folder.
+This folder is reserved for explicitly bundled model artifacts. The current standalone does not load speech models from here.
 
-Development source files are staged outside the app bundle:
+Active models are separately provisioned by FluidAudio 0.17.7 under:
 
-- FluidAudio ASR models are SDK-managed and not staged here as local `.bin` files
-- `/Users/Shared/RecordlyModels/diarization/diarization-enhanced-v1/`
-- `/Users/Shared/RecordlyModels/summarization/summarization-compact-v1.bin`
+- `~/Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v3/` — Parakeet v3 ASR, including JointDecisionv3.
+- `~/Library/Application Support/FluidAudio/Models/speaker-diarization/` — offline segmentation/embedding/PLDA package.
 
-Installed copies are managed under:
+The ASR and diarization providers validate required files and prepare the SDK runtime. A Whisper/GGML `.bin` is neither the active speech model nor a usable summary model.
 
-- `~/Library/Application Support/Recordly/Models/diarization/<model-id>/`
-- `~/Library/Application Support/Recordly/Models/summarization/<model-id>/`
+Legacy discovery in `Recordly/Models`, `~/models`, project model folders and `/Users/Shared/RecordlyModels` is compatibility code. Summary controls are disabled; placing GGUF/MLX data here or elsewhere does not enable generation.
 
-FluidAudio ASR models are managed separately under:
-
-- `~/Library/Application Support/FluidAudio/Models/<version>/`
-
-For the integration contract, see:
-- [Model Integration](../../../docs/model-integration.md)
+See [model integration](../../../docs/model-integration.md) and [latest standalone](../../../releases/standalone-2026-10-10-fluid-speakers/README.md). The FluidAudio resource bundle and license notices are packaged separately; they are not the downloaded model weights.

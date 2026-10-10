@@ -1,5 +1,7 @@
 # Recordly Rename Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Rename delivered. Current app/storage names are Recordly; the original plan is historical. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **Status:** Completed. The app was renamed from CallRecorderPro to Recordly. File paths below reflect the current project structure. Note: `PRODUCT_CONTEXT.md` was consolidated into `README.md`, and `MODEL_INTEGRATION.md` was moved to `docs/model-integration.md`.
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

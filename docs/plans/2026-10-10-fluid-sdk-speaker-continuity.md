@@ -1,5 +1,7 @@
 # FluidAudio update and session speaker continuity implementation plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. SDK 0.17.7, conservative session matching, tests, release and installation delivered. Original-recording replay is complete; annotated accuracy and full speaker continuity remain open. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > For implementers: use subagent-driven-development in this session, test-driven-development for behavior changes, and requesting-code-review before delivery.
 
 **Goal:** Update FluidAudio from 0.14.0 to the verified 0.17.7 release and identify returning speakers across windows of one recording, preserving names and bounded AAC processing.

@@ -1,5 +1,7 @@
 # Model Settings Screen Redesign Prompt
 
+> Reviewed 2026-10-10. Design brief, not proof of delivered UI. Apply only within the current SDK-provider/summary-placeholder scope; GUI design acceptance has not been confirmed. See [current project status](../project-status.md).
+
 Use this prompt when redesigning the Recordly Models settings screen.
 
 ```text
@@ -77,3 +79,11 @@ users need to manage models per provider and per task, with two main actions:
 1. download/install
 2. select active model
 ```
+
+## Current scope to apply before using the historical prompt
+
+- Active ASR: SDK-managed Parakeet v3 on FluidAudio 0.17.7.
+- Active speaker separation: the separate FluidAudio offline-diarization provider; distinguish provisioning from selected runtime.
+- Summary generation is disabled. Do not add functioning model/executable selection or imply a downloaded ASR artifact can summarize.
+- Ultra/Redux are SDK options, not models already selected or bundled by Recordly.
+- Keep model readiness truthful and preserve existing data; actual meeting speaker accuracy remains partial.

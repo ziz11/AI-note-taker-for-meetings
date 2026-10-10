@@ -1,5 +1,7 @@
 # Audio Pipeline V2 Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. V2 A/B implemented and integrated into develop/master. Speaker continuity is now partial, not universally resolved. Original milestone C generation was subsequently disabled by user direction; hardware/long-session acceptance remains open. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Implement the supplied A/B/C milestones without changing develop.

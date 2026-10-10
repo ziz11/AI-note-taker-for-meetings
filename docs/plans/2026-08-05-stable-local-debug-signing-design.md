@@ -1,5 +1,7 @@
 # Stable Local Debug Signing Design
 
+> Reviewed 2026-10-10. Historical plan/requirements. Persistent local signing is delivered for Debug and standalone; the app is installed and its launch was verified. This is not Developer ID/notarized distribution. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 **Date:** 2026-08-05
 
 ## Problem

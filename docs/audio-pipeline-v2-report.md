@@ -1,12 +1,20 @@
 # Audio Pipeline V2 delivery and verification
 
+> Reviewed 2026-10-10. Historical V2 delivery report with a current-delivery section. Baseline SDK, summary and unresolved-speaker descriptions below are superseded where explicitly noted. See [current project status](project-status.md).
+
 SDK and speaker follow-up: [FluidAudio upgrade and session speaker verification](fluid-speaker-verification.md) supersedes the baseline runtime/speaker limitations below. The original delivery measurements remain historical evidence.
 
 Feature branch: `feature/audio_pipeline_v2`.
 Base develop: `59a0b28856b222638d0ed0aada6e63df615b9aec` (matched origin/develop when prepared).
-The final branch SHA is available with `git rev-parse HEAD` and in the delivery message; develop is not merged or rewritten.
+Historical baseline provenance only: V2 was subsequently integrated into develop/master, followed by SDK/speaker and standalone release commit `18add9d`. Current delivery is described in [project status](project-status.md).
 
-## Current follow-up
+## Current delivery versus historical baseline
+
+As of 2026-10-10, FluidAudio 0.17.7 has actual artifact fingerprints, reusable successful diarization caches and model-scoped session voice matching. Original-recording reprocessing preserved all 87 segments and mappings, but continuity remains partial: 15 of 35 remote segments have session voice IDs. Summaries are disabled. The latest standalone is installed and launched in Applications. [Original-recording verification](recording-7C943EA0-verification.md).
+
+All baseline milestone counts, timings, missing-artifact and summarization descriptions below refer to the earlier V2 delivery, not the current runtime. Hardware/long-session and annotated speaker-accuracy acceptance remain open.
+
+## Follow-up history
 
 The progress/summary-placeholder follow-up supersedes the summarization acceptance work described below: summary generation, queues, fallback/logging and runtime configuration UI are disabled. Recording detail opens Transcript; previous artifacts remain intact. V2 processing now publishes independent window counters and monotonic progress with coalesced UI updates. See `docs/progress-and-summary-placeholder-report.md` for current verification. The remaining sections document the earlier V2 delivery.
 

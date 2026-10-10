@@ -1,5 +1,7 @@
 # Transcription counters and responsive presentation
 
+> Reviewed 2026-10-10. Historical plan/requirements. Counters, monotonic progress, 10 Hz coalescing and summary placeholders are delivered in develop/master and the installed standalone. GUI responsiveness is not a measured acceptance result. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 User request: persistent completed/total transcription and diarization counters, understandable overall progress, and reduce UI hesitation during segmented inference.
 
 Design: use the existing feature worktree and backend-neutral pipeline callback. Count logical inference windows, independently of 180-second physical chunks. A snapshot carries total/handled/failed/skipped/reused counts for ASR and optional diarization. Overall progress uses completed stage work plus merge/export completion, never fixed per-stage percentages for segmented sessions. Cached work counts as handled; unavailable stages and failed ranges stay visible. Keep the existing legacy stage callback intact. Show stable counters in detail and queue; current stage remains secondary text. Batch each store snapshot mutation and throttle repeated snapshots to at most 10 Hz, always delivering initial/final snapshots. Avoid publishing recording metadata for every segmented window. Investigate file/stat/parse work triggered by body refresh before making unrelated optimizations.

@@ -1,5 +1,7 @@
 # Recordly standalone — 2026-10-10
 
+> Reviewed 2026-10-10. Previous release retained for rollback, superseded by the FluidAudio/session-speakers standalone. The archive, source commit and checksum remain fixed. See [current project status](../../docs/project-status.md).
+
 [Download the standalone app](Recordly-409c4f0-local.zip).
 
 This archive contains Recordly.app, built in Release configuration from source commit `409c4f09cfc5070b0292a8eb8fb5f823dcb7443c`. App version: 0.1.0 (build 1). Architectures: Apple Silicon (arm64) and Intel (x86_64).

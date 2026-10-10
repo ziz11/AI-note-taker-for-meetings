@@ -1,5 +1,7 @@
 # ScreenCaptureKit Offline Merge Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Historical capture/merge design; new live sessions now use segmented AAC, native timeline playback and explicit combined export. Single-file merge is legacy. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **Status:** Completed. File paths updated to reflect the Recordly rename (originally written when the project was named CallRecorderPro).
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

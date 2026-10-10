@@ -1,5 +1,7 @@
 # Third-Party Licenses
 
+> Reviewed 2026-10-10. Current reference; application runtime is the released FluidAudio 0.17.7 build, with summarization disabled and partial session speaker continuity. License text below is unchanged. See [current project status](docs/project-status.md).
+
 ## FluidAudio
 
 - Project: [FluidAudio](https://github.com/FluidInference/FluidAudio)

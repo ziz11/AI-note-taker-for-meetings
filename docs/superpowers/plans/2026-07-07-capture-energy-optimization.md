@@ -1,5 +1,7 @@
 # Capture Energy Optimization Implementation Plan
 
+> Reviewed 2026-10-10. Historical spec/plan. Bounded capture pipelines, throttled metering and energy tooling are present; measured hardware CPU/energy acceptance remains open. V2 replaced the old dual-write strategy. Original checkboxes and examples are preserved as history. See [current project status](../../project-status.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Cut CPU/energy of live recording by removing per-buffer Task spawns and per-buffer MainActor work, plus add measurement tooling.

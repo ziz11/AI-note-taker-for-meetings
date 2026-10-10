@@ -1,5 +1,7 @@
 # FluidAudio upgrade and session speaker verification
 
+> Reviewed 2026-10-10. Current reference. Evidence and open acceptance limits are tracked centrally. See [current project status](project-status.md).
+
 Date: 2026-10-10. Upstream changes and enabled features are documented in [the upgrade changelog](fluidaudio-upgrade-changelog.md).
 
 ## Environment and SDK migration
@@ -66,3 +68,11 @@ The signed Release source is `0beaacb04eb2f00984155f07fc96ec9472d3b4cf`. [The re
 The ZIP is **23,927,266 bytes**, SHA-256 `b697238a613444adb002ceb32d38f565161cca629bbd5039d7c411251f44edba`; the app is **53,462,686 logical bytes**. Compared with the previous 6,187,339-byte ZIP, this is a material increase from the new SDK/default NeMo static dependency. Default normalization was retained rather than silently disabled. The bundle contains arm64 and x86_64 architectures; native inference acceptance was on Apple Silicon, and macOS 15 remains the app minimum. Running the app requires no Xcode.
 
 The previous standalone release remains tracked for rollback. User recordings and voice-vector measurements are not included in either archive.
+
+## Original recording processed in place
+
+The subsequent [original-recording verification](recording-7C943EA0-verification.md) used the current workflow/composition and installed user models. Two passes preserved all 87 full transcript segment objects and all identities/aliases. Three profiles were reused in 19, 7 and 2 distinct windows. Of 35 system-channel segments, 15 have session voice IDs and 20 remain local/unknown; this remains **partiallyMatched**, not verified full meeting-wide identity accuracy.
+
+No custom names existed before processing. On a separate copy, an assigned name survived for all 11 segments of the selected speaker and in JSON/TXT/SRT. All 48 original AAC hashes were unchanged. The installed standalone was reopened; transcript and identity files remained byte-identical. One additional native acceptance test and an independent artifact audit passed. GUI permission was unavailable, so processing was invoked through a temporary test harness rather than a button in the installed binary.
+
+Observed in-place timings: 235.56 seconds first pass, 53.54 seconds repeat, 53.40 seconds copy rename probe. These differ from the isolated copied-recording timings above and must not be presented as the same benchmark. App-hosted launch recovery can overlap work; no controlled full-app speed claim follows from these numbers.

@@ -1,5 +1,7 @@
 # Recordly Audio Pipeline V2
 
+> Reviewed 2026-10-10. Historical plan/requirements. V2 A/B implemented and integrated into develop/master. Speaker continuity is now partial, not universally resolved. Original milestone C generation was subsequently disabled by user direction; hardware/long-session acceptance remains open. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 Repository:
 
 `ziz11/AI-note-taker-for-meetings`

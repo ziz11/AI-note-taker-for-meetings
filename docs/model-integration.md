@@ -1,11 +1,14 @@
 # Model Integration Notes
 
+> Reviewed 2026-10-10. Current reference. Evidence and open acceptance limits are tracked centrally. See [current project status](project-status.md).
+
 ## Current status (October 2026)
 
 Model management and inference runtime are split by responsibility:
 
 - `FluidAudioASRModelProvider` handles ASR model provisioning via FluidAudio SDK (download, cache, resolve).
-- `ModelManager` handles model discovery/install/resolution/settings for diarization and summarization.
+- `FluidAudioDiarizationModelProvider` provisions the active offline diarization package and owns its prepared manager.
+- `ModelManager` retains legacy/local discovery and summary preferences/settings; these do not activate summarization.
 - `DefaultInferenceRuntimeProfileSelector` resolves runtime profile (stage selection + model artifacts + params).
 - `DefaultInferenceEngineFactory` routes stage/backend to concrete engines.
 - `TranscriptionPipeline` and `RecordingWorkflowController` stay backend-agnostic.
@@ -40,7 +43,7 @@ Default stage mapping is composed in `DefaultInferenceComposition`:
 
 ASR model management is SDK-managed, not local-file based:
 
-- `FluidAudioASRModelProvider` resolves provisioned models from `~/Library/Application Support/FluidAudio/Models/<version>/`.
+- `FluidAudioASRModelProvider` resolves provisioned models from `~/Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v3/`.
 - Models are downloaded via `AsrModels.downloadAndLoad(version: .v3)` which handles caching internally.
 - A valid model directory contains: `parakeet_vocab.json`, `Preprocessor.mlmodelc`, `Encoder.mlmodelc`, `Decoder.mlmodelc`, `JointDecisionv3.mlmodelc`.
 - `FluidAudioModelValidator` validates model directories before use.
@@ -66,7 +69,9 @@ Historical note:
 
 ## Local model policy (diarization, summarization)
 
-Diarization and summarization models remain local-file based:
+The active FluidAudio diarizer uses the SDK-managed `~/Library/Application Support/FluidAudio/Models/speaker-diarization/` package. `Segmentation`, `FBank`, `Embedding`, `PldaRho` and finite positive `plda_psi` are validated by the provider. It exports compatible 256-dimensional voice observations and fingerprints the actual loaded artifacts.
+
+Legacy/local discovery remains available for compatibility:
 
 - Local model directories include:
   - `/Users/Shared/RecordlyModels/<kind>/`
@@ -86,6 +91,6 @@ Summarization is disabled in `DefaultInferenceComposition` and the workflow. But
 
 New live recordings use durable segmented AAC and short semantic inference-window CAFs (at most 60 seconds). FluidAudio adapters prepare SDK PCM from these windows. Storage boundaries do not reset the transcript timeline. Legacy single-file CAF/FLAC/M4A inputs continue through existing adapters.
 
-See `audio-pipeline-v2-report.md` for acceptance evidence and unverified real-model cases.
+See [V2 baseline](audio-pipeline-v2-report.md), [native speaker verification](fluid-speaker-verification.md) and [original-recording verification](recording-7C943EA0-verification.md). Native models have run; annotated meeting-wide speaker accuracy remains unverified.
 
 See [FluidAudio upgrade changelog](fluidaudio-upgrade-changelog.md) for upstream changes and enabled model choices.

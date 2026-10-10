@@ -1,5 +1,7 @@
 # FluidAudio 0.14.0 → 0.17.7
 
+> Reviewed 2026-10-10. Current reference. Evidence and open acceptance limits are tracked centrally. See [current project status](project-status.md).
+
 Checked against the official GitHub releases on **2026-10-10**. Recordly pins **0.17.7**, commit `503b4bd1bbf7220882de39fe8ae6716aae4132da`; it previously pinned 0.14.0.
 
 Sources: [full source comparison](https://github.com/FluidInference/FluidAudio/compare/v0.14.0...v0.17.7), [latest pinned release](https://github.com/FluidInference/FluidAudio/releases/tag/v0.17.7), and the individual release notes linked below. Dates in this table are publication dates in UTC. This is a Recordly-focused summary, not a copy of every upstream change.
