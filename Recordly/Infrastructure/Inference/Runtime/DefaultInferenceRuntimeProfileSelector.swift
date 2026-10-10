@@ -112,7 +112,7 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
             stageSelection: stageSelection,
             modelArtifacts: InferenceModelArtifacts(
                 asrModelURL: asrModelURL,
-                diarizationModelURL: nil,
+                diarizationModelURL: stageSelection.backend(for: .diarization) == .fluidAudio ? diarizationModelProvider.modelURLForRuntime : nil,
                 summarizationModelURL: nil
             ),
             summarizationRuntimeSettings: modelManager.summarizationRuntimeSettings

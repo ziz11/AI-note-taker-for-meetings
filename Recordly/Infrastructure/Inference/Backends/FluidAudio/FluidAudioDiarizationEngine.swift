@@ -32,7 +32,7 @@ struct FluidAudioDiarizationEngine: DiarizationEngine {
         }
 
         guard systemAudioURL.lastPathComponent == "system.m4a" else { throw DiarizationRuntimeError.invalidInput }
-        return try await diarizeAudio(at: systemAudioURL, sessionID: sessionID)
+        return try await diarizeAudio(at: systemAudioURL, sessionID: sessionID, configuration: configuration)
     }
 
     func diarize(window: PreparedDiarizationWindow, sessionID: UUID,
@@ -44,10 +44,14 @@ struct FluidAudioDiarizationEngine: DiarizationEngine {
         let file = try AVAudioFile(forReading: window.audioURL)
         guard file.processingFormat.sampleRate == 48_000, file.processingFormat.channelCount == 1,
               file.length == window.frameCount else { throw DiarizationRuntimeError.invalidInput }
-        return try await diarizeAudio(at: window.audioURL, sessionID: sessionID)
+        return try await diarizeAudio(at: window.audioURL, sessionID: sessionID, configuration: configuration)
     }
 
-    private func diarizeAudio(at systemAudioURL: URL, sessionID: UUID) async throws -> DiarizationDocument {
+    private func diarizeAudio(at systemAudioURL: URL, sessionID: UUID, configuration: DiarizationEngineConfiguration) async throws -> DiarizationDocument {
+        if let expected = configuration.modelURL, let actual = manager.modelDirectoryURL,
+           expected.standardizedFileURL != actual.standardizedFileURL {
+            throw FluidAudioModelProvisioningError.downloadFailed(message: "Diarization runtime and model artifact do not match.")
+        }
         try Task.checkCancellation()
         try DiarizationManagerLease.shared.checkAvailable(manager)
 
@@ -72,7 +76,10 @@ struct FluidAudioDiarizationEngine: DiarizationEngine {
                     endMs: max(Int((Double(segment.endTimeSeconds) * 1_000.0).rounded(.up)), startMs + 1),
                     confidence: Double(segment.qualityScore)
                 )
-            }
+            },
+            voiceObservations: result.voiceObservations,
+            embeddingSpace: result.embeddingSpace,
+            embeddingArtifactFingerprint: result.embeddingArtifactFingerprint
         )
 #else
         throw DiarizationRuntimeError.binaryMissing

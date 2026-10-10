@@ -466,7 +466,8 @@ final class SegmentedInferenceTests: XCTestCase {
         XCTAssertEqual(try readTranscript().segments.first?.speakerId, speakerID)
         XCTAssertEqual(try readTranscript().segments.first?.speaker, "Alice")
         XCTAssertEqual(asr.durations.count, 1)
-        XCTAssertEqual(try identities.load().aliases.count, 2)
+        XCTAssertEqual(try identities.load().aliases.count, 1,
+            "Aliases describe the current rebuild; exact-turn identity and rename survive independently")
     }
 
     func testLocalRenameSurvivesASRModelChangeWithUnchangedDiarizationTurns() async throws {
@@ -747,6 +748,379 @@ final class SegmentedInferenceTests: XCTestCase {
         } catch { XCTAssertTrue(error is CancellationError) }
     }
 
+    // The JSON boundary deliberately exercises compatibility with old persisted documents.
+    func testVoiceEvidenceReturningAfterTwentyMinutesReusesRenamedIdentity() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        let a = try voiceDocument(label: "S1", vector: unitVoice(0))
+        let first = try store.identity(rawLabel: "S1", diarization: a, runID: UUID(),
+            provenance: voiceProvenance(startMs: 0), document: &identities)
+        identities.identities[first.id]?.displayName = "Alice"
+        try store.save(identities)
+        identities = try store.load()
+        let returning = try store.identity(rawLabel: "S7", diarization: voiceDocument(label: "S7", vector: unitVoice(0)),
+            runID: UUID(), provenance: voiceProvenance(startMs: 1_200_000), document: &identities)
+        XCTAssertEqual(returning.id, first.id)
+        XCTAssertEqual(returning.displayName, "Alice")
+        XCTAssertEqual(first.defaultLabel, "Speaker 1")
+    }
+
+    func testVoiceDocumentRetainsEvidenceAndLegacyDocumentStillDecodes() throws {
+        let document = try voiceDocument(label: "S1", vector: unitVoice(0))
+        let encoded = try JSONEncoder().encode(document)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNotNil(json["voiceObservations"])
+        let legacy = DiarizationDocument(version: 1, sessionID: sessionID, createdAt: Date(), segments: [])
+        XCTAssertEqual(try JSONDecoder().decode(DiarizationDocument.self, from: JSONEncoder().encode(legacy)), legacy)
+    }
+
+    func testVoiceProfilesSeparateDifferentVoicesAndRejectModelChanges() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        func resolve(_ axis: Int, _ start: Int, _ artifact: String? = "diarizer-model-a") throws -> SessionSpeakerIdentity {
+            try store.identity(rawLabel: "S1", diarization: voiceDocument(label: "S1", vector: unitVoice(axis)),
+                runID: UUID(), provenance: voiceProvenance(startMs: start, artifact: artifact), document: &identities)
+        }
+        let a = try resolve(0, 0)
+        let b = try resolve(1, 50_000)
+        XCTAssertNotEqual(a.id, b.id)
+        XCTAssertEqual(try resolve(0, 100_000).id, a.id)
+        XCTAssertNotEqual(try resolve(0, 150_000, "different-model").id, a.id)
+        XCTAssertTrue(try resolve(0, 200_000, nil).id.hasPrefix("remote_local_"))
+    }
+
+    func testCooccurringGroupsNeverCollapseEvenWithIdenticalVectors() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        let first = try store.identity(rawLabel: "S1", diarization: voiceDocument(label: "S1", vector: unitVoice(0)),
+            runID: UUID(), provenance: voiceProvenance(startMs: 0), document: &identities)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(
+            try voiceDocument(label: "S1", vector: unitVoice(0)))) as? [String: Any])
+        json["segments"] = [
+            ["id": "a", "speaker": "S1", "startMs": 0, "endMs": 10_000],
+            ["id": "b", "speaker": "S2", "startMs": 15_000, "endMs": 25_000]]
+        json["voiceObservations"] = [
+            ["speaker": "S1", "startMs": 0, "endMs": 10_000, "embedding": unitVoice(0)],
+            ["speaker": "S2", "startMs": 15_000, "endMs": 25_000, "embedding": unitVoice(0)]]
+        let document = try JSONDecoder().decode(DiarizationDocument.self, from: JSONSerialization.data(withJSONObject: json))
+        let run = UUID(), provenance = try voiceProvenance(startMs: 50_000)
+        let a = try store.identity(rawLabel: "S1", diarization: document, runID: run, provenance: provenance, document: &identities)
+        let b = try store.identity(rawLabel: "S2", diarization: document, runID: run, provenance: provenance, document: &identities)
+        XCTAssertNotEqual(a.id, b.id)
+        XCTAssertNotEqual(a.id, first.id, "Conflicting proposals cannot greedily assign one group to the known voice")
+        XCTAssertNotEqual(b.id, first.id)
+    }
+
+    func testVoiceMatcherDoesNotForceShortInvalidOrOverlapOnlyEvidence() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        _ = try store.identity(rawLabel: "S1", diarization: voiceDocument(label: "S1", vector: unitVoice(0)),
+            runID: UUID(), provenance: voiceProvenance(startMs: 0), document: &identities)
+        for (index, vector) in [[Float](repeating: 0, count: 256), [Float](repeating: 1, count: 128), unitVoice(0)].enumerated() {
+            let value = try store.identity(rawLabel: "S1", diarization: voiceDocument(label: "S1", vector: vector, endMs: index == 2 ? 500 : 10_000),
+                runID: UUID(), provenance: voiceProvenance(startMs: (index + 1) * 50_000), document: &identities)
+            XCTAssertTrue(value.id.hasPrefix("remote_local_"))
+        }
+        var document = try voiceDocument(label: "S1", vector: unitVoice(0))
+        document.segments.append(.init(id: "overlap", speaker: "unsupported", startMs: 0, endMs: 10_000, confidence: nil))
+        let overlap = try store.identity(rawLabel: "S1", diarization: document, runID: UUID(),
+            provenance: voiceProvenance(startMs: 250_000), document: &identities)
+        XCTAssertTrue(overlap.id.hasPrefix("remote_local_"))
+    }
+
+    func testAmbiguousRunnerUpDoesNotForceVoiceMatch() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        _ = try store.identity(rawLabel: "A", diarization: voiceDocument(label: "A", vector: unitVoice(0)),
+            runID: UUID(), provenance: voiceProvenance(startMs: 0), document: &identities)
+        var b = unitVoice(0); b[0] = 0.7; b[1] = sqrt(1 - 0.7 * 0.7)
+        _ = try store.identity(rawLabel: "B", diarization: voiceDocument(label: "B", vector: b),
+            runID: UUID(), provenance: voiceProvenance(startMs: 50_000), document: &identities)
+        var ambiguous = unitVoice(0); ambiguous[0] = 0.92; ambiguous[1] = sqrt(1 - 0.92 * 0.92)
+        let value = try store.identity(rawLabel: "C", diarization: voiceDocument(label: "C", vector: ambiguous),
+            runID: UUID(), provenance: voiceProvenance(startMs: 100_000), document: &identities)
+        XCTAssertTrue(value.id.hasPrefix("remote_local_"))
+    }
+
+    func testVoiceCacheWarmReprocessingKeepsNamesAndDoesNotDuplicateProfiles() async throws {
+        try addAudio(track: .system, startSeconds: 0, seconds: 130)
+        let model = directory.appendingPathComponent("diarization-model")
+        try Data("diarization".utf8).write(to: model)
+        let diarizer = SegmentedTestDiarizationEngine()
+        diarizer.customDocument = try voiceDocument(label: "S1", vector: unitVoice(0), endMs: 55_000)
+        diarizer.customDocument?.embeddingArtifactFingerprint = try InferenceFingerprint.artifact(at: model)
+        _ = try await process(asr: SegmentedTestASREngine(), diarization: diarizer, diarizationModelURL: model)
+        let first = try readTranscript()
+        XCTAssertEqual(Set(first.segments.compactMap(\.speakerId)).count, 1)
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        let id = try XCTUnwrap(first.segments.first?.speakerId)
+        try store.rename(speakerID: id, to: "Alice")
+        _ = try await process(asr: SegmentedTestASREngine(), diarization: diarizer, diarizationModelURL: model)
+        XCTAssertEqual(diarizer.attempts, 3)
+        XCTAssertTrue(try readTranscript().segments.allSatisfy { $0.speakerId == id && $0.speaker == "Alice" })
+        XCTAssertEqual(try readReport().speakerContinuity.rawValue, "sessionMatched")
+    }
+
+    func testVoiceRebuildRemovesReplacedWindowContributionsAndRetainsCompatibleNameAnchor() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        let firstProvenance = try voiceProvenance(startMs: 0)
+        let first = try store.identity(rawLabel: "S1", diarization: voiceDocument(label: "S1", vector: unitVoice(0)),
+            runID: UUID(), provenance: firstProvenance, document: &identities)
+        identities.identities[first.id]?.displayName = "Alice"
+        _ = try store.identity(rawLabel: "S1", diarization: voiceDocument(label: "S1", vector: unitVoice(0)),
+            runID: UUID(), provenance: voiceProvenance(startMs: 50_000), document: &identities)
+        XCTAssertEqual(identities.voiceProfiles?[first.id]?.samples.count, 2)
+        try store.beginRebuild(provenances: [firstProvenance], document: &identities)
+        XCTAssertEqual(identities.voiceProfiles?[first.id]?.samples.count, 0)
+        XCTAssertEqual(identities.voiceProfiles?[first.id]?.anchors.count, 1)
+        let returned = try store.identity(rawLabel: "S7", diarization: voiceDocument(label: "S7", vector: unitVoice(0)),
+            runID: UUID(), provenance: firstProvenance, document: &identities)
+        XCTAssertEqual(returned.id, first.id)
+        XCTAssertEqual(returned.displayName, "Alice")
+        try store.beginRebuild(provenances: [voiceProvenance(startMs: 0, artifact: "replacement-model")], document: &identities)
+        XCTAssertTrue(identities.voiceProfiles?.isEmpty == true)
+        XCTAssertEqual(identities.identities[first.id]?.displayName, "Alice", "Keep old renames without applying them to incompatible evidence")
+    }
+
+    func testVoiceMatchingRejectsNaNAndDuplicateShortEvidence() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        var invalid = try voiceDocument(label: "S1", vector: unitVoice(0))
+        invalid.voiceObservations?[0].embedding[3] = .nan
+        let identity = try store.identity(rawLabel: "S1", diarization: invalid, runID: UUID(),
+            provenance: voiceProvenance(startMs: 0), document: &identities)
+        XCTAssertTrue(identity.id.hasPrefix("remote_local_"))
+        var short = try voiceDocument(label: "S1", vector: unitVoice(0), endMs: 500)
+        short.voiceObservations = Array(repeating: try XCTUnwrap(short.voiceObservations?.first), count: 128)
+        let repeated = try store.identity(rawLabel: "S1", diarization: short, runID: UUID(),
+            provenance: voiceProvenance(startMs: 50_000), document: &identities)
+        XCTAssertTrue(repeated.id.hasPrefix("remote_local_"), "Overlapping feature windows cannot manufacture voiced duration")
+    }
+
+    func testOptionalNativeVoiceEvidenceReturnsAfterTwentyMinutesAndKeepsDistinctGroups() throws {
+        guard let path = ProcessInfo.processInfo.environment["RECORDLY_NATIVE_EVIDENCE_JSON"] else {
+            throw XCTSkip("Set RECORDLY_NATIVE_EVIDENCE_JSON to locally measured SDK results; no private audio/vectors are fixtures.")
+        }
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any])
+        let runs = try XCTUnwrap(json["runs"] as? [[String: Any]])
+        func document(_ index: Int) throws -> DiarizationDocument {
+            let run = runs[index]
+            let segments = try XCTUnwrap(run["segments"] as? [[String: Any]]).enumerated().map { index, value in
+                DiarizationSegment(id: "native-\(index)", speaker: value["speaker"] as! String,
+                    startMs: Int((value["start"] as! Double) * 1_000), endMs: Int((value["end"] as! Double) * 1_000), confidence: nil)
+            }
+            let labels = Set(segments.map(\.speaker))
+            let observations = try XCTUnwrap(run["embeddings"] as? [[String: Any]]).compactMap { value -> DiarizationVoiceObservation? in
+                let label = value["speaker"] as! String
+                guard labels.contains(label) else { return nil }
+                return .init(speaker: label, startMs: Int((value["start"] as! Double) * 1_000),
+                    endMs: Int((value["end"] as! Double) * 1_000), embedding: (value["embedding"] as! [Double]).map(Float.init))
+            }
+            return DiarizationDocument(version: 1, sessionID: sessionID, createdAt: Date(), segments: segments,
+                voiceObservations: observations, embeddingSpace: "native-wespeaker-256-l2", embeddingArtifactFingerprint: "diarizer-model-a")
+        }
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        let first = try store.resolveWindow(diarization: document(0), runID: UUID(), provenance: voiceProvenance(startMs: 0), document: &identities)
+        let firstID = try XCTUnwrap(first.identities.values.first?.id)
+        XCTAssertTrue(firstID.hasPrefix("remote_voice_"))
+        identities.identities[firstID]?.displayName = "Test speaker"
+        // Different measured clip, rather than an exact repeat, exercises voice
+        // matching across observations. This is not speaker accuracy ground truth.
+        let differentObservation = try store.resolveWindow(diarization: document(1), runID: UUID(),
+            provenance: voiceProvenance(startMs: 50_000), document: &identities)
+        XCTAssertEqual(differentObservation.identities.values.first?.id, firstID)
+        XCTAssertEqual(differentObservation.identities.values.first?.displayName, "Test speaker")
+        let returning = try store.resolveWindow(diarization: document(2), runID: UUID(), provenance: voiceProvenance(startMs: 1_200_000), document: &identities)
+        XCTAssertEqual(returning.identities.values.first?.id, firstID)
+        XCTAssertEqual(returning.identities.values.first?.displayName, "Test speaker")
+        let mic = try store.resolveWindow(diarization: document(3), runID: UUID(), provenance: voiceProvenance(startMs: 1_250_000), document: &identities)
+        XCTAssertFalse(mic.identities.values.contains { $0.id == firstID })
+        let far = try store.resolveWindow(diarization: document(4), runID: UUID(), provenance: voiceProvenance(startMs: 2_100_000), document: &identities)
+        XCTAssertEqual(far.identities.count, 2)
+        XCTAssertEqual(Set(far.identities.values.map(\.id)).count, 2)
+    }
+
+    func testRenameDuringReprocessingSurvivesPersistenceAndFinalRendering() async throws {
+        try addAudio(track: .system, startSeconds: 0, seconds: 130)
+        _ = try await process(asr: SegmentedTestASREngine())
+        let id = try XCTUnwrap(readTranscript().segments.first?.speakerId)
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        try store.rename(speakerID: id, to: "Alice")
+        let asr = SegmentedTestASREngine()
+        var calls = 0
+        asr.customSegments = { _, _, _ in
+            calls += 1
+            if calls == 2 { try? store.rename(speakerID: id, to: "Bob") }
+            return [.init(id: "speech", startMs: 10_000, endMs: 10_500, text: "Speech", confidence: nil, language: "en", words: nil)]
+        }
+        _ = try await process(asr: asr, modelBytes: "changed-asr")
+        XCTAssertEqual(try store.load().identities[id]?.displayName, "Bob")
+        XCTAssertEqual(try readTranscript().segments.first?.speaker, "Bob")
+    }
+
+    func testMissingLoadedEmbeddingArtifactCannotClaimSessionIdentity() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        var document = try voiceDocument(label: "S1", vector: unitVoice(0))
+        document.embeddingArtifactFingerprint = nil
+        let result = try store.identity(rawLabel: "S1", diarization: document, runID: UUID(),
+            provenance: voiceProvenance(startMs: 0), document: &identities)
+        XCTAssertTrue(result.id.hasPrefix("remote_local_"))
+    }
+
+    func testRebuildReconsidersCachedAmbiguousGroupAfterCompetingProfileDisappears() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        let firstProvenance = try voiceProvenance(startMs: 0)
+        let first = try store.identity(rawLabel: "A", diarization: voiceDocument(label: "A", vector: unitVoice(0)),
+            runID: UUID(), provenance: firstProvenance, document: &identities)
+        identities.identities[first.id]?.displayName = "Alice"
+        var competing = unitVoice(0); competing[0] = 0.7; competing[1] = sqrt(1 - 0.7 * 0.7)
+        _ = try store.identity(rawLabel: "B", diarization: voiceDocument(label: "B", vector: competing),
+            runID: UUID(), provenance: voiceProvenance(startMs: 50_000), document: &identities)
+        var ambiguous = unitVoice(0); ambiguous[0] = 0.92; ambiguous[1] = sqrt(1 - 0.92 * 0.92)
+        let group = try voiceDocument(label: "C", vector: ambiguous)
+        let cachedRun = UUID(), cachedProvenance = try voiceProvenance(startMs: 100_000)
+        let before = try store.resolveWindow(diarization: group, runID: cachedRun, provenance: cachedProvenance, document: &identities)
+        XCTAssertTrue(try XCTUnwrap(before.identities["C"]).id.hasPrefix("remote_local_"))
+        try store.beginRebuild(provenances: [firstProvenance, cachedProvenance], document: &identities)
+        let after = try store.resolveWindow(diarization: group, runID: cachedRun, provenance: cachedProvenance, document: &identities)
+        XCTAssertEqual(after.identities["C"]?.id, first.id)
+        XCTAssertEqual(after.identities["C"]?.displayName, "Alice")
+        XCTAssertEqual(after.voicedGroups, 1)
+        XCTAssertEqual(after.unresolvedGroups, 0)
+    }
+
+    func testPaddingOnlyGroupDoesNotCountAsUnresolvedOwnedSpeech() throws {
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        var identities = try store.load()
+        var document = try voiceDocument(label: "S1", vector: unitVoice(0))
+        document.segments.append(.init(id: "context", speaker: "S2", startMs: 52_000, endMs: 54_000, confidence: nil))
+        document.voiceObservations?.append(.init(speaker: "S2", startMs: 52_000, endMs: 54_000, embedding: unitVoice(1)))
+        var provenance = try voiceProvenance(startMs: 0)
+        provenance.window.inputEndFrame = 55_000 * 48
+        let run = UUID()
+        let first = try store.resolveWindow(diarization: document, runID: run, provenance: provenance, document: &identities)
+        XCTAssertEqual(first.voicedGroups, 1)
+        XCTAssertEqual(first.unresolvedGroups, 0)
+        XCTAssertNotEqual(first.identities["S1"]?.id, first.identities["S2"]?.id)
+        let subsequentConsumer = try store.resolveWindow(diarization: document, runID: run, provenance: provenance, document: &identities)
+        XCTAssertEqual(subsequentConsumer.voicedGroups, 1)
+        XCTAssertEqual(subsequentConsumer.unresolvedGroups, 0)
+    }
+
+    func testRenameDuringMergingCallbackIsPublishedInAllTranscriptOutputs() async throws {
+        try await assertRenameDuringPublicationCallback(.merging)
+    }
+
+    func testRenameDuringRenderingCallbackIsPublishedInAllTranscriptOutputs() async throws {
+        try await assertRenameDuringPublicationCallback(.renderingOutputs)
+    }
+
+    private func assertRenameDuringPublicationCallback(_ state: TranscriptPipelineState) async throws {
+        try addAudio(track: .system, startSeconds: 0, seconds: 2)
+        _ = try await process(asr: SegmentedTestASREngine())
+        let id = try XCTUnwrap(readTranscript().segments.first?.speakerId)
+        let store = SessionSpeakerIdentityStore(directory: directory, sessionID: sessionID)
+        try store.rename(speakerID: id, to: "Alice")
+        var callbackInvoked = false
+        _ = try await process(asr: SegmentedTestASREngine(), onStateChange: { observed in
+            if observed == state {
+                callbackInvoked = true
+                try? store.rename(speakerID: id, to: "Bob")
+            }
+        })
+        XCTAssertTrue(callbackInvoked)
+        XCTAssertEqual(try store.load().identities[id]?.displayName, "Bob")
+        XCTAssertEqual(try readTranscript().segments.first?.speaker, "Bob")
+        for name in ["transcript.txt", "transcript.srt"] {
+            let text = try String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8)
+            XCTAssertTrue(text.contains("Bob"), "\(name) must agree with the latest published speaker name")
+            XCTAssertFalse(text.contains("Alice"), "\(name) must not retain the pre-callback name")
+        }
+    }
+
+    func testWordLookupKeepsLongOverlapBehindExpiredInterveningWord() async throws {
+        try addAudio(track: .microphone, startSeconds: 0, seconds: 100)
+        let asr = SegmentedTestASREngine()
+        asr.customSegments = { url, _, _ in
+            let words: [ASRWord]
+            if Self.inputOffsetMs(url) == 0 {
+                words = [.init(word: "Long", startMs: 49_000, endMs: 52_000, confidence: nil),
+                         .init(word: "long", startMs: 49_500, endMs: 50_000, confidence: nil)]
+            } else {
+                words = [.init(word: "LONG", startMs: 5_000, endMs: 8_000, confidence: nil)]
+            }
+            return [.init(id: "words", startMs: words[0].startMs, endMs: words.last!.endMs,
+                text: "long", confidence: nil, language: "en", words: words)]
+        }
+        _ = try await process(asr: asr)
+        let words = try readTranscript().segments.flatMap { $0.words ?? [] }.sorted { $0.startMs < $1.startMs }
+        XCTAssertEqual(words.map(\.startMs), [49_500, 50_000])
+        XCTAssertEqual(words.map(\.endMs), [50_000, 53_000])
+    }
+
+    func testWordLookupReplacementUsesUpdatedWindowForFollowingWord() async throws {
+        try addAudio(track: .microphone, startSeconds: 0, seconds: 100)
+        let asr = SegmentedTestASREngine()
+        asr.customSegments = { url, _, _ in
+            let words: [ASRWord] = Self.inputOffsetMs(url) == 0 ?
+                [.init(word: "Long", startMs: 49_000, endMs: 52_000, confidence: nil)] :
+                [.init(word: "long", startMs: 5_000, endMs: 8_000, confidence: nil),
+                 .init(word: "LONG", startMs: 6_000, endMs: 9_000, confidence: nil)]
+            return [.init(id: "words", startMs: words[0].startMs, endMs: words.last!.endMs,
+                text: "long", confidence: nil, language: "en", words: words)]
+        }
+        _ = try await process(asr: asr)
+        let words = try readTranscript().segments.flatMap { $0.words ?? [] }.sorted { $0.startMs < $1.startMs }
+        XCTAssertEqual(words.map(\.startMs), [50_000, 51_000])
+        XCTAssertEqual(words.map(\.endMs), [53_000, 54_000])
+    }
+
+    func testWordLookupPreservesRepeatedTextInNonoverlappingRanges() async throws {
+        try addAudio(track: .microphone, startSeconds: 0, seconds: 100)
+        let asr = SegmentedTestASREngine()
+        asr.customSegments = { url, _, _ in
+            let start = Self.inputOffsetMs(url) == 0 ? 10_000 : 15_000
+            return [.init(id: "words", startMs: start, endMs: start + 1_000,
+                text: "Yes", confidence: nil, language: "en", words: [
+                    .init(word: "Yes", startMs: start, endMs: start + 1_000, confidence: nil)])]
+        }
+        _ = try await process(asr: asr)
+        let words = try readTranscript().segments.flatMap { $0.words ?? [] }.sorted { $0.startMs < $1.startMs }
+        XCTAssertEqual(words.map(\.word), ["Yes", "Yes"])
+        XCTAssertEqual(words.map(\.startMs), [10_000, 60_000])
+    }
+
+    private func unitVoice(_ index: Int) -> [Float] {
+        var value = [Float](repeating: 0, count: 256); value[index] = 1; return value
+    }
+
+    private func voiceDocument(label: String, vector: [Float], startMs: Int = 0, endMs: Int = 10_000) throws -> DiarizationDocument {
+        let base = DiarizationDocument(version: 1, sessionID: sessionID, createdAt: Date(), segments: [
+            DiarizationSegment(id: label, speaker: label, startMs: startMs, endMs: endMs, confidence: 0.9)])
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(base)) as? [String: Any])
+        json["embeddingArtifactFingerprint"] = "diarizer-model-a"
+        json["embeddingSpace"] = "test-wespeaker-256-v1"
+        json["voiceObservations"] = [["speaker": label, "startMs": startMs, "endMs": endMs, "embedding": vector]]
+        return try JSONDecoder().decode(DiarizationDocument.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    private func voiceProvenance(startMs: Int, artifact: String? = "diarizer-model-a") throws -> WindowInferenceProvenance {
+        let manifest = SessionAudioManifest(sessionID: sessionID, hostTimeOrigin: 0)
+        let window = InferenceWindow(track: .system, ownershipStartFrame: Int64(startMs) * 48,
+            ownershipEndFrame: Int64(startMs + 50_000) * 48, inputStartFrame: Int64(startMs) * 48,
+            inputEndFrame: Int64(startMs + 50_000) * 48)
+        let profile = InferenceRuntimeProfile(stageSelection: .defaultLocal,
+            modelArtifacts: .init(asrModelURL: nil, diarizationModelURL: nil, summarizationModelURL: nil),
+            summarizationRuntimeSettings: .default)
+        return WindowInferenceProvenance(manifest: manifest, window: window, profile: profile,
+            asrArtifactFingerprint: "asr", asrEngineFingerprint: "asr", diarizationArtifactFingerprint: artifact,
+            settings: InferenceWindowSettings())
+    }
+
     private func processLegacy(asr: SegmentedTestASREngine, diarization: SegmentedTestDiarizationEngine = SegmentedTestDiarizationEngine()) async throws -> TranscriptionResult {
         try addAudio(track: .microphone, startSeconds: 0, seconds: 2)
         try addAudio(track: .system, startSeconds: 0, seconds: 2)
@@ -774,7 +1148,7 @@ final class SegmentedInferenceTests: XCTestCase {
         try JSONDecoder().decode(SegmentedInferenceReport.self, from: Data(contentsOf: directory.appendingPathComponent("inference/report.json")))
     }
 
-    private func process(asr: SegmentedTestASREngine, diarization: SegmentedTestDiarizationEngine = SegmentedTestDiarizationEngine(), modelBytes: String = "model-v1", diarizationModelURL: URL? = nil, overrideDirectory: URL? = nil, overrideSessionID: UUID? = nil, onProgress: (@MainActor (TranscriptProcessingProgress) -> Void)? = nil) async throws -> TranscriptionResult {
+    private func process(asr: SegmentedTestASREngine, diarization: SegmentedTestDiarizationEngine = SegmentedTestDiarizationEngine(), modelBytes: String = "model-v1", diarizationModelURL: URL? = nil, overrideDirectory: URL? = nil, overrideSessionID: UUID? = nil, onProgress: (@MainActor (TranscriptProcessingProgress) -> Void)? = nil, onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil) async throws -> TranscriptionResult {
         let directory = overrideDirectory ?? self.directory!
         let sessionID = overrideSessionID ?? self.sessionID
         let model = directory.appendingPathComponent("test-model")
@@ -786,7 +1160,7 @@ final class SegmentedInferenceTests: XCTestCase {
             modelArtifacts: InferenceModelArtifacts(asrModelURL: model, diarizationModelURL: diarizationModelURL, summarizationModelURL: nil),
             summarizationRuntimeSettings: .default)
         return try await TranscriptionPipeline().process(recording: recording, in: directory, runtimeProfile: profile,
-            engineFactory: SegmentedTestEngineFactory(asr: asr, diarization: diarization), onProgress: onProgress)
+            engineFactory: SegmentedTestEngineFactory(asr: asr, diarization: diarization), onStateChange: onStateChange, onProgress: onProgress)
     }
 
     private func readTranscript(in overrideDirectory: URL? = nil) throws -> TranscriptDocument {
@@ -840,6 +1214,7 @@ private final class SegmentedTestDiarizationEngine: DiarizationEngine {
     var cancels: Bool
     var rawLabel: String
     var customSegments: [DiarizationSegment]?
+    var customDocument: DiarizationDocument?
     var timesOut = false
     var attempts = 0
     init(fails: Bool = false, cancels: Bool = false, rawLabel: String = "speaker_0") {
@@ -850,6 +1225,7 @@ private final class SegmentedTestDiarizationEngine: DiarizationEngine {
         if timesOut { throw DiarizationRuntimeError.timedOut }
         if cancels { throw DiarizationRuntimeError.cancelled }
         if fails { throw DiarizationRuntimeError.nonZeroExit(code: 1, stderr: "fixture diarization failure") }
+        if var customDocument { customDocument.sessionID = sessionID; return customDocument }
         return DiarizationDocument(version: 1, sessionID: sessionID, createdAt: Date(), segments: customSegments ?? [DiarizationSegment(id: "local-0", speaker: rawLabel, startMs: 0, endMs: 60_000, confidence: 0.9)])
     }
 }

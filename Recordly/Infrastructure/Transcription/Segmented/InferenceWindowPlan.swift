@@ -6,7 +6,7 @@ struct InferenceWindowSettings: Codable, Equatable {
     var contextSeconds: Int64 = 5
     var implementationVersion = "segmented-inference-v2.1"
     var resultVersion = 1
-    var diarizationSettingsIdentity = "backend-default-v1;alignment-overlap:0.25;window-local-speakers-v1"
+    var diarizationSettingsIdentity = "backend-default-v2;fluidaudio:0.17.7;embedding:wespeaker-256-l2;alignment-overlap:0.25;session-voice-v1"
 }
 
 struct InferenceWindow: Codable, Equatable {

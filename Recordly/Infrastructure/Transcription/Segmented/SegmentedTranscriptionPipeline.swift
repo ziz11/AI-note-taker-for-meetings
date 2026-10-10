@@ -55,6 +55,13 @@ struct SegmentedTranscriptionPipeline {
         for track in tracks {
             windows += try planner.windows(track: track, durationFrames: manifest.segments.filter { $0.track == track }.map(\.endFrame).max() ?? 0)
         }
+        let provenances = windows.map { window in
+            WindowInferenceProvenance(manifest: manifest, window: window, profile: runtimeProfile,
+                asrArtifactFingerprint: asrArtifact, asrEngineFingerprint: asr.cacheFingerprint(configuration: asrConfiguration),
+                diarizationArtifactFingerprint: window.track == .system ? diarizationArtifact : nil, settings: settings)
+        }
+        try identityStore.beginRebuild(provenances: provenances.filter { $0.window.track == .system }, document: &identities)
+        var voicedGroups = 0, unresolvedGroups = 0
         let systemWindowCount = windows.filter { $0.track == .system }.count
         var progress = TranscriptProcessingProgress(
             asr: TranscriptStageProgress(total: windows.count),
@@ -64,9 +71,6 @@ struct SegmentedTranscriptionPipeline {
         var report = SegmentedInferenceReport(sessionID: recording.id,
             speakerContinuity: systemWindowCount > 1 ? .unresolvedAcrossWindows : (systemWindowCount == 1 ? .windowLocalOnly : .microphoneOnly),
             audioDiagnostics: manifest.diagnostics)
-        if systemWindowCount > 1 {
-            report.diagnostics.append("Remote speaker continuity across inference windows is unresolved. Local backend labels are not global identities.")
-        }
         if systemWindowCount > 0 && diarizationArtifact == nil && diarizationArtifactFailure == nil {
             report.diagnostics.append("Diarization artifact identity unavailable; successful diarization is rerun rather than reusing an unverifiable model cache.")
         }
@@ -90,9 +94,7 @@ struct SegmentedTranscriptionPipeline {
                 for (windowIndex, window) in windows.enumerated() {
                     progress.activeWindow = windowIndex + 1
                     try Task.checkCancellation()
-                    let provenance = WindowInferenceProvenance(manifest: manifest, window: window, profile: runtimeProfile,
-                        asrArtifactFingerprint: asrArtifact, asrEngineFingerprint: asr.cacheFingerprint(configuration: asrConfiguration),
-                        diarizationArtifactFingerprint: window.track == .system ? diarizationArtifact : nil, settings: settings)
+                    let provenance = provenances[windowIndex]
                     var result = cache.load(matching: provenance) ?? PersistedInferenceWindow(provenance: provenance)
                     let hadASR = result.asr != nil
                     let hadDiarization = result.diarization != nil && result.diarizationRunID != nil && diarizationArtifact != nil
@@ -217,24 +219,32 @@ struct SegmentedTranscriptionPipeline {
                     try cache.save(result)
                     if let error = result.asrFailure { report.windowFailures.append(failure(window, stage: "asr", message: error)) }
                     if let error = result.diarizationFailure { report.windowFailures.append(failure(window, stage: "diarization", message: error)) }
+                    var speakerIdentities: [String: SessionSpeakerIdentity] = [:]
+                    if let document = result.diarization, let runID = result.diarizationRunID {
+                        let resolution = try identityStore.resolveWindow(diarization: document, runID: runID,
+                            provenance: provenance, document: &identities)
+                        speakerIdentities = resolution.identities
+                        voicedGroups += resolution.voicedGroups
+                        unresolvedGroups += resolution.unresolvedGroups
+                    } else if window.track == .system { unresolvedGroups += 1 }
                     if let document = result.asr {
                         completedASR[window.track, default: 0] += 1
-                        candidates += try makeCandidates(asr: document, diarization: result.diarization, diarizationRunID: result.diarizationRunID,
-                            provenance: provenance, manifest: manifest, identityStore: identityStore, identities: &identities)
+                        candidates += try makeCandidates(asr: document, diarization: result.diarization,
+                            provenance: provenance, manifest: manifest, speakerIdentities: speakerIdentities)
                         if document.segments.isEmpty { appendDegradation(window.track == .microphone ? .emptyMicASR : .emptySystemASR, to: &degraded) }
                     }
-                    if let document = result.diarization, let runID = result.diarizationRunID {
+                    if let document = result.diarization {
                         for local in document.segments {
                             let start = max(window.ownershipStartMs, local.startMs + window.offsetMs)
                             let end = min(window.ownershipEndMs, local.endMs + window.offsetMs)
                             guard start < end else { continue }
-                            let identity = try identityStore.identity(rawLabel: local.speaker, diarization: document,
-                                runID: runID, provenance: provenance, document: &identities)
+                            guard let identity = speakerIdentities[local.speaker] else { continue }
                             diarizationSegments.append(DiarizationSegment(id: "\(window.id)-\(local.id)", speaker: identity.id,
                                 startMs: start, endMs: end, confidence: local.confidence))
                         }
                     }
-                    try identityStore.save(identities)
+                    let snapshot = identities
+                    identities = try await MainActor.run { try identityStore.savePreservingDisplayNames(snapshot) }
                     report.completedWindows.append(window.id)
                     try writeInferenceJSON(report, to: reportURL)
                 }
@@ -243,7 +253,13 @@ struct SegmentedTranscriptionPipeline {
             if report.windowFailures.contains(where: { $0.stage == "asr" && $0.track == .microphone }) { appendDegradation(.micASRFailedFallbackUsed, to: &degraded) }
             if report.windowFailures.contains(where: { $0.stage == "asr" && $0.track == .system }) { appendDegradation(.systemASRFailedFallbackUsed, to: &degraded) }
             if report.windowFailures.contains(where: { $0.stage == "audio" || $0.stage == "asr" }) { appendDegradation(.windowInferenceFailed, to: &degraded) }
-            if systemWindowCount > 1 { appendDegradation(.speakerContinuityUnresolved, to: &degraded) }
+            report.speakerContinuity = systemWindowCount == 0 ? .microphoneOnly :
+                (voicedGroups > 0 ? (unresolvedGroups == 0 ? .sessionMatched : .partiallyMatched) :
+                    (systemWindowCount > 1 ? .unresolvedAcrossWindows : .windowLocalOnly))
+            if unresolvedGroups > 0 {
+                report.diagnostics.append("\(voicedGroups) remote groups have session voice identities; \(unresolvedGroups) groups remain local or unknown because voice evidence is absent, insufficient, ambiguous, or incompatible.")
+                if systemWindowCount > 1 { appendDegradation(.speakerContinuityUnresolved, to: &degraded) }
+            }
             guard completedASR.values.reduce(0, +) > 0 else {
                 report.status = "failed"; try writeInferenceJSON(report, to: reportURL)
                 throw TranscriptionPipelineError.inferenceFailed(report.windowFailures.first?.message ?? "No inference windows completed.")
@@ -259,18 +275,33 @@ struct SegmentedTranscriptionPipeline {
             await publisher.publish(progress, force: true)
             try Task.checkCancellation()
             let channels = [TranscriptChannel.mic, .system].filter { completedASR[$0 == .mic ? .microphone : .system] != nil }
-            let transcript = TranscriptDocument(version: 1, sessionID: recording.id, createdAt: Date(), channelsPresent: channels,
+            let initialTranscript = TranscriptDocument(version: 1, sessionID: recording.id, createdAt: Date(), channelsPresent: channels,
                 diarizationApplied: !diarizationSegments.isEmpty, mergePolicy: .deterministicStartEndChannelID, segments: segments)
-            try writeInferenceJSON(transcript, to: directory.appendingPathComponent("transcript.json"))
+            let transcript = try await MainActor.run {
+                try Task.checkCancellation()
+                let refreshed = try refreshSpeakerNames(in: initialTranscript, using: identityStore)
+                try writeInferenceJSON(refreshed, to: directory.appendingPathComponent("transcript.json"))
+                return refreshed
+            }
             progress.completedOutputSteps = 1
             progress.state = .renderingOutputs
             progress.activeWindow = nil
             await onStateChange?(.renderingOutputs)
             await publisher.publish(progress, force: true)
             try Task.checkCancellation()
-            let rendered = renderService.render(document: transcript)
-            try rendered.transcriptText.write(to: directory.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
-            try rendered.srtText.write(to: directory.appendingPathComponent("transcript.srt"), atomically: true, encoding: .utf8)
+            // UI callbacks above can rename a speaker. Serialize the final name
+            // refresh and all name-bearing publications with those main-actor
+            // writes, with no suspension between the refresh and file writes.
+            try await MainActor.run {
+                try Task.checkCancellation()
+                let refreshed = try refreshSpeakerNames(in: transcript, using: identityStore)
+                let rendered = renderService.render(document: refreshed)
+                if refreshed != transcript {
+                    try writeInferenceJSON(refreshed, to: directory.appendingPathComponent("transcript.json"))
+                }
+                try rendered.transcriptText.write(to: directory.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
+                try rendered.srtText.write(to: directory.appendingPathComponent("transcript.srt"), atomically: true, encoding: .utf8)
+            }
             for channel in channels {
                 let document = ASRDocument(version: 1, sessionID: recording.id, channel: channel, createdAt: Date(),
                     segments: segments.filter { $0.channel == channel }.map { ASRSegment(id: $0.id, startMs: $0.startMs, endMs: $0.endMs,
@@ -288,7 +319,7 @@ struct SegmentedTranscriptionPipeline {
             await onStateChange?(.ready)
             await publisher.publish(progress, force: true)
             let diarizationFailure = report.windowFailures.filter { $0.stage == "diarization" }.map(\.message).first
-            let continuityNote = systemWindowCount > 1 ? " Remote speaker continuity across windows remains unresolved." : ""
+            let continuityNote = unresolvedGroups > 0 && systemWindowCount > 1 ? " Some remote speakers remain local or unknown; see inference/report.json." : ""
             let failureNote = report.windowFailures.isEmpty ? "" : " \(report.windowFailures.count) inference/audio range issues; see inference/report.json."
             let restartNote = requiresDiarizationRestart ? " Restart the app before retrying diarization; ASR remains available with unknown remote speakers." : ""
             return TranscriptionResult(transcriptFile: "transcript.txt", srtFile: "transcript.srt", transcriptJSONFile: "transcript.json",
@@ -309,9 +340,21 @@ struct SegmentedTranscriptionPipeline {
         }
     }
 
-    private func makeCandidates(asr: ASRDocument, diarization: DiarizationDocument?, diarizationRunID: UUID?,
+    @MainActor
+    private func refreshSpeakerNames(in transcript: TranscriptDocument, using store: SessionSpeakerIdentityStore) throws -> TranscriptDocument {
+        let identities = try store.load()
+        var refreshed = transcript
+        for index in refreshed.segments.indices {
+            if let id = refreshed.segments[index].speakerId, let identity = identities.identities[id] {
+                refreshed.segments[index].speaker = identity.displayName ?? identity.defaultLabel
+            }
+        }
+        return refreshed
+    }
+
+    private func makeCandidates(asr: ASRDocument, diarization: DiarizationDocument?,
                                 provenance: WindowInferenceProvenance, manifest: SessionAudioManifest,
-                                identityStore: SessionSpeakerIdentityStore, identities: inout SessionSpeakerIdentityDocument) throws -> [WindowTranscriptCandidate] {
+                                speakerIdentities: [String: SessionSpeakerIdentity]) throws -> [WindowTranscriptCandidate] {
         let window = provenance.window
         let localLimitMs = Int(window.frameCount / 48)
         var output: [WindowTranscriptCandidate] = []
@@ -357,13 +400,12 @@ struct SegmentedTranscriptionPipeline {
             var speakerID = window.track == .microphone ? "me" : "remote_unknown"
             var role: SpeakerRole = window.track == .microphone ? .me : .unknown
             var speakerConfidence: Double?
-            if window.track == .system, let diarization, let runID = diarizationRunID {
+            if window.track == .system, let diarization {
                 let localStart = start - window.offsetMs
                 let localEnd = end - window.offsetMs
                 if let best = diarization.segments.max(by: { overlap($0.startMs, $0.endMs, localStart, localEnd) < overlap($1.startMs, $1.endMs, localStart, localEnd) }),
                    Double(overlap(best.startMs, best.endMs, localStart, localEnd)) / Double(max(localEnd - localStart, 1)) >= 0.25 {
-                    let identity = try identityStore.identity(rawLabel: best.speaker, diarization: diarization,
-                        runID: runID, provenance: provenance, document: &identities)
+                    guard let identity = speakerIdentities[best.speaker] else { continue }
                     speaker = identity.displayName ?? identity.defaultLabel
                     speakerID = identity.id
                     role = .remote
@@ -411,19 +453,28 @@ struct SegmentedTranscriptionPipeline {
     }
 
     private func reconcileTimedWords(_ input: [WindowTranscriptCandidate]) throws -> [WindowTranscriptCandidate] {
+        struct WordLookupKey: Hashable {
+            var channel: String
+            var normalizedText: String
+        }
         struct WordCandidate {
             var candidateIndex: Int
             var wordIndex: Int
             var word: ASRWord
             var window: InferenceWindow
             var channel: TranscriptChannel
+            var lookupKey: WordLookupKey
             var key: String { "\(candidateIndex):\(wordIndex)" }
+        }
+        func normalized(_ word: String) -> String {
+            word.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
         }
         var words: [WordCandidate] = []
         for (candidateIndex, candidate) in input.enumerated() where candidate.hasWordTiming {
             for (wordIndex, word) in (candidate.segment.words ?? []).enumerated() {
                 words.append(WordCandidate(candidateIndex: candidateIndex, wordIndex: wordIndex, word: word,
-                    window: candidate.provenance.window, channel: candidate.segment.channel))
+                    window: candidate.provenance.window, channel: candidate.segment.channel,
+                    lookupKey: WordLookupKey(channel: candidate.segment.channel.rawValue, normalizedText: normalized(word.word))))
             }
         }
         words.sort {
@@ -432,18 +483,19 @@ struct SegmentedTranscriptionPipeline {
         }
         var selected: [WordCandidate] = []
         var removed = Set<String>()
-        func normalized(_ word: String) -> String {
-            word.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
-        }
+        var activeIndices: [WordLookupKey: [Int]] = [:]
         func ownedRatio(_ word: WordCandidate) -> Double {
             Double(overlap(word.word.startMs, word.word.endMs, word.window.ownershipStartMs, word.window.ownershipEndMs))
                 / Double(max(word.word.endMs - word.word.startMs, 1))
         }
         for word in words {
-            let duplicate = selected.indices.last { index in
+            // Start-sorted input cannot overlap a selected word ending at/before
+            // this start. Keep every still-active interval, including long words
+            // behind newer short words, and preserve the original last-index rule.
+            var relevant = (activeIndices[word.lookupKey] ?? []).filter { selected[$0].word.endMs > word.word.startMs }
+            let duplicate = relevant.last { index in
                 let prior = selected[index]
-                guard prior.channel == word.channel, prior.window.id != word.window.id,
-                      normalized(prior.word.word) == normalized(word.word.word) else { return false }
+                guard prior.window.id != word.window.id else { return false }
                 let common = overlap(prior.word.startMs, prior.word.endMs, word.word.startMs, word.word.endMs)
                 let shorter = min(prior.word.endMs - prior.word.startMs, word.word.endMs - word.word.startMs)
                 return common > 0 && Double(common) / Double(max(shorter, 1)) >= 0.5
@@ -454,7 +506,13 @@ struct SegmentedTranscriptionPipeline {
                     removed.insert(prior.key)
                     selected[duplicate] = word
                 } else { removed.insert(word.key) }
-            } else { selected.append(word) }
+            } else {
+                relevant.append(selected.count)
+                selected.append(word)
+            }
+            // Replacement keeps its selected index and the same channel/text key;
+            // later comparisons read its updated time and window from selected.
+            activeIndices[word.lookupKey] = relevant
         }
         var output: [WindowTranscriptCandidate] = []
         for (index, var candidate) in input.enumerated() {

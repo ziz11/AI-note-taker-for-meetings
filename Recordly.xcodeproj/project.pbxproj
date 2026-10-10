@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AF1002012EBC1D6F00000001 /* NativeFluidAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF1001012EBC1D6F00000001 /* NativeFluidAcceptanceTests.swift */; };
 		0930659D602BC6AACC3C516E /* TranscriptMergeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458D7BF2780B07D4DABC985A /* TranscriptMergeServiceTests.swift */; };
 		15CD5138FCA0BCCED1F11FA5 /* SummaryPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395881AA0C8D023430EC50AE /* SummaryPromptBuilder.swift */; };
 		1AC10EAE781C81A93B123433 /* TranscriptMergeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4170736EE52225BAE71D569E /* TranscriptMergeService.swift */; };
@@ -115,6 +116,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		AF1001012EBC1D6F00000001 /* NativeFluidAcceptanceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativeFluidAcceptanceTests.swift; sourceTree = "<group>"; };
 		108CC7941A9C36C35F7AEC9A /* LlamaCppSummarizationEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ../Inference/Backends/LlamaCpp/LlamaCppSummarizationEngine.swift; sourceTree = "<group>"; };
 		18F73A72E7F344B6A8F1F3DD /* SummaryEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SummaryEngine.swift; sourceTree = "<group>"; };
 		248B0A3CEFC995A4371B6129 /* SystemSpeakerMappingServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SystemSpeakerMappingServiceTests.swift; path = SystemSpeakerMappingServiceTests.swift; sourceTree = "<group>"; };
@@ -272,6 +274,7 @@
 				CA0000082F10000000000001 /* CaptureSamplePipelineTests.swift */,
 				F491D872A0CA6A53A0EEA672 /* SegmentedAudioTests.swift */,
 				68C1431CA5D8FA897E06E404 /* SegmentedInferenceTests.swift */,
+				AF1001012EBC1D6F00000001 /* NativeFluidAcceptanceTests.swift */,
 			);
 			name = RecordlyTests;
 			path = RecordlyTests;
@@ -646,6 +649,7 @@
 				CAFE00032F31000000000001 /* CaptureHealthTests.swift in Sources */,
 				8FF15D5377B774144E3F49A3 /* SegmentedAudioTests.swift in Sources */,
 				BBC885F9BC1E96D5983BC2C3 /* SegmentedInferenceTests.swift in Sources */,
+				AF1002012EBC1D6F00000001 /* NativeFluidAcceptanceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

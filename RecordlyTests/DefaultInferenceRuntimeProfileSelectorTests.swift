@@ -56,6 +56,16 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
         XCTAssertNil(profile.modelArtifacts.diarizationModelURL)
     }
 
+    func testResolveTranscriptionProfileCarriesActualDiarizationArtifact() throws {
+        let fluid = try createFluidModelDirectory(named: "asr")
+        let provider = StubFluidAudioDiarizationModelProvider(state: .ready)
+        provider.modelURLForRuntime = tempDirectory.appendingPathComponent("speaker-diarization")
+        let selector = DefaultInferenceRuntimeProfileSelector(modelManager: makeModelManager(),
+            asrModelProvider: StubFluidAudioASRModelProvider(modelURL: fluid), diarizationModelProvider: provider)
+        XCTAssertEqual(try selector.resolveTranscriptionProfile(for: .balanced).modelArtifacts.diarizationModelURL,
+            provider.modelURLForRuntime)
+    }
+
     func testResolveTranscriptionProfileInjectsFluidBackendWhenSelected() throws {
         let fluidDirectory = try createFluidModelDirectory(named: "fluid-asr-v3")
         let manager = makeModelManager()
@@ -305,6 +315,7 @@ final class DefaultInferenceRuntimeProfileSelectorTests: XCTestCase {
 
     private final class StubFluidAudioDiarizationModelProvider: FluidAudioDiarizationModelProviding {
         private(set) var state: FluidAudioModelProvisioningState
+        var modelURLForRuntime: URL?
         private let manager = StubOfflineDiarizationManager()
 
         init(state: FluidAudioModelProvisioningState) {

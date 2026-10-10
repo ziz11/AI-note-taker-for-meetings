@@ -53,6 +53,8 @@ enum SessionSpeakerContinuity: String, Codable {
     case microphoneOnly
     case windowLocalOnly
     case unresolvedAcrossWindows
+    case sessionMatched
+    case partiallyMatched
 }
 
 struct SessionSpeakerIdentity: Codable, Equatable {
@@ -71,13 +73,30 @@ struct SessionSpeakerIdentityDocument: Codable {
     var identityScopeSessionID: UUID?
     var identities: [String: SessionSpeakerIdentity] = [:]
     var aliases: [String: String] = [:]
+    var voiceProfiles: [String: SessionVoiceProfile]? = nil
 }
 
-/// Raw labels are scoped to actual inference runs. Only an exact local turn
-/// signature with identical audio and diarization configuration can recover a
-/// prior local identity, independently of subsequent ASR model changes.
-/// We never infer cross-window identity from the backend's speaker_0 label.
+struct SessionVoiceSample: Codable, Equatable {
+    var evidenceKey: String
+    var embedding: [Float]
+}
+
+struct SessionVoiceProfile: Codable, Equatable {
+    var space: String
+    var samples: [SessionVoiceSample]
+    var anchors: [SessionVoiceSample]
+}
+
+struct SessionWindowSpeakerResolution {
+    var identities: [String: SessionSpeakerIdentity]
+    var voicedGroups: Int
+    var unresolvedGroups: Int
+}
+
+/// Only voice evidence in the same model space may match across windows. Raw
+/// labels remain run-local; the legacy exact-turn fallback preserves old names.
 struct SessionSpeakerIdentityStore {
+    static let matchingContract = "session-voice-v1;cosine:0.80;margin:0.08;exclusive-ms:3000;anchors:8;profiles:128"
     let directory: URL
     let sessionID: UUID
     var url: URL { directory.appendingPathComponent("speaker-identities.json") }
@@ -90,6 +109,19 @@ struct SessionSpeakerIdentityStore {
     }
 
     func save(_ document: SessionSpeakerIdentityDocument) throws { try writeInferenceJSON(document, to: url) }
+
+    /// Pipeline updates are serialized with UI renames on the main actor. Names
+    /// are user-owned; inference can replace mappings/evidence but never names.
+    @MainActor
+    func savePreservingDisplayNames(_ document: SessionSpeakerIdentityDocument) throws -> SessionSpeakerIdentityDocument {
+        let latest = try load()
+        var merged = document
+        for (id, identity) in latest.identities where merged.identities[id] != nil {
+            merged.identities[id]?.displayName = identity.displayName
+        }
+        try save(merged)
+        return merged
+    }
 
     static func rebindCopy(in directory: URL, from sourceID: UUID, to destinationID: UUID) throws {
         let source = SessionSpeakerIdentityStore(directory: directory, sessionID: sourceID)
@@ -111,12 +143,189 @@ struct SessionSpeakerIdentityStore {
         try save(value)
     }
 
+    /// Rebuild current contributions, retaining only named anchors whose exact
+    /// source evidence still exists. Removed/replaced audio never seeds a profile.
+    func beginRebuild(provenances: [WindowInferenceProvenance], document: inout SessionSpeakerIdentityDocument) throws {
+        let valid = Set(try provenances.map { try evidenceKey($0, document: document) })
+        var retained: [String: SessionVoiceProfile] = [:]
+        for (id, profile) in document.voiceProfiles ?? [:] where document.identities[id]?.displayName != nil {
+            let anchors = (profile.anchors + profile.samples).filter { valid.contains($0.evidenceKey) }
+            if !anchors.isEmpty {
+                var unique: [SessionVoiceSample] = []
+                for sample in anchors where !unique.contains(sample) {
+                    unique.append(sample)
+                    if unique.count == 8 { break }
+                }
+                retained[id] = SessionVoiceProfile(space: profile.space, samples: [], anchors: unique)
+            }
+        }
+        document.voiceProfiles = retained
+        // Every alias is a decision against the previous profile set. Recompute
+        // cached local decisions too; exact-turn IDs still recover local names.
+        document.aliases = [:]
+    }
+
     func identity(rawLabel: String, diarization: DiarizationDocument, runID: UUID,
+                  provenance: WindowInferenceProvenance, document: inout SessionSpeakerIdentityDocument) throws -> SessionSpeakerIdentity {
+        let result = try resolveWindow(diarization: diarization, runID: runID, provenance: provenance, document: &document)
+        if let identity = result.identities[rawLabel] { return identity }
+        return try localIdentity(rawLabel: rawLabel, diarization: diarization, runID: runID, provenance: provenance, document: &document)
+    }
+
+    func resolveWindow(diarization: DiarizationDocument, runID: UUID,
+                       provenance: WindowInferenceProvenance, document: inout SessionSpeakerIdentityDocument) throws -> SessionWindowSpeakerResolution {
+        let labels = Set(diarization.segments.map(\.speaker)).sorted()
+        let ownedStart = provenance.window.ownershipStartMs - provenance.window.offsetMs
+        let ownedEnd = provenance.window.ownershipEndMs - provenance.window.offsetMs
+        let ownedLabels = Set(diarization.segments.filter {
+            $0.startMs < $0.endMs && $0.startMs < ownedEnd && $0.endMs > ownedStart
+        }.map(\.speaker))
+        func resolution(_ identities: [String: SessionSpeakerIdentity]) -> SessionWindowSpeakerResolution {
+            let owned = identities.filter { ownedLabels.contains($0.key) }
+            let voiced = owned.values.filter { $0.continuity == .sessionMatched }.count
+            return .init(identities: identities, voicedGroups: voiced, unresolvedGroups: owned.count - voiced)
+        }
+        let aliasPrefix = "\(provenance.window.id)|\(runID.uuidString)|"
+        // A run is resolved once as a batch. Subsequent consumers only read it.
+        if labels.allSatisfy({ document.aliases[aliasPrefix + $0] != nil }) {
+            let identities = Dictionary(uniqueKeysWithValues: labels.compactMap { label -> (String, SessionSpeakerIdentity)? in
+                guard let id = document.aliases[aliasPrefix + label], let identity = document.identities[id] else { return nil }
+                return (label, identity)
+            })
+            if identities.count == labels.count {
+                return resolution(identities)
+            }
+        }
+        let key = try evidenceKey(provenance, document: document)
+        let artifact = provenance.diarizationArtifactFingerprint
+        let validArtifact = artifact != nil && diarization.embeddingArtifactFingerprint == artifact
+        let space = validArtifact ? diarization.embeddingSpace.map {
+            "\(provenance.diarizationBackend)|\(artifact!)|\($0)|\(provenance.settings.diarizationSettingsIdentity)|\(Self.matchingContract)"
+        } : nil
+        var voices: [String: [Float]] = [:]
+        if space != nil {
+            for label in labels {
+                if let embedding = representative(label: label, diarization: diarization, window: provenance.window) { voices[label] = embedding }
+            }
+        }
+        let profiles = document.voiceProfiles ?? [:]
+        var proposals: [String: String] = [:]
+        var uncertain = Set<String>()
+        var newLabels = Set<String>()
+        for label in labels {
+            guard let voice = voices[label], let space else { continue }
+            let ranked = profiles.filter { $0.value.space == space }.compactMap { id, profile -> (String, Float)? in
+                let similarities = (profile.anchors + profile.samples).compactMap { sample -> Float? in
+                    guard let normalized = DiarizationVoiceObservation.normalized(sample.embedding) else { return nil }
+                    return Self.cosine(voice, normalized)
+                }
+                guard let score = similarities.max() else { return nil }
+                return (id, score)
+            }.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 > $1.1 }
+            if let best = ranked.first, best.1 >= 0.80 {
+                let runnerUp = ranked.dropFirst().first?.1 ?? -1
+                if best.1 - runnerUp >= 0.08 { proposals[label] = best.0 }
+                else { uncertain.insert(label) }
+            } else if let best = ranked.first, best.1 >= 0.72 {
+                // Near an existing profile but below the match threshold: don't
+                // create a competing profile from weak/ambiguous evidence.
+                uncertain.insert(label)
+            } else { newLabels.insert(label) }
+        }
+        // All local groups are distinct constraints. Conflicting matches are
+        // declined together, rather than depending on enumeration order.
+        for (_, group) in Dictionary(grouping: proposals.keys, by: { proposals[$0]! }) where group.count > 1 {
+            for label in group { proposals[label] = nil; uncertain.insert(label) }
+        }
+        for label in newLabels {
+            if labels.contains(where: { other in
+                other != label && voices[other].map { Self.cosine(voices[label]!, $0) >= 0.80 } == true
+            }) { uncertain.insert(label) }
+        }
+        var resolved: [String: SessionSpeakerIdentity] = [:]
+        var mutableProfiles = profiles
+        for label in labels {
+            if let space, let voice = voices[label], !uncertain.contains(label),
+               proposals[label] != nil || (newLabels.contains(label) && mutableProfiles.count < 128) {
+                let id: String
+                if let existing = proposals[label] { id = existing }
+                else {
+                    let local = try localIdentity(rawLabel: label, diarization: diarization, runID: runID, provenance: provenance, document: &document)
+                    id = "remote_voice_" + String(InferenceFingerprint.digest(Data("\(local.id)|\(space)".utf8)).prefix(20))
+                    if document.identities[local.id]?.displayName == nil { document.identities[local.id] = nil }
+                }
+                let identity = document.identities[id] ?? SessionSpeakerIdentity(id: id,
+                    defaultLabel: "Speaker \(mutableProfiles.count + 1)", continuity: .sessionMatched)
+                document.identities[id] = identity
+                document.aliases[aliasPrefix + label] = id
+                var profile = mutableProfiles[id] ?? SessionVoiceProfile(space: space, samples: [], anchors: [])
+                // One contribution per source window/group. A cache-warm run
+                // cannot add the same sample repeatedly or drift a centroid.
+                let sample = SessionVoiceSample(evidenceKey: key, embedding: voice)
+                if !profile.samples.contains(sample), profile.samples.count < 8 { profile.samples.append(sample) }
+                mutableProfiles[id] = profile
+                resolved[label] = identity
+            } else {
+                resolved[label] = try localIdentity(rawLabel: label, diarization: diarization, runID: runID,
+                    provenance: provenance, document: &document)
+            }
+        }
+        document.voiceProfiles = mutableProfiles
+        return resolution(resolved)
+    }
+
+    func evidenceKey(_ provenance: WindowInferenceProvenance, document: SessionSpeakerIdentityDocument) throws -> String {
+        try InferenceFingerprint.encode(LocalSpeakerScope(provenance: provenance,
+            scopeSessionID: document.identityScopeSessionID ?? document.sessionID))
+    }
+
+    private static func cosine(_ a: [Float], _ b: [Float]) -> Float {
+        zip(a, b).reduce(0) { $0 + $1.0 * $1.1 }
+    }
+
+    private func representative(label: String, diarization: DiarizationDocument, window: InferenceWindow) -> [Float]? {
+        let lower = window.ownershipStartMs - window.offsetMs
+        let upper = window.ownershipEndMs - window.offsetMs
+        var exclusive: [(Int, Int)] = diarization.segments.filter { $0.speaker == label }.compactMap {
+            let a = max(lower, $0.startMs), b = min(upper, $0.endMs)
+            return a < b ? (a, b) : nil
+        }
+        for other in diarization.segments where other.speaker != label {
+            exclusive = exclusive.flatMap { a, b -> [(Int, Int)] in
+                if other.endMs <= a || other.startMs >= b { return [(a, b)] }
+                return [(a, min(b, other.startMs)), (max(a, other.endMs), b)].filter { $0.0 < $0.1 }
+            }
+        }
+        var weighted = [Float](repeating: 0, count: 256)
+        var supported: [(Int, Int)] = []
+        // The domain independently bounds and validates input from any backend.
+        for observation in (diarization.voiceObservations ?? []).prefix(128) where observation.speaker == label {
+            guard let vector = DiarizationVoiceObservation.normalized(observation.embedding), observation.startMs < observation.endMs else { continue }
+            let ranges = exclusive.compactMap { a, b -> (Int, Int)? in
+                let start = max(a, observation.startMs), end = min(b, observation.endMs)
+                return start < end ? (start, end) : nil
+            }
+            let weight = ranges.reduce(0) { $0 + $1.1 - $1.0 }
+            guard weight > 0 else { continue }
+            supported += ranges
+            for i in weighted.indices { weighted[i] += vector[i] * Float(weight) }
+        }
+        // Union durations so repeated/overlapping chunk observations cannot turn
+        // a short utterance into apparently sufficient evidence.
+        var duration = 0, cursor = Int.min
+        for (a, b) in supported.sorted(by: { $0.0 < $1.0 }) {
+            duration += max(0, b - max(a, cursor)); cursor = max(cursor, b)
+        }
+        guard duration >= 3_000 else { return nil }
+        return DiarizationVoiceObservation.normalized(weighted)
+    }
+
+    private func localIdentity(rawLabel: String, diarization: DiarizationDocument, runID: UUID,
                   provenance: WindowInferenceProvenance, document: inout SessionSpeakerIdentityDocument) throws -> SessionSpeakerIdentity {
         let scope = try InferenceFingerprint.encode(LocalSpeakerScope(provenance: provenance,
             scopeSessionID: document.identityScopeSessionID ?? document.sessionID))
         let aliasKey = "\(provenance.window.id)|\(runID.uuidString)|\(rawLabel)"
-        if let id = document.aliases[aliasKey], let identity = document.identities[id] { return identity }
+        if let id = document.aliases[aliasKey], let identity = document.identities[id], identity.continuity == .windowLocalOnly { return identity }
         // This deliberately excludes the raw label, so a label permutation on the
         // same exact local turn partition does not lose the user's rename.
         let turns = diarization.segments.filter { $0.speaker == rawLabel }
