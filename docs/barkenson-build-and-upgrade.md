@@ -57,6 +57,8 @@ When recording starts, macOS may request Microphone and Screen & System Audio Re
 
 Missing transcription models: open Models, download, select, then retry transcription. Missing speaker models: transcription remains available with reduced speaker labelling. A failed download can be retried in Models; check the internet connection and available disk space first. Do not delete an existing recording to retry processing.
 
+See the [fresh verification report](barkenson-app-verification.md) for exact source, checks and limitations.
+
 ## Links and deferred work
 
 - [Source and issues](https://github.com/ziz11/AI-note-taker-for-meetings)
