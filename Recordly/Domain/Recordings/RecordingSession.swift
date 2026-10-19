@@ -290,7 +290,7 @@ extension RecordingSession {
     }
 
     var transcriptPreviewFallback: String {
-        "No transcript yet. The placeholder ASR connector writes a stub transcript after recording stops."
+        "No transcript is available. Choose Transcribe to process this recording. Open Models if a transcription model is needed."
     }
 
     var summaryPreviewFallback: String {

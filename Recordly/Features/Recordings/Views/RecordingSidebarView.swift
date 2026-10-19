@@ -103,6 +103,7 @@ struct RecordingSidebarView: View {
                         .overlay(Circle().stroke(AppTheme.hairline, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(store.isRecording ? "Stop recording" : "Start recording")
                 .disabled(isRecordButtonLocked)
             }
 
@@ -139,7 +140,7 @@ struct RecordingSidebarView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(AppTheme.secondaryText)
 
-            TextField("Titles, Summaries, Transcripts", text: $store.viewState.searchQuery)
+            TextField("Search recordings and transcripts", text: $store.viewState.searchQuery)
                 .textFieldStyle(.plain)
                 .foregroundStyle(.primary)
 
@@ -302,14 +303,14 @@ struct RecordingSidebarView: View {
                     Text("System audio permission needed")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
-                    Text("Grant Screen Recording access in System Settings, then return to Recordly.")
+                    Text("Allow Barkenson in System Settings → Privacy & Security → Screen & System Audio Recording. Then stop and start a new recording.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(AppTheme.secondaryText)
                 }
 
                 Spacer(minLength: 8)
 
-                Button("Grant Access") {
+                Button("Open Settings") {
                     screenCapturePermissionCoordinator.requestSystemRecordingPermission()
                 }
                 .buttonStyle(.bordered)
@@ -366,9 +367,6 @@ struct RecordingSidebarView: View {
 
             HStack(spacing: 14) {
                 toggleChip(title: "Auto Transcribe", isOn: $store.viewState.autoTranscribeEnabled)
-                toggleChip(title: "Auto Summarize", isOn: .constant(false))
-                    .disabled(true)
-                    .help("Summarization is temporarily unavailable.")
             }
         }
         .padding(14)

@@ -1,10 +1,33 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import Recordly
 
 @MainActor
 final class RecordingsPhaseOneTests: XCTestCase {
+    func testLaunchReadinessWaitsForRecoveryDiscovery() async {
+        let engine = PendingMergeCaptureEngine()
+        let started = expectation(description: "Recovery discovery started")
+        let finished = expectation(description: "Recovery discovery finished")
+        var continuation: CheckedContinuation<Void, Never>?
+        engine.recoveryAction = {
+            await withCheckedContinuation { pending in
+                continuation = pending
+                started.fulfill()
+            }
+        }
+        let store = makeStore(repository: InMemoryRecordingsRepository(recordings: []), audioCaptureEngine: engine)
+        XCTAssertFalse(store.isLaunchRecoveryComplete)
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertFalse(store.isLaunchRecoveryComplete, "Welcome must wait while recovery discovery is suspended")
+        let observation = store.$isLaunchRecoveryComplete.filter { $0 }.prefix(1).sink { _ in finished.fulfill() }
+        continuation?.resume()
+        await fulfillment(of: [finished], timeout: 2)
+        withExtendedLifetime(observation) {}
+        XCTAssertTrue(store.isLaunchRecoveryComplete)
+    }
+
     func testNativeNotesPreserveTextSelectionAndUpdateWithoutEditing() throws {
         let text = "[01:13] Что есть в этом файле?\n[01:19] Статус по прошлому спринту. 👋"
         let host = NSHostingView(rootView: RecordingNotesText(text: text, isFallback: false))
@@ -593,6 +616,7 @@ final class RecordingsPhaseOneTests: XCTestCase {
     @MainActor
     private final class PendingMergeCaptureEngine: AudioCaptureEngine {
         var systemAudioStatusLabel: String { "Captured" }
+        var recoveryAction: (() async -> Void)?
         private(set) var isMergePending = false
         private var shouldBlockMerge = true
 
@@ -637,7 +661,9 @@ final class RecordingsPhaseOneTests: XCTestCase {
 
         func currentMicrophoneLevel() -> Double { 0 }
         func currentSystemAudioLevel() -> Double { 0 }
-        func recoverPendingSessions(in recordingsDirectory: URL) async {}
+        func recoverPendingSessions(in recordingsDirectory: URL) async {
+            await recoveryAction?()
+        }
     }
 
     @MainActor

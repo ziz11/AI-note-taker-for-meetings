@@ -11,7 +11,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>Barkenson</string>
+	<key>CFBundleDisplayName</key>
+	<string>Barkenson</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -21,10 +23,10 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Recordly captures system audio to record the other side of your calls.</string>
+	<string>Barkenson needs system audio access to record the other people in a meeting.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Recordly captures screen and system audio so calls can be recorded reliably.</string>
+	<string>Barkenson uses macOS screen recording access to capture meeting audio. Screen video is not saved.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Recordly records your microphone while a call is running.</string>
+	<string>Barkenson needs microphone access to record your voice during a meeting.</string>
 </dict>
 </plist>
