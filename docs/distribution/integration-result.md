@@ -41,7 +41,33 @@ The eight skips were: one non-FluidAudio runtime branch inapplicable on this bui
 
 Coordinator repeats of `scripts/test-build-distribution-app.sh`, `scripts/test-build-unsigned-app.sh` and `scripts/test-local-signing.sh` passed. The first two verify that disabled scripts remain disabled, not that distribution works. The signing test uses a fake Keychain boundary, not the user's real signing identity. `plutil -lint` passed for the app plist, export-options plist and Xcode project. The release agent additionally checked ten declared icon PNG dimensions and the standalone help path.
 
-Release packaging evidence is recorded below after the new build finishes. A successful local build/signature still does not demonstrate notarisation, downloaded launch on another Mac, permission continuity or a Barkenson-branded bundle.
+## Fresh local Release package
+
+The existing `scripts/build-standalone-local.sh` completed with exit 0 and `BUILD SUCCEEDED` using the existing local identity. Command, run from the coordinator worktree:
+
+```sh
+RECORDLY_BUILD_DIR=/Users/nacnac/Documents/dev/vibecode/Recordly/build/barkenson-readiness-release \
+RECORDLY_PACKAGE_CACHE=/Users/nacnac/Documents/dev/vibecode/Recordly/build/standalone/SourcePackages \
+./scripts/build-standalone-local.sh
+```
+
+The source revision recorded by packaging is **`2c391f4`** (the preparation commit); application, project, scripts and tests remain identical to baseline `327e976`. Subsequent evidence-only commits do not alter the binary source. Log: `build/barkenson-readiness-release.log`.
+
+| Inspected output | Fresh result |
+| --- | --- |
+| Local archive | `build/barkenson-readiness-release/Recordly-2c391f4-local.zip`, **24,154,946 bytes** |
+| ZIP SHA-256 | `1a1fcbcfea7b75d2b67ceeb3227009e8b6b8de24f6ef7ae07db45e0879aad638` |
+| Executable SHA-256, built and extracted | `fe824b69e2b62838a6c25899ead819e37887c05f1c180da699eb96b129d300b0` |
+| Bundle metadata | `Recordly.app`, executable/name `Recordly`, identifier `com.local.Recordly`, version **0.1.0 (4)**, minimum macOS **15.0** |
+| Executable architecture | Universal **arm64 + x86_64**, inspected with `file`; this does not add Intel inference |
+| Signature | Built and extracted apps pass `codesign --verify --deep --strict --verbose=2` with Keychain access: valid on disk and satisfy their designated requirement |
+| Signing identity | `Recordly Local Development`, no TeamIdentifier, flags `0x0`; no hardened runtime or notarisation claim |
+| Designated requirement | Identifier `com.local.Recordly` and certificate root hash `b5b4e764405e28dd9d5a814d5241c77b5c591e8e` |
+| ZIP inspection | CRC integrity check passed; 123 entries; root third-party notices and FluidAudio licence directory present; no recording/audio/model-weight entries found in the targeted scan |
+
+An initial additional `codesign` check inside the restricted sandbox returned `CSSMERR_TP_NOT_TRUSTED` and could not display the authority. Repeating with the required Keychain access verified both the original and extracted app and displayed the authority above. The initial failure is not silently treated as a success.
+
+This is a **local verification package**, retaining the original app name and version. It was not installed, launched, notarised, tested as a quarantined download, or published. It is not the final Barkenson release asset. No signature comparison with the author's installed old app or TCC upgrade test was performed. A successful local package does not close the remaining release gates.
 
 ## Reconciled product claims
 
