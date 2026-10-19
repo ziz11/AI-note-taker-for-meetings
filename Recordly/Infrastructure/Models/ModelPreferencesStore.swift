@@ -9,6 +9,7 @@ final class ModelPreferencesStore {
         static let selectedASRBackend = "model.selectedASRBackend"
         static let selectedDiarizationModelID = "model.selectedDiarizationModelID"
         static let selectedSummarizationModelID = "model.selectedSummarizationModelID"
+        static let llamaExecutablePath = "model.summarization.llamaExecutablePath"
         static let summarizationContextSize = "model.summarization.contextSize"
         static let summarizationTemperature = "model.summarization.temperature"
         static let summarizationTopP = "model.summarization.topP"
@@ -53,6 +54,11 @@ final class ModelPreferencesStore {
     var selectedSummarizationModelID: String? {
         get { defaults.string(forKey: Keys.selectedSummarizationModelID) }
         set { defaults.set(newValue, forKey: Keys.selectedSummarizationModelID) }
+    }
+
+    var llamaExecutablePath: String? {
+        get { defaults.string(forKey: Keys.llamaExecutablePath) }
+        set { defaults.set(newValue, forKey: Keys.llamaExecutablePath) }
     }
 
     var summarizationRuntimeSettings: SummarizationRuntimeSettings {

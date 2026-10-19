@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreML
 import Foundation
 
 #if arch(arm64) && canImport(FluidAudio)
@@ -40,8 +41,15 @@ final class FluidAudioTranscriber: FluidAudioTranscribing {
     ) async throws -> FluidAudioRunnerOutput {
 #if arch(arm64) && canImport(FluidAudio)
         let manager = try await resolveManager(for: modelDirectoryURL)
+        let span = PerformanceTelemetry.shared.begin(.asr, model: FluidAudioASRModel.at(modelDirectoryURL).rawValue)
+        var completed = false
+        var audioSeconds: Double?
+        defer { PerformanceTelemetry.shared.end(span, audioSeconds: audioSeconds,
+            outcome: completed ? .completed : (Task.isCancelled ? .cancelled : .failed)) }
         var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let rawResult = try await manager.transcribe(audioURL, decoderState: &decoderState)
+        audioSeconds = rawResult.duration
+        completed = true
         return mapResult(rawResult)
 #else
         throw ASREngineRuntimeError.inferenceFailed(
@@ -57,10 +65,18 @@ final class FluidAudioTranscriber: FluidAudioTranscribing {
             return manager
         }
 
-        let models = try await AsrModels.load(from: modelDirectoryURL, configuration: nil, version: .v3)
+        // Provisioning belongs to the provider; inference loads exactly the model frozen in this job’s profile.
+        let span = PerformanceTelemetry.shared.begin(.modelLoad, model: FluidAudioASRModel.at(modelDirectoryURL).rawValue)
+        var completed = false
+        defer { PerformanceTelemetry.shared.end(span, outcome: completed ? .completed : .failed) }
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuAndNeuralEngine
+        let models = try AsrModels.loadLocal(from: modelDirectoryURL, version: FluidAudioASRModel.at(modelDirectoryURL).sdkVersion,
+            configuration: configuration, encoderPrecision: .int8)
         let manager = AsrManager(config: .default, models: models)
         cachedManager = manager
         cachedModelPath = modelPath
+        completed = true
         return manager
     }
 

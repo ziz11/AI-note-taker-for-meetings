@@ -1,5 +1,7 @@
 # CAF Fast Path and M4A Durability Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Historical CAF/M4A strategy. V2 new-session durability is segmented AAC; full-session PCM/automatic mixed M4A is not the new capture path. Legacy adapters remain. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Make live capture write temporary `CAF PCM` source tracks for immediate auto-transcription while writing durable `m4a` source tracks for recovery, reprocessing, and long-term storage.

@@ -1,0 +1,463 @@
+diff --git a/Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioSessionAudioLoader.swift b/Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioSessionAudioLoader.swift
+--- a/Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioSessionAudioLoader.swift
++++ b/Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioSessionAudioLoader.swift
+@@ -1,11 +1,33 @@
+ import AVFoundation
+ import Foundation
++import OSLog
++
++enum PreparedSessionAudioSourceKind: String, Codable, Equatable, Sendable {
++    case rawCAF
++    case rawFLAC
++    case durableM4A
++    case other
++}
++
++enum PreparedSessionAudioDownmixStrategy: String, Codable, Equatable, Sendable {
++    case passthroughMono
++    case average
++    case dominantChannel
++}
++
++struct PreparedSessionAudioDiagnostics: Codable, Equatable, Sendable {
++    var sourceKind: PreparedSessionAudioSourceKind
++    var originalSampleRate: Int
++    var originalChannelCount: Int
++    var downmixStrategy: PreparedSessionAudioDownmixStrategy
++}
+ 
+ struct PreparedSessionAudio {
+     var samples: [Float]
+     var sampleRate: Int
+     var durationMs: Int
+     var sourceURL: URL
++    var diagnostics: PreparedSessionAudioDiagnostics? = nil
+ 
+     func makePCMBuffer(startSample: Int = 0, endSample: Int? = nil) throws -> AVAudioPCMBuffer {
+         let clampedStart = max(0, min(startSample, samples.count))
+@@ -221,6 +243,8 @@
+ }
+ 
+ struct FluidAudioSessionAudioLoader: FluidAudioSessionAudioLoading {
++    private static let logger = Logger(subsystem: "Recordly", category: "FluidAudioSessionAudioLoader")
++
+     private let inputPreparer: FluidAudioInputPreparing
+ 
+     init(inputPreparer: FluidAudioInputPreparing = FluidAudioInputPreparer()) {
+@@ -239,27 +263,172 @@
+             throw ASREngineRuntimeError.unsupportedFormat(audioURL)
+         }
+ 
+-        var monoSamples: [Float] = Array(repeating: 0, count: frameCount)
+-        if channelCount == 1 {
+-            monoSamples = Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
+-        } else {
+-            for frame in 0..<frameCount {
+-                var sum: Float = 0
+-                for channel in 0..<channelCount {
+-                    sum += channelData[channel][frame]
+-                }
+-                monoSamples[frame] = sum / Float(channelCount)
+-            }
+-        }
+-
+         let sampleRate = Int(buffer.format.sampleRate.rounded())
+         let durationMs = Int((Double(frameCount) / buffer.format.sampleRate * 1_000.0).rounded())
++        let sourceKind = sourceKind(for: audioURL)
++        let downmixed = downmixToMono(channelData: channelData, frameCount: frameCount, channelCount: channelCount)
++        let diagnostics = PreparedSessionAudioDiagnostics(
++            sourceKind: sourceKind,
++            originalSampleRate: sampleRate,
++            originalChannelCount: channelCount,
++            downmixStrategy: downmixed.strategy
++        )
++
++        Self.logger.info(
++            "Prepared session audio source=\(sourceKind.rawValue, privacy: .public) sampleRate=\(sampleRate) channels=\(channelCount) downmix=\(downmixed.strategy.rawValue, privacy: .public)"
++        )
+ 
+         return PreparedSessionAudio(
+-            samples: monoSamples,
++            samples: downmixed.samples,
+             sampleRate: sampleRate,
+             durationMs: durationMs,
+-            sourceURL: audioURL
++            sourceURL: audioURL,
++            diagnostics: diagnostics
+         )
+     }
+-}
++
++    private func sourceKind(for audioURL: URL) -> PreparedSessionAudioSourceKind {
++        let fileName = audioURL.lastPathComponent.lowercased()
++        if fileName.hasSuffix(".raw.caf") {
++            return .rawCAF
++        }
++        if fileName.hasSuffix(".raw.flac") {
++            return .rawFLAC
++        }
++        if fileName.hasSuffix(".m4a") {
++            return .durableM4A
++        }
++        return .other
++    }
++
++    private func downmixToMono(
++        channelData: UnsafePointer<UnsafeMutablePointer<Float>>,
++        frameCount: Int,
++        channelCount: Int
++    ) -> (samples: [Float], strategy: PreparedSessionAudioDownmixStrategy) {
++        guard channelCount > 1 else {
++            return (
++                Array(UnsafeBufferPointer(start: channelData[0], count: frameCount)),
++                .passthroughMono
++            )
++        }
++
++        let dominantIndex = dominantChannelIndex(channelData: channelData, frameCount: frameCount, channelCount: channelCount)
++        if shouldPreferDominantChannel(
++            dominantIndex: dominantIndex,
++            channelData: channelData,
++            frameCount: frameCount,
++            channelCount: channelCount
++        ) {
++            return (
++                Array(UnsafeBufferPointer(start: channelData[dominantIndex], count: frameCount)),
++                .dominantChannel
++            )
++        }
++
++        var monoSamples: [Float] = Array(repeating: 0, count: frameCount)
++        for frame in 0..<frameCount {
++            var sum: Float = 0
++            for channel in 0..<channelCount {
++                sum += channelData[channel][frame]
++            }
++            monoSamples[frame] = sum / Float(channelCount)
++        }
++
++        return (monoSamples, .average)
++    }
++
++    private func dominantChannelIndex(
++        channelData: UnsafePointer<UnsafeMutablePointer<Float>>,
++        frameCount: Int,
++        channelCount: Int
++    ) -> Int {
++        var dominantIndex = 0
++        var dominantRMS: Float = -1
++
++        for channel in 0..<channelCount {
++            let rms = rootMeanSquare(of: channelData[channel], frameCount: frameCount)
++            if rms > dominantRMS {
++                dominantRMS = rms
++                dominantIndex = channel
++            }
++        }
++
++        return dominantIndex
++    }
++
++    private func shouldPreferDominantChannel(
++        dominantIndex: Int,
++        channelData: UnsafePointer<UnsafeMutablePointer<Float>>,
++        frameCount: Int,
++        channelCount: Int
++    ) -> Bool {
++        let dominantRMS = rootMeanSquare(of: channelData[dominantIndex], frameCount: frameCount)
++        guard dominantRMS > 0 else {
++            return false
++        }
++
++        var strongestOtherRMS: Float = 0
++        for channel in 0..<channelCount where channel != dominantIndex {
++            let otherRMS = rootMeanSquare(of: channelData[channel], frameCount: frameCount)
++            strongestOtherRMS = max(strongestOtherRMS, otherRMS)
++
++            if correlation(
++                between: channelData[dominantIndex],
++                and: channelData[channel],
++                frameCount: frameCount
++            ) < -0.8 {
++                return true
++            }
++        }
++
++        return strongestOtherRMS == 0 || dominantRMS > (strongestOtherRMS * 1.5)
++    }
++
++    private func rootMeanSquare(
++        of channel: UnsafeMutablePointer<Float>,
++        frameCount: Int
++    ) -> Float {
++        guard frameCount > 0 else { return 0 }
++
++        var sum: Float = 0
++        for index in 0..<frameCount {
++            let value = channel[index]
++            sum += value * value
++        }
++        return sqrt(sum / Float(frameCount))
++    }
++
++    private func correlation(
++        between lhs: UnsafeMutablePointer<Float>,
++        and rhs: UnsafeMutablePointer<Float>,
++        frameCount: Int
++    ) -> Float {
++        guard frameCount > 0 else { return 0 }
++
++        var lhsMean: Float = 0
++        var rhsMean: Float = 0
++        for index in 0..<frameCount {
++            lhsMean += lhs[index]
++            rhsMean += rhs[index]
++        }
++        lhsMean /= Float(frameCount)
++        rhsMean /= Float(frameCount)
++
++        var numerator: Float = 0
++        var lhsVariance: Float = 0
++        var rhsVariance: Float = 0
++
++        for index in 0..<frameCount {
++            let lhsCentered = lhs[index] - lhsMean
++            let rhsCentered = rhs[index] - rhsMean
++            numerator += lhsCentered * rhsCentered
++            lhsVariance += lhsCentered * lhsCentered
++            rhsVariance += rhsCentered * rhsCentered
++        }
++
++        let denominator = sqrt(lhsVariance * rhsVariance)
++        guard denominator > 0 else { return 0 }
++        return numerator / denominator
++    }
++}
+diff --git a/Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioTranscriptionService.swift b/Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioTranscriptionService.swift
+--- a/Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioTranscriptionService.swift
++++ b/Recordly/Infrastructure/Inference/Backends/FluidAudio/FluidAudioTranscriptionService.swift
+@@ -131,6 +131,12 @@
+ 
+ struct FluidAudioTranscriptionService: FluidAudioTranscriptionServicing {
+     private let fullInputWindowDurationMs = 30_000
++    private let fallbackWindowOverlapMs = 1_000
++    private let speechRegionPaddingMs = 250
++    private let minimumSpeechWindowDurationMs = 900
++    private let mergeCloseRegionGapMs = 300
++    private let fragmentationFallbackRegionCount = 20
++    private let fragmentationFallbackAverageDurationMs = 1_500
+     private let transcriber: FluidAudioTranscribing
+     private let vadService: any FluidAudioVoiceActivityDetecting
+ 
+@@ -276,8 +282,22 @@
+         durationMs: Int
+     ) -> [FluidAudioSpeechRegion]? {
+         let normalized = regions.compactMap { region -> FluidAudioSpeechRegion? in
+-            let startMs = max(0, min(region.startMs, durationMs))
+-            let endMs = max(startMs, min(region.endMs, durationMs))
++            var startMs = max(0, min(region.startMs, durationMs))
++            var endMs = max(startMs, min(region.endMs, durationMs))
++            guard endMs > startMs else { return nil }
++
++            startMs = max(0, startMs - speechRegionPaddingMs)
++            endMs = min(durationMs, endMs + speechRegionPaddingMs)
++
++            let currentDuration = endMs - startMs
++            if currentDuration < minimumSpeechWindowDurationMs {
++                let missingDuration = minimumSpeechWindowDurationMs - currentDuration
++                let expandStart = missingDuration / 2
++                let expandEnd = missingDuration - expandStart
++                startMs = max(0, startMs - expandStart)
++                endMs = min(durationMs, endMs + expandEnd)
++            }
++
+             guard endMs > startMs else { return nil }
+             return FluidAudioSpeechRegion(startMs: startMs, endMs: endMs)
+         }
+@@ -286,7 +306,31 @@
+             return lhs.endMs < rhs.endMs
+         }
+ 
+-        return normalized.isEmpty ? nil : normalized
++        guard !normalized.isEmpty else { return nil }
++
++        var merged: [FluidAudioSpeechRegion] = []
++        for region in normalized {
++            guard var last = merged.last else {
++                merged.append(region)
++                continue
++            }
++
++            if region.startMs - last.endMs <= mergeCloseRegionGapMs {
++                last.endMs = max(last.endMs, region.endMs)
++                merged[merged.count - 1] = last
++            } else {
++                merged.append(region)
++            }
++        }
++
++        let totalDuration = merged.reduce(0) { $0 + ($1.endMs - $1.startMs) }
++        let averageDuration = totalDuration / max(merged.count, 1)
++        if merged.count >= fragmentationFallbackRegionCount,
++           averageDuration <= fragmentationFallbackAverageDurationMs {
++            return nil
++        }
++
++        return merged
+     }
+ 
+     private func makeFallbackWindows(durationMs: Int) -> [FluidAudioSpeechRegion]? {
+@@ -294,12 +338,16 @@
+ 
+         var windows: [FluidAudioSpeechRegion] = []
+         var cursor = 0
++        let stepMs = max(fullInputWindowDurationMs - fallbackWindowOverlapMs, 1)
+ 
+         while cursor < durationMs {
+             let nextEnd = min(cursor + fullInputWindowDurationMs, durationMs)
+             guard nextEnd > cursor else { break }
+             windows.append(FluidAudioSpeechRegion(startMs: cursor, endMs: nextEnd))
+-            cursor = nextEnd
++            if nextEnd >= durationMs {
++                break
++            }
++            cursor += stepMs
+         }
+ 
+         return windows.isEmpty ? nil : windows
+diff --git a/RecordlyTests/FluidAudioASREngineTests.swift b/RecordlyTests/FluidAudioASREngineTests.swift
+--- a/RecordlyTests/FluidAudioASREngineTests.swift
++++ b/RecordlyTests/FluidAudioASREngineTests.swift
+@@ -340,6 +340,132 @@
+         XCTAssertEqual(prepared.sampleRate, 22_050)
+         XCTAssertFalse(prepared.samples.isEmpty)
+         XCTAssertGreaterThan(prepared.durationMs, 0)
++    }
++
++    func testSessionAudioLoaderUsesDominantChannelWhenStereoAverageWouldCancelSpeech() throws {
++        let sourceURL = tempDirectory.appendingPathComponent("system.m4a")
++        try Data("placeholder".utf8).write(to: sourceURL)
++        let format = AVAudioFormat(
++            commonFormat: .pcmFormatFloat32,
++            sampleRate: 48_000,
++            channels: 2,
++            interleaved: false
++        )!
++        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8)!
++        buffer.frameLength = 8
++        let left: [Float] = [0.9, 0.8, 0.7, 0.6, -0.6, -0.7, -0.8, -0.9]
++        let right = left.map(-)
++        for index in 0..<left.count {
++            buffer.floatChannelData?[0][index] = left[index]
++            buffer.floatChannelData?[1][index] = right[index]
++        }
++
++        let loader = FluidAudioSessionAudioLoader(
++            inputPreparer: StubFluidAudioInputPreparer(buffer: buffer)
++        )
++
++        let prepared = try loader.loadAudio(from: sourceURL)
++
++        XCTAssertEqual(prepared.diagnostics?.sourceKind, .durableM4A)
++        XCTAssertEqual(prepared.diagnostics?.originalChannelCount, 2)
++        XCTAssertEqual(prepared.diagnostics?.downmixStrategy, .dominantChannel)
++        let maxAmplitude = prepared.samples.map { abs($0) }.max() ?? 0
++        XCTAssertGreaterThan(maxAmplitude, 0.8)
++    }
++
++    func testEngineMergesCloseVADRegionsBeforeTranscribing() async throws {
++        let audioURL = tempDirectory.appendingPathComponent("vad-merge.caf")
++        FileManager.default.createFile(atPath: audioURL.path, contents: Data("audio".utf8))
++        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-vad-merge")
++        let transcriber = SequencedFluidAudioTranscriber(outputs: [
++            FluidAudioRunnerOutput(
++                language: "ru",
++                segments: [
++                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_000, text: "merged", confidence: 0.9, words: nil)
++                ]
++            )
++        ])
++        let engine = FluidAudioASREngine(
++            transcriber: transcriber,
++            sessionAudioLoader: StubFluidAudioSessionAudioLoader(
++                preparedAudio: PreparedSessionAudio(
++                    samples: Array(repeating: 0.1, count: 160_000),
++                    sampleRate: 16_000,
++                    durationMs: 10_000,
++                    sourceURL: audioURL
++                )
++            ),
++            vadService: StubFluidAudioVADService(
++                result: [
++                    FluidAudioSpeechRegion(startMs: 1_000, endMs: 1_400),
++                    FluidAudioSpeechRegion(startMs: 1_550, endMs: 2_000)
++                ]
++            )
++        )
++
++        let document = try await engine.transcribe(
++            audioURL: audioURL,
++            channel: .system,
++            sessionID: UUID(),
++            configuration: ASREngineConfiguration(modelURL: modelDirectory)
++        )
++
++        XCTAssertEqual(document.segments.map(\.text), ["merged"])
++        XCTAssertEqual(transcriber.callCount, 1)
++    }
++
++    func testEngineUsesOverlappingFallbackWindowsForLongInput() async throws {
++        let audioURL = tempDirectory.appendingPathComponent("long-overlap.caf")
++        FileManager.default.createFile(atPath: audioURL.path, contents: Data("audio".utf8))
++        let modelDirectory = try createFluidModelDirectory(named: "fluid-v3-overlap")
++        let transcriber = SequencedFluidAudioTranscriber(outputs: [
++            FluidAudioRunnerOutput(
++                language: "ru",
++                segments: [
++                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_000, text: "window-1", confidence: 0.9, words: nil)
++                ]
++            ),
++            FluidAudioRunnerOutput(
++                language: "ru",
++                segments: [
++                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_000, text: "window-2", confidence: 0.9, words: nil)
++                ]
++            ),
++            FluidAudioRunnerOutput(
++                language: "ru",
++                segments: [
++                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_000, text: "window-3", confidence: 0.9, words: nil)
++                ]
++            ),
++            FluidAudioRunnerOutput(
++                language: "ru",
++                segments: [
++                    FluidAudioSegment(id: "seg-1", startMs: 0, endMs: 1_000, text: "window-4", confidence: 0.9, words: nil)
++                ]
++            )
++        ])
++        let engine = FluidAudioASREngine(
++            transcriber: transcriber,
++            sessionAudioLoader: StubFluidAudioSessionAudioLoader(
++                preparedAudio: PreparedSessionAudio(
++                    samples: Array(repeating: 0.1, count: 1_440_000),
++                    sampleRate: 16_000,
++                    durationMs: 90_000,
++                    sourceURL: audioURL
++                )
++            ),
++            vadService: StubFluidAudioVADService(result: nil)
++        )
++
++        let document = try await engine.transcribe(
++            audioURL: audioURL,
++            channel: .mic,
++            sessionID: UUID(),
++            configuration: ASREngineConfiguration(modelURL: modelDirectory)
++        )
++
++        XCTAssertGreaterThan(document.segments.count, 2)
++        XCTAssertLessThan(document.segments[1].startMs, 30_000)
+     }
+ 
+     func testEngineFallsBackToFullInputWhenVADReturnsNoUsableRegions() async throws {

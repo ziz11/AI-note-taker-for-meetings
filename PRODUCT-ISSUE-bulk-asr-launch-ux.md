@@ -1,5 +1,7 @@
 # Product Issue: Launch Triggers Bulk ASR and Blocks Record Navigation
 
+> Reviewed 2026-10-10. Partially addressed: interrupted states are recoverable, failed historical items are excluded, at most one transcription runs, and more than 12 recoverable jobs require a launch prompt. Queue controls/counters are implemented. Large-list GUI usability has not been measured; the original issue and proposal below are historical. See [current project status](docs/project-status.md).
+
 ## Date
 2026-03-12
 
@@ -13,7 +15,7 @@ When this happens, the left pane is filled with active "Transcribing..." cards, 
 - Core task (open a specific recording) is blocked by system-initiated background jobs.
 - Perceived loss of control and trust.
 
-## Current Behavior (Observed)
+## Original behavior observed on 2026-03-12
 - Startup calls post-processing recovery.
 - Recovery enqueues transcription jobs for:
 - interrupted in-progress transcript states
@@ -79,3 +81,6 @@ This is not only technical recovery logic. It is a UX and policy issue:
 - `recovery_jobs_enqueued_count`
 - `recovery_jobs_cancelled_count`
 
+## Verified code state (2026-10-10)
+
+`RecordingsStore` uses `launchRecoveryPromptThreshold = 12`, `transcriptionQueueConcurrencyLimit = 1`, and excludes `.failed`, `.idle`, `.ready` from launch recovery. Interrupted queued/transcribing/diarizing/merging/rendering states remain recoverable. At most 12 interrupted jobs may auto-start; more than 12 show the recovery prompt. Pause/resume/cancel queue actions and compact per-stage counters exist. Therefore complete elimination of launch auto-processing has not shipped. GUI navigation with 20+ jobs still needs direct acceptance testing.

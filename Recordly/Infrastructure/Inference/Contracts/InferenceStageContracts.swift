@@ -8,6 +8,8 @@ protocol AudioCaptureEngine: AnyObject {
     func currentMicrophoneLevel() -> Double
     func currentSystemAudioLevel() -> Double
     var systemAudioStatusLabel: String { get }
+    var captureHealth: CaptureHealthSnapshot { get }
+    func retryCaptureNow() async
     func recoverPendingSessions(in recordingsDirectory: URL) async
 }
 
@@ -15,6 +17,16 @@ extension AudioCaptureEngine {
     func mergeCompletedSession(in sessionDirectory: URL) async throws -> CaptureArtifacts {
         throw AudioCaptureError.mixdownFailed
     }
+
+    var captureHealth: CaptureHealthSnapshot {
+        CaptureHealthSnapshot(
+            phase: systemAudioStatusLabel == "Captured" ? .healthy : .idle,
+            affectedChannels: [],
+            statusLabel: systemAudioStatusLabel
+        )
+    }
+
+    func retryCaptureNow() async {}
 }
 
 struct ASREngineConfiguration: Sendable {
@@ -93,12 +105,30 @@ struct DiarizationEngineConfiguration: Sendable {
     var modelURL: URL?
 }
 
+struct PreparedDiarizationWindow: Sendable {
+    var audioURL: URL
+    var track: TrackKind
+    var startFrame: Int64
+    var frameCount: Int64
+}
+
 protocol DiarizationEngine {
+    func diarize(window: PreparedDiarizationWindow, sessionID: UUID,
+                 configuration: DiarizationEngineConfiguration) async throws -> DiarizationDocument
     func diarize(
         systemAudioURL: URL,
         sessionID: UUID,
         configuration: DiarizationEngineConfiguration
     ) async throws -> DiarizationDocument
+}
+
+extension DiarizationEngine {
+    func diarize(window: PreparedDiarizationWindow, sessionID: UUID,
+                 configuration: DiarizationEngineConfiguration) async throws -> DiarizationDocument {
+        guard window.track == .system, window.startFrame >= 0, window.frameCount > 0,
+              window.frameCount <= SessionAudioRangeReader.maximumFrames else { throw DiarizationRuntimeError.invalidInput }
+        return try await diarize(systemAudioURL: window.audioURL, sessionID: sessionID, configuration: configuration)
+    }
 }
 
 struct SummarizationConfiguration: Sendable {

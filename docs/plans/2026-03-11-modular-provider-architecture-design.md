@@ -1,5 +1,7 @@
 # Modular Provider Architecture Design
 
+> Reviewed 2026-10-10. Historical plan/requirements. Stage contracts, composition, selector and factory are delivered. Active providers are capability-specific SDK wrappers; summary runtime is disabled. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 ## Context
 
 Recordly is currently blocked by an unresolved merge in inference-related files. The work in flight mixes three concerns:
@@ -83,7 +85,7 @@ The Models settings screen also needs two explicit user actions per provider/tas
 
 The screen should be organized by provider/runtime first, then by task/stage inside each provider. This keeps SDK-managed and local-file-backed models understandable without collapsing everything into a flat model list.
 
-See [docs/prompts/2026-03-11-model-settings-screen-redesign.md](/Users/nacnac/Documents/Other_Interner/Recordly/docs/prompts/2026-03-11-model-settings-screen-redesign.md) for the current redesign brief.
+See [docs/prompts/2026-03-11-model-settings-screen-redesign.md](../prompts/2026-03-11-model-settings-screen-redesign.md) for the current redesign brief.
 
 ## Merge-Stabilization Strategy
 

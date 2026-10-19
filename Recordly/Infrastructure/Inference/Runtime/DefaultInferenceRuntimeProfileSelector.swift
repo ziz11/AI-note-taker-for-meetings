@@ -4,14 +4,17 @@ enum InferenceRuntimeProfileError: LocalizedError, Equatable {
     case missingFluidAudioModel
     case fluidAudioProvisioningFailed(message: String)
     case missingSummarizationModel
+    case noSummarizationModelsInstalled
     case invalidFluidAudioModel(modelURL: URL)
 
     var errorDescription: String? {
         switch self {
         case .missingFluidAudioModel:
-            return "No FluidAudio model is provisioned. Download FluidAudio v3 model in Models settings."
+            return "No FluidAudio model is provisioned. Download the selected transcription model in Models settings."
         case let .fluidAudioProvisioningFailed(message):
             return "FluidAudio model provisioning failed: \(message)"
+        case .noSummarizationModelsInstalled:
+            return "No summarization models installed. Add a supported GGUF or MLX model in Models settings."
         case .missingSummarizationModel:
             return "Select a summarization model before generating summary."
         case let .invalidFluidAudioModel(modelURL):
@@ -96,7 +99,7 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
                 throw InferenceRuntimeProfileError.missingFluidAudioModel
             case let .downloadFailed(message):
                 throw InferenceRuntimeProfileError.fluidAudioProvisioningFailed(message: message)
-            case .sdkUnavailable:
+            case .sdkUnavailable, .modelInUse, .unsafeDirectory:
                 throw InferenceRuntimeProfileError.fluidAudioProvisioningFailed(message: provisioningError.localizedDescription)
             }
         }
@@ -109,7 +112,7 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
             stageSelection: stageSelection,
             modelArtifacts: InferenceModelArtifacts(
                 asrModelURL: asrModelURL,
-                diarizationModelURL: nil,
+                diarizationModelURL: stageSelection.backend(for: .diarization) == .fluidAudio ? diarizationModelProvider.modelURLForRuntime : nil,
                 summarizationModelURL: nil
             ),
             summarizationRuntimeSettings: modelManager.summarizationRuntimeSettings
@@ -117,12 +120,23 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
     }
 
     func resolveSummarizationProfile(for profile: ModelProfile) throws -> InferenceRuntimeProfile {
-        guard let summarizationOption = modelManager.selectedLocalOption(kind: .summarization) else {
+        guard let selectedID = modelManager.selectedSummarizationModelID else {
+            if modelManager.listLocalOptions(kind: .summarization).isEmpty {
+                throw InferenceRuntimeProfileError.noSummarizationModelsInstalled
+            }
             throw InferenceRuntimeProfileError.missingSummarizationModel
         }
+        guard let summarizationOption = modelManager.selectedLocalOption(kind: .summarization) else {
+            throw SummarizationModelArtifactError.missing(URL(fileURLWithPath: selectedID))
+        }
         var resolvedStageSelection = stageSelection
+        let executableURL: URL?
         if MLXModelValidator.isValidModelDirectory(summarizationOption.url) {
             resolvedStageSelection.setBackend(.mlxLm, for: .summarization)
+            executableURL = nil
+        } else {
+            try GGUFModelValidator.validate(summarizationOption.url)
+            executableURL = try resolveLlamaBinaryURL(configuredPath: modelManager.llamaExecutablePath)
         }
 
         return InferenceRuntimeProfile(
@@ -132,7 +146,8 @@ final class DefaultInferenceRuntimeProfileSelector: InferenceRuntimeProfileSelec
                 diarizationModelURL: nil,
                 summarizationModelURL: summarizationOption.url
             ),
-            summarizationRuntimeSettings: modelManager.summarizationRuntimeSettings
+            summarizationRuntimeSettings: modelManager.summarizationRuntimeSettings,
+            llamaExecutableURL: executableURL
         )
     }
 }

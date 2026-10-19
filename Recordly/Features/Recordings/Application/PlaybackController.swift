@@ -1,14 +1,25 @@
 import AVFoundation
 import Foundation
+import CryptoKit
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 @MainActor
 final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate {
     private let repository: RecordingsPersistence
     private let previewMode: Bool
     private var player: AVAudioPlayer?
+    private var playlistPlayer: AVPlayer?
+    private var loadGeneration = UUID()
+    private var loadedManifestRevision: String?
     private var playbackTimer: Timer?
     private var preferredSourceByRecordingID: [UUID: PlaybackAudioSource] = [:]
     private var playbackRate: Float = 1
+    private var usableFilesCache: (key: String, files: Set<String>)?
+    private var foregroundObserver: NSObjectProtocol?
 
     private(set) var state = PlaybackState() {
         didSet {
@@ -22,6 +33,30 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         self.repository = repository
         self.previewMode = previewMode
         super.init()
+
+        // Diagnostics: log bundle identity to catch accidental relaunch into a different target
+        let bundleID = Bundle.main.bundleIdentifier ?? "<nil>"
+        let bundlePath = Bundle.main.bundlePath
+        print("[PlaybackController] Launched with bundle: \(bundleID) at \(bundlePath)")
+
+        // When returning from Settings or background, resync playback state without forcing a restart
+        #if canImport(UIKit)
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.syncStateFromPlayer()
+        }
+        #elseif canImport(AppKit)
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.syncStateFromPlayer()
+        }
+        #endif
     }
 
     func syncSelection(_ recording: RecordingSession?) {
@@ -36,6 +71,7 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         let selectedFileName = recording.playbackFileName(for: selectedSource)
 
         if state.recordingID == recording.id,
+           loadedManifestRevision == manifestRevision(for: recording),
            state.fileName == selectedFileName,
            state.selectedSource == selectedSource,
            state.sourceAvailability == sourceAvailability {
@@ -60,8 +96,16 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         syncSelection(recording)
     }
 
-    func togglePlayback(for recording: RecordingSession) throws {
-        try preparePlayer(for: recording)
+    func togglePlayback(for recording: RecordingSession) async throws {
+        try await preparePlayer(for: recording)
+        if let playlistPlayer {
+            if state.isPlaying { playlistPlayer.pause(); state.isPlaying = false; stopTimer() }
+            else {
+                if state.currentTime >= state.duration { await playlistPlayer.seek(to: .zero) }
+                playlistPlayer.playImmediately(atRate: playbackRate); state.isPlaying = true; startTimer()
+            }
+            return
+        }
         guard let player, state.isAvailable else {
             return
         }
@@ -77,8 +121,14 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         }
     }
 
-    func seek(for recording: RecordingSession, to progress: Double) throws {
-        try preparePlayer(for: recording)
+    func seek(for recording: RecordingSession, to progress: Double) async throws {
+        try await preparePlayer(for: recording)
+        if let playlistPlayer {
+            let target = max(0, min(progress, 1)) * state.duration
+            await playlistPlayer.seek(to: CMTime(seconds: target, preferredTimescale: 48_000), toleranceBefore: .zero, toleranceAfter: .zero)
+            syncStateFromPlayer()
+            return
+        }
         guard let player, state.isAvailable else {
             return
         }
@@ -88,8 +138,14 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         syncStateFromPlayer()
     }
 
-    func skip(for recording: RecordingSession, by offset: TimeInterval) throws {
-        try preparePlayer(for: recording)
+    func skip(for recording: RecordingSession, by offset: TimeInterval) async throws {
+        try await preparePlayer(for: recording)
+        if let playlistPlayer {
+            let target = min(max(playlistPlayer.currentTime().seconds + offset, 0), state.duration)
+            await playlistPlayer.seek(to: CMTime(seconds: target, preferredTimescale: 48_000), toleranceBefore: .zero, toleranceAfter: .zero)
+            syncStateFromPlayer()
+            return
+        }
         guard let player, state.isAvailable else {
             return
         }
@@ -106,11 +162,16 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         if state.recordingID != recording.id {
             syncSelection(recording)
         }
+        if state.isPlaying { playlistPlayer?.rate = normalizedRate }
         player?.enableRate = true
         player?.rate = normalizedRate
     }
 
     func stop(resetPosition: Bool) {
+        loadGeneration = UUID()
+        playlistPlayer?.pause()
+        playlistPlayer = nil
+        loadedManifestRevision = nil
         if let player {
             player.stop()
             if resetPosition {
@@ -131,27 +192,31 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
     }
 
     deinit {
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
+        }
         playbackTimer?.invalidate()
     }
 
-    private func preparePlayer(for recording: RecordingSession) throws {
+    private func preparePlayer(for recording: RecordingSession) async throws {
         let sourceAvailability = buildSourceAvailability(for: recording)
         let selectedSource = resolveSelectedSource(for: recording, availability: sourceAvailability)
         let selectedFileName = recording.playbackFileName(for: selectedSource)
 
         guard state.recordingID == recording.id,
+              loadedManifestRevision == manifestRevision(for: recording),
               state.fileName == selectedFileName,
               state.selectedSource == selectedSource,
               state.sourceAvailability == sourceAvailability,
-              player != nil else {
-            try loadPlayer(for: recording)
+              player != nil || playlistPlayer != nil else {
+            try await loadPlayer(for: recording)
             return
         }
 
         syncStateFromPlayer()
     }
 
-    private func loadPlayer(for recording: RecordingSession) throws {
+    private func loadPlayer(for recording: RecordingSession) async throws {
         stop(resetPosition: true)
 
         let sourceAvailability = buildSourceAvailability(for: recording)
@@ -182,6 +247,19 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         }
 
         let sessionDirectory = try repository.sessionDirectory(for: recording.id)
+        if recording.assets.audioManifestFile != nil {
+            let generation = loadGeneration
+            let revision = manifestRevision(for: recording)
+            let manifest = try SessionAudioStore(directory: sessionDirectory, sessionID: recording.id).load()
+            let composition = try await SessionAudioComposition.make(manifest: manifest, directory: sessionDirectory, source: selectedSource)
+            guard loadGeneration == generation, manifestRevision(for: recording) == revision else { throw CancellationError() }
+            loadedManifestRevision = revision
+            playlistPlayer = AVPlayer(playerItem: AVPlayerItem(asset: composition))
+            state = PlaybackState(recordingID: recording.id, fileName: fileName, isAvailable: true,
+                                  duration: Double(manifest.durationFrames) / 48_000, playbackRate: playbackRate,
+                                  selectedSource: selectedSource, sourceAvailability: sourceAvailability)
+            return
+        }
         let audioURL = sessionDirectory.appendingPathComponent(fileName)
 
         guard FileManager.default.fileExists(atPath: audioURL.path) else {
@@ -235,6 +313,15 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
     private func buildSourceAvailability(for recording: RecordingSession) -> [PlaybackState.SourceAvailability] {
         let sources: [PlaybackAudioSource] = [.microphone, .system, .mixed]
         let existingFiles = existingUsableFilesByName(for: recording)
+        if recording.assets.audioManifestFile != nil, !previewMode {
+            let directory = try? repository.sessionDirectory(for: recording.id)
+            let manifest = directory.flatMap { try? SessionAudioStore(directory: $0, sessionID: recording.id).load() }
+            return sources.map { source in
+                let kinds: [TrackKind] = source == .mixed ? [.microphone, .system] : [source == .microphone ? .microphone : .system]
+                let available = manifest?.segments.contains { $0.state == .committed && kinds.contains($0.track) } == true
+                return PlaybackState.SourceAvailability(source: source, isAvailable: available, isProcessing: false)
+            }
+        }
 
         return sources.map { source in
             let fileName = recording.playbackFileName(for: source)
@@ -253,8 +340,26 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
         }
     }
 
+    private static let playableExtensions: Set<String> = ["m4a", "caf", "flac", "wav", "mp3", "aac", "aiff"]
+
     private func existingUsableFilesByName(for recording: RecordingSession) -> Set<String> {
         guard !previewMode else { return [] }
+
+        // Availability only changes when the recording's assets or lifecycle do;
+        // memoize so repeated syncSelection calls (launch recovery, re-renders)
+        // don't re-probe files with AVAudioFile every time.
+        let key = [
+            recording.id.uuidString,
+            recording.assets.importedAudioFile ?? "-",
+            recording.assets.mergedCallFile ?? "-",
+            recording.assets.microphoneFile ?? "-",
+            recording.assets.systemAudioFile ?? "-",
+            String(describing: recording.lifecycleState)
+        ].joined(separator: "|")
+        if let usableFilesCache, usableFilesCache.key == key {
+            return usableFilesCache.files
+        }
+
         guard let sessionDirectory = try? repository.sessionDirectory(for: recording.id),
               let urls = try? FileManager.default.contentsOfDirectory(
                 at: sessionDirectory,
@@ -264,21 +369,37 @@ final class PlaybackController: NSObject, @preconcurrency AVAudioPlayerDelegate 
             return []
         }
 
-        return Set(urls.filter(isUsableAudioFile(_:)).map(\.lastPathComponent))
+        // Whitelist by extension before opening: probing JSON/SRT sidecars with
+        // AVAudioFile spams kAudioFileUnsupportedFileTypeError in the console.
+        let files = Set(
+            urls.filter { Self.playableExtensions.contains($0.pathExtension.lowercased()) }
+                .filter(isUsableAudioFile(_:))
+                .map(\.lastPathComponent)
+        )
+        usableFilesCache = (key, files)
+        return files
     }
 
     private func isUsableAudioFile(_ url: URL) -> Bool {
-        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              size > 0 else {
-            return false
-        }
-        guard let file = try? AVAudioFile(forReading: url) else {
-            return false
-        }
-        return file.length > 0
+        AudioFileProbe.isReadable(url, caller: "PlaybackController")
+    }
+
+    private func manifestRevision(for recording: RecordingSession) -> String? {
+        guard recording.assets.audioManifestFile != nil,
+              let directory = try? repository.sessionDirectory(for: recording.id),
+              let bytes = try? Data(contentsOf: directory.appendingPathComponent("audio-manifest.json")) else { return nil }
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
 
     private func syncStateFromPlayer() {
+        if let playlistPlayer {
+            let current = playlistPlayer.currentTime().seconds
+            state.currentTime = current.isFinite ? min(current, state.duration) : 0
+            state.playbackRate = playbackRate
+            state.isPlaying = playlistPlayer.rate != 0
+            if state.currentTime >= state.duration { state.isPlaying = false; stopTimer() }
+            return
+        }
         guard let player else { return }
         state.currentTime = player.currentTime
         state.duration = player.duration

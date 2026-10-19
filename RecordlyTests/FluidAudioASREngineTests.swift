@@ -4,8 +4,12 @@ import XCTest
 
 final class FluidAudioASREngineTests: XCTestCase {
     private var tempDirectory: URL!
+    private var defaults: UserDefaults!
+    private var suite: String!
 
     override func setUpWithError() throws {
+        suite = "Recordly.UltraTests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suite)!
         tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "FluidAudioASREngineTests-\(UUID().uuidString)",
             isDirectory: true
@@ -17,7 +21,85 @@ final class FluidAudioASREngineTests: XCTestCase {
         if let tempDirectory {
             try? FileManager.default.removeItem(at: tempDirectory)
         }
+        defaults.removePersistentDomain(forName: suite)
+        defaults = nil
         tempDirectory = nil
+    }
+
+    @MainActor
+    func testProviderDefaultsToUltraWhenBothModelsAreInstalled() throws {
+        _ = try createFluidModelDirectory(named: "parakeet-tdt-0.6b-v3")
+        let ultra = try createFluidModelDirectory(named: "parakeet-ultra")
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults)
+        XCTAssertEqual(try provider.resolveForRuntime().resolvingSymlinksInPath(), ultra.resolvingSymlinksInPath())
+    }
+
+    func testCacheFingerprintIdentifiesUltraRatherThanV3() throws {
+        let ultra = try createFluidModelDirectory(named: "parakeet-ultra")
+        let fingerprint = FluidAudioASREngine().cacheFingerprint(configuration: .init(modelURL: ultra))
+        XCTAssertTrue(fingerprint.contains("model:parakeet-ultra-int8"))
+        XCTAssertFalse(fingerprint.contains("model:parakeet-v3-int8"))
+    }
+
+    @MainActor
+    func testProviderUsesSDKCacheFolderRatherThanRepositorySlug() throws {
+        defaults.set("v3", forKey: FluidAudioASRModelProvider.selectionKey)
+        _ = try createFluidModelDirectory(named: "parakeet-tdt-0.6b-v3-coreml")
+        let actualSDKCache = try createFluidModelDirectory(named: "parakeet-tdt-0.6b-v3")
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults)
+        XCTAssertEqual(try provider.resolveForRuntime().resolvingSymlinksInPath(), actualSDKCache.resolvingSymlinksInPath())
+        try FileManager.default.removeItem(at: actualSDKCache)
+        provider.refreshState()
+        XCTAssertEqual(provider.state, .needsDownload, "Repository slug decoy must not count as SDK-managed v3")
+    }
+
+    @MainActor
+    func testProviderResolvesCanonicalV3RatherThanFirstAlphabeticalModel() throws {
+        defaults.set("v3", forKey: FluidAudioASRModelProvider.selectionKey)
+        _ = try createFluidModelDirectory(named: "aaa-parakeet-ultra")
+        let v3 = try createFluidModelDirectory(named: "parakeet-tdt-0.6b-v3")
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults)
+        XCTAssertEqual(try provider.resolveForRuntime().resolvingSymlinksInPath(), v3.resolvingSymlinksInPath())
+    }
+
+    @MainActor
+    func testProviderRejectsUltraWhenV3IsMissing() throws {
+        defaults.set("v3", forKey: FluidAudioASRModelProvider.selectionKey)
+        _ = try createFluidModelDirectory(named: "parakeet-ultra-coreml")
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults)
+        XCTAssertEqual(provider.state, .needsDownload)
+        XCTAssertThrowsError(try provider.resolveForRuntime())
+    }
+
+    func testCacheFingerprintInvalidatesPreviousSDKResults() throws {
+        let model = try createFluidModelDirectory(named: "fingerprint")
+        let fingerprint = FluidAudioASREngine().cacheFingerprint(configuration: .init(modelURL: model))
+        XCTAssertTrue(fingerprint.contains("sdk:0.17.7"))
+        XCTAssertNotEqual(fingerprint, "\(model.standardizedFileURL.path)|backend:fluidaudio|v3")
+    }
+
+    @MainActor
+    func testProviderRejectsStagedWeightsInsideCompletedLookingV3Bundle() throws {
+        defaults.set("v3", forKey: FluidAudioASRModelProvider.selectionKey)
+        let directory = try createFluidModelDirectory(named: "parakeet-tdt-0.6b-v3")
+        let weights = directory.appendingPathComponent("Encoder.mlmodelc/weights")
+        try FileManager.default.createDirectory(at: weights, withIntermediateDirectories: true)
+        try Data("unfinished".utf8).write(to: weights.appendingPathComponent("weight.bin.partial"))
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults)
+        XCTAssertEqual(provider.state, .needsDownload)
+        XCTAssertThrowsError(try provider.resolveForRuntime())
+    }
+
+    func testModelValidatorRejectsEmptyCompiledMarker() throws {
+        let directory = try createFluidModelDirectory(named: "empty-compiled-marker")
+        try Data().write(to: directory.appendingPathComponent("Decoder.mlmodelc/coremldata.bin"))
+        XCTAssertFalse(FluidAudioModelValidator.isValidModelDirectory(directory))
+    }
+
+    func testModelValidatorRejectsInterruptedCompiledBundle() throws {
+        let directory = try createFluidModelDirectory(named: "interrupted-v3")
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("Encoder.mlmodelc/coremldata.bin"))
+        XCTAssertFalse(FluidAudioModelValidator.isValidModelDirectory(directory))
     }
 
     func testModelValidatorAcceptsCompleteStagedDirectory() throws {
@@ -471,6 +553,144 @@ final class FluidAudioASREngineTests: XCTestCase {
         XCTAssertEqual(transcriber.lastAudioURL, audioURL)
     }
 
+    @MainActor
+    func testSelectionPersistsAndAJobProfileKeepsItsOriginalModel() throws {
+        let ultra = try createFluidModelDirectory(named: FluidAudioASRModel.ultra.cacheFolder)
+        let v3 = try createFluidModelDirectory(named: FluidAudioASRModel.v3.cacheFolder)
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults)
+        let frozenJobModel = try provider.resolveForRuntime()
+        try provider.selectModel(.v3)
+        XCTAssertEqual(frozenJobModel.resolvingSymlinksInPath(), ultra.resolvingSymlinksInPath())
+        XCTAssertEqual(try provider.resolveForRuntime().resolvingSymlinksInPath(), v3.resolvingSymlinksInPath())
+        let reopened = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults)
+        XCTAssertEqual(reopened.selectedModel, .v3)
+        XCTAssertNotEqual(FluidAudioASREngine().cacheFingerprint(configuration: .init(modelURL: ultra)),
+                          FluidAudioASREngine().cacheFingerprint(configuration: .init(modelURL: v3)))
+    }
+
+    @MainActor
+    func testIncompleteUltraDoesNotSilentlyFallBackToInstalledV3() throws {
+        _ = try createFluidModelDirectory(named: FluidAudioASRModel.v3.cacheFolder)
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults)
+        XCTAssertEqual(provider.state, .needsDownload)
+        XCTAssertEqual(provider.state(for: .v3), .ready)
+        XCTAssertThrowsError(try provider.resolveForRuntime())
+        XCTAssertThrowsError(try provider.selectModel(.ultra))
+        try provider.selectModel(.v3)
+        XCTAssertEqual(provider.state, .ready)
+    }
+
+    @MainActor
+    func testDownloadingInactiveModelDoesNotSelectItAndCanRetryFailure() async throws {
+        _ = try createFluidModelDirectory(named: FluidAudioASRModel.ultra.cacheFolder)
+        var attempts = 0
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults,
+            downloader: { model, target, report in
+                attempts += 1
+                XCTAssertEqual(model, .v3)
+                XCTAssertEqual(target.lastPathComponent, model.cacheFolder)
+                if attempts == 1 { throw CocoaError(.fileReadNoPermission) }
+                report(.init(fraction: 0.4, detail: "Downloading encoder"))
+                _ = try self.createFluidModelDirectory(named: model.cacheFolder)
+            })
+        await provider.downloadModel(.v3)
+        guard case .failed = provider.state(for: .v3) else { return XCTFail("Expected recoverable error") }
+        XCTAssertEqual(provider.selectedModel, .ultra)
+        await provider.downloadModel(.v3)
+        XCTAssertEqual(provider.state(for: .v3), .ready)
+        XCTAssertEqual(provider.selectedModel, .ultra)
+        XCTAssertNil(provider.progress(for: .v3), "Late callbacks must not resurrect finished progress")
+        XCTAssertEqual(attempts, 2)
+    }
+
+    @MainActor
+    func testRetryRemovesInvalidCompiledComponentBeforeCallingSDKDownloader() async throws {
+        let root = try createFluidModelDirectory(named: FluidAudioASRModel.ultra.cacheFolder)
+        let marker = root.appendingPathComponent("Encoder.mlmodelc/coremldata.bin")
+        try Data().write(to: marker)
+        let completeSibling = root.appendingPathComponent("Decoder.mlmodelc/coremldata.bin")
+        let saved = try Data(contentsOf: completeSibling)
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults,
+            downloader: { model, url, _ in
+                XCTAssertFalse(FileManager.default.fileExists(atPath: url.appendingPathComponent("Encoder.mlmodelc").path),
+                               "Retry must bypass SDK's existence-only early return")
+                XCTAssertEqual(try Data(contentsOf: completeSibling), saved)
+                _ = try self.createFluidModelDirectory(named: model.cacheFolder)
+            })
+        await provider.downloadModel(.ultra)
+        XCTAssertEqual(provider.state, .ready)
+    }
+
+    @MainActor
+    func testDownloadCannotReportReadyWithoutCompleteAssets() async throws {
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults,
+            downloader: { _, _, _ in })
+        await provider.downloadModel(.ultra)
+        guard case .failed = provider.state else { return XCTFail("Missing assets must fail validation") }
+        XCTAssertThrowsError(try provider.resolveForRuntime())
+    }
+
+    @MainActor
+    func testRemovalProtectsSelectedModelAndRejectsCacheSymlink() throws {
+        let ultra = try createFluidModelDirectory(named: FluidAudioASRModel.ultra.cacheFolder)
+        let v3 = try createFluidModelDirectory(named: FluidAudioASRModel.v3.cacheFolder)
+        let provider = FluidAudioASRModelProvider(modelsRoot: { self.tempDirectory }, defaults: defaults)
+        XCTAssertThrowsError(try provider.removeModel(.ultra))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: ultra.path))
+        try provider.removeModel(.v3)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: v3.path))
+        let other = try createFluidModelDirectory(named: "outside-cache-model")
+        try FileManager.default.createSymbolicLink(at: v3, withDestinationURL: other)
+        XCTAssertThrowsError(try provider.removeModel(.v3))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: other.path))
+    }
+
+    @MainActor
+    func testNativeUltraAndV3OnBoundedAudioExcerpt() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let input = env["RECORDLY_ULTRA_SMOKE_AUDIO"],
+              let root = env["RECORDLY_ULTRA_SMOKE_MODELS"],
+              let output = env["RECORDLY_ULTRA_SMOKE_OUTPUT"] else {
+            throw XCTSkip("Opt-in installed-model acceptance; never modifies source recordings")
+        }
+        let source = try AVAudioFile(forReading: URL(fileURLWithPath: input))
+        let count = AVAudioFrameCount(min(source.length, Int64(source.processingFormat.sampleRate * 30)))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: source.processingFormat, frameCapacity: count))
+        try source.read(into: buffer, frameCount: count)
+        let clip = tempDirectory.appendingPathComponent("bounded-30s.wav")
+        do {
+            let writer = try AVAudioFile(forWriting: clip, settings: buffer.format.settings)
+            try writer.write(from: buffer)
+        }
+        let provider = FluidAudioASRModelProvider(modelsRoot: { URL(fileURLWithPath: root, isDirectory: true) }, defaults: defaults)
+        XCTAssertEqual(provider.selectedModel, .ultra)
+        var reports: [[String: Any]] = []
+        let engine = FluidAudioASREngine()
+        for model in FluidAudioASRModel.allCases {
+            try provider.selectModel(model)
+            let configuration = ASREngineConfiguration(modelURL: try provider.resolveForRuntime())
+            let start = Date()
+            let document = try await engine.transcribe(audioURL: clip, channel: .mic, sessionID: UUID(), configuration: configuration)
+            let seconds = Date().timeIntervalSince(start)
+            XCTAssertFalse(document.segments.isEmpty)
+            XCTAssertTrue(document.segments.contains { !($0.words ?? []).isEmpty })
+            XCTAssertTrue(document.segments.allSatisfy { $0.startMs >= 0 && $0.endMs > $0.startMs })
+            let text = document.segments.map(\.text).joined(separator: " ")
+            XCTAssertFalse(text.contains("▁"))
+            for segment in document.segments {
+                let words = segment.words ?? []
+                let timedText = ASRTimedText(text: segment.text, words: words)
+                XCTAssertTrue(timedText.isAligned, "Native tokens must preserve decoded word boundaries for \(model.title)")
+                XCTAssertEqual(timedText.text(for: words), segment.text.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            reports.append(["model": model.rawValue, "fingerprint": engine.cacheFingerprint(configuration: configuration),
+                            "seconds": seconds, "text": text,
+                            "words": document.segments.reduce(0) { $0 + ($1.words?.count ?? 0) }])
+        }
+        try JSONSerialization.data(withJSONObject: reports, options: [.prettyPrinted, .sortedKeys])
+            .write(to: URL(fileURLWithPath: output))
+    }
+
     private func createFluidModelDirectory(named name: String) throws -> URL {
         let directory = tempDirectory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -478,6 +698,7 @@ final class FluidAudioASREngineTests: XCTestCase {
             let markerURL = directory.appendingPathComponent(marker)
             if marker.hasSuffix(".mlmodelc") {
                 try FileManager.default.createDirectory(at: markerURL, withIntermediateDirectories: true)
+                try Data("compiled-layout".utf8).write(to: markerURL.appendingPathComponent("coremldata.bin"))
             } else {
                 try Data("marker".utf8).write(to: markerURL)
             }

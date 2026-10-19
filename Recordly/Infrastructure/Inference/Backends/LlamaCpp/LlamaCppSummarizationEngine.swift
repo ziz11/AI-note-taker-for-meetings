@@ -18,7 +18,7 @@ struct LlamaCppSummarizationEngine: SummarizationEngine {
         configuration: SummarizationConfiguration
     ) async throws -> SummaryDocument {
         if Task.isCancelled {
-            throw SummarizationError.cancelled
+            throw CancellationError()
         }
 
         let effectiveSource = if let srtText, !srtText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -35,16 +35,20 @@ struct LlamaCppSummarizationEngine: SummarizationEngine {
             throw SummarizationError.modelMissing(configuration.modelURL)
         }
 
+        try GGUFModelValidator.validate(configuration.modelURL)
+
         let prompt = SummaryPromptBuilder.build(
             transcript: transcript,
             srtText: srtText,
             recordingTitle: recordingTitle
         )
 
-        let output = try await runner.generate(prompt: prompt, configuration: configuration)
+        let output: String
+        do { output = try await runner.generate(prompt: prompt, configuration: configuration) }
+        catch LlamaCppRuntimeError.timedOut { throw SummarizationError.timedOut }
 
         if Task.isCancelled {
-            throw SummarizationError.cancelled
+            throw CancellationError()
         }
 
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)

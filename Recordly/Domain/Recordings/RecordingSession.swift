@@ -37,7 +37,7 @@ enum RecordingSource: String, Codable, CaseIterable {
     }
 }
 
-enum TranscriptPipelineState: String, Codable, CaseIterable {
+enum TranscriptPipelineState: String, Codable, CaseIterable, Sendable {
     case idle
     case queued
     case transcribingMic
@@ -149,6 +149,8 @@ enum TranscriptionAudioProvenance: String, Codable, CaseIterable, Hashable {
 }
 
 struct RecordingAssets: Codable, Hashable {
+    var audioManifestFile: String? = nil
+    var audioTracks: [String]? = nil
     var microphoneFile: String? = nil
     var systemAudioFile: String? = nil
     var mergedCallFile: String? = nil
@@ -332,7 +334,7 @@ extension RecordingSession {
     var transcriptSourceLabel: String {
         switch source {
         case .liveCapture:
-            if assets.systemAudioFile != nil {
+            if assets.systemAudioFile != nil || assets.audioTracks?.contains("system") == true {
                 return "System + Mic"
             }
             return "Mic"
@@ -344,7 +346,7 @@ extension RecordingSession {
     var primaryAudioFileName: String? {
         switch source {
         case .liveCapture:
-            return assets.mergedCallFile ?? assets.microphoneFile ?? assets.systemAudioFile
+            return assets.audioManifestFile ?? assets.mergedCallFile ?? assets.microphoneFile ?? assets.systemAudioFile
         case .importedAudio:
             return assets.importedAudioFile
         }
@@ -358,6 +360,13 @@ extension RecordingSession {
     }
 
     func playbackFileName(for source: PlaybackAudioSource) -> String? {
+        if let manifest = assets.audioManifestFile {
+            switch source {
+            case .mixed: return assets.audioTracks?.isEmpty == false ? manifest : nil
+            case .microphone: return assets.audioTracks?.contains("microphone") == true ? manifest : nil
+            case .system: return assets.audioTracks?.contains("system") == true ? manifest : nil
+            }
+        }
         switch self.source {
         case .importedAudio:
             return source == .mixed ? assets.importedAudioFile : nil
@@ -374,6 +383,7 @@ extension RecordingSession {
     }
 
     var isMixedTrackProcessing: Bool {
+        guard assets.audioManifestFile == nil else { return false }
         guard source == .liveCapture else { return false }
         guard assets.mergedCallFile == nil else { return false }
         guard assets.microphoneFile != nil || assets.systemAudioFile != nil else { return false }
@@ -392,7 +402,7 @@ extension RecordingSession {
             return .live
         }
 
-        if assets.microphoneFile != nil {
+        if assets.microphoneFile != nil || assets.audioTracks?.contains("microphone") == true {
             return .recorded
         }
 
@@ -404,11 +414,11 @@ extension RecordingSession {
             return .missing
         }
 
-        if lifecycleState == .recording, assets.systemAudioFile != nil {
+        if lifecycleState == .recording, assets.systemAudioFile != nil || assets.audioTracks?.contains("system") == true {
             return .live
         }
 
-        if assets.systemAudioFile != nil {
+        if assets.systemAudioFile != nil || assets.audioTracks?.contains("system") == true {
             return .recorded
         }
 
@@ -417,5 +427,44 @@ extension RecordingSession {
         }
 
         return .missing
+    }
+}
+
+struct TranscriptStageProgress: Equatable, Sendable {
+    var total = 0
+    var handled = 0
+    var failed = 0
+    var skipped = 0
+    var reused = 0
+}
+
+struct TranscriptProcessingProgress: Equatable, Sendable {
+    var state: TranscriptPipelineState = .queued
+    var asr = TranscriptStageProgress()
+    var diarization = TranscriptStageProgress()
+    var activeWindow: Int?
+    var isCancelled = false
+    var completedOutputSteps = 0
+
+    var overallFraction: Double {
+        if state == .ready { return 1 }
+        return min(0.99, Double(asr.handled + diarization.handled + completedOutputSteps) / Double(max(asr.total + diarization.total + 2, 1)))
+    }
+    var stageLabel: String {
+        if isCancelled { return "Cancelled" }
+        if let activeWindow { return "\(state.label) · window \(activeWindow)/\(asr.total)" }
+        return state.label
+    }
+    var asrLabel: String { "Transcription \(asr.handled)/\(asr.total)" }
+    var diarizationLabel: String { "Diarization \(diarization.handled)/\(diarization.total)" }
+    var diagnosticsLabel: String {
+        var parts = ["Audio windows"]
+        let failures = asr.failed + diarization.failed
+        let skipped = asr.skipped + diarization.skipped
+        let reused = asr.reused + diarization.reused
+        if failures > 0 { parts.append("\(failures) failed") }
+        if skipped > 0 { parts.append("\(skipped) skipped") }
+        if reused > 0 { parts.append("\(reused) reused") }
+        return parts.joined(separator: " · ")
     }
 }

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 @MainActor
@@ -14,13 +15,24 @@ final class ModelSettingsViewModel: ObservableObject {
         let supportsSelection: Bool
     }
 
+    struct SpeechModel: Identifiable, Equatable {
+        let model: FluidAudioASRModel
+        let state: FluidAudioModelProvisioningState
+        let progress: FluidAudioModelDownloadProgress?
+        let isSelected: Bool
+        var id: String { model.id }
+    }
+
+    @Published private(set) var speechModels: [SpeechModel] = []
+    @Published private(set) var modelActionError: String?
+    /// Supplied by the workflow owner. Deletion must not remove assets frozen into a running job.
+    var canRemoveModels: () -> Bool = { true }
+    private var modelChanges: AnyCancellable?
+
     @Published private(set) var diarizationModels: [LocalModelOption] = []
-    @Published private(set) var summarizationModels: [LocalModelOption] = []
     @Published private(set) var localASRModels: [CatalogModel] = []
-    @Published private(set) var summarizationCatalogModels: [CatalogModel] = []
 
     @Published var selectedDiarizationModelID: String?
-    @Published var selectedSummarizationModelID: String?
     @Published private(set) var shouldScrollToDiarizationSection = false
 
     @Published private(set) var fluidProvisioningState: FluidAudioModelProvisioningState = .needsDownload
@@ -43,37 +55,25 @@ final class ModelSettingsViewModel: ObservableObject {
         self.fileManager = fileManager
         fluidProvisioningState = fluidAudioModelProvider.state
         fluidDiarizationProvisioningState = fluidAudioDiarizationModelProvider.state
+        syncSpeechModels()
+        modelChanges = fluidAudioModelProvider.changes.sink { [weak self] in
+            Task { @MainActor [weak self] in self?.syncSpeechModels() }
+        }
     }
 
     func refresh() {
         diarizationModels = modelManager.listLocalOptions(kind: .diarization)
-        summarizationModels = modelManager.listLocalOptions(kind: .summarization)
         localASRModels = discoverLocalASRModels()
 
-        selectedDiarizationModelID = modelManager.selectedLocalOption(kind: .diarization)?.id
-        selectedSummarizationModelID = modelManager.selectedLocalOption(kind: .summarization)?.id
-        summarizationCatalogModels = summarizationModels.map { option in
-            makeCatalogModel(
-                option: option,
-                kind: .summarization,
-                isSelected: option.id == selectedSummarizationModelID,
-                supportsSelection: true
-            )
-        }
-
+        selectedDiarizationModelID = modelManager.selectedDiarizationModelID
         fluidAudioModelProvider.refreshState()
-        fluidProvisioningState = fluidAudioModelProvider.state
+        syncSpeechModels()
         fluidAudioDiarizationModelProvider.refreshState()
         fluidDiarizationProvisioningState = fluidAudioDiarizationModelProvider.state
     }
 
     func selectDiarizationModel(_ modelID: String?) {
         modelManager.setSelectedModelID(modelID, for: .diarization)
-        refresh()
-    }
-
-    func selectSummarizationModel(_ modelID: String?) {
-        modelManager.setSelectedModelID(modelID, for: .summarization)
         refresh()
     }
 
@@ -137,6 +137,48 @@ final class ModelSettingsViewModel: ObservableObject {
         return false
     }
 
+    var isDownloadingAnySpeechModel: Bool {
+        speechModels.contains { $0.state == .downloading }
+    }
+
+    func downloadSpeechModel(_ model: FluidAudioASRModel) {
+        modelActionError = nil
+        Task {
+            await fluidAudioModelProvider.downloadModel(model)
+            syncSpeechModels()
+        }
+    }
+
+    func selectSpeechModel(_ model: FluidAudioASRModel) {
+        do {
+            try fluidAudioModelProvider.selectModel(model)
+            modelActionError = nil
+            syncSpeechModels()
+        } catch {
+            modelActionError = error.localizedDescription
+        }
+    }
+
+    func removeSpeechModel(_ model: FluidAudioASRModel) {
+        do {
+            guard canRemoveModels() else { throw FluidAudioModelProvisioningError.modelInUse }
+            try fluidAudioModelProvider.removeModel(model)
+            modelActionError = nil
+            syncSpeechModels()
+        } catch {
+            modelActionError = error.localizedDescription
+        }
+    }
+
+    private func syncSpeechModels() {
+        fluidProvisioningState = fluidAudioModelProvider.state
+        speechModels = FluidAudioASRModel.allCases.map { model in
+            SpeechModel(model: model, state: fluidAudioModelProvider.state(for: model),
+                        progress: fluidAudioModelProvider.progress(for: model),
+                        isSelected: fluidAudioModelProvider.selectedModel == model)
+        }
+    }
+
     func downloadFluidAudioModel() {
         Task {
             await fluidAudioModelProvider.downloadDefaultModel()
@@ -146,6 +188,8 @@ final class ModelSettingsViewModel: ObservableObject {
     }
 
     func downloadFluidDiarizationModel() {
+        guard canDownloadFluidDiarizationModel else { return }
+        fluidDiarizationProvisioningState = .downloading
         Task {
             await fluidAudioDiarizationModelProvider.downloadDefaultModel()
             fluidDiarizationProvisioningState = fluidAudioDiarizationModelProvider.state

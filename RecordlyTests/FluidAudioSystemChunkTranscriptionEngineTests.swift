@@ -121,6 +121,7 @@ final class FluidAudioSystemChunkTranscriptionEngineTests: XCTestCase {
             let markerURL = directory.appendingPathComponent(marker)
             if marker.hasSuffix(".mlmodelc") {
                 try FileManager.default.createDirectory(at: markerURL, withIntermediateDirectories: true)
+                try Data("compiled-layout".utf8).write(to: markerURL.appendingPathComponent("coremldata.bin"))
             } else {
                 try Data("marker".utf8).write(to: markerURL)
             }

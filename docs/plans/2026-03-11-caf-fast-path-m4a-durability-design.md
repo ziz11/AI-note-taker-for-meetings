@@ -1,4 +1,6 @@
-94318647-A9AE-46C7-9CB8-0FB94EC4CF86# CAF Fast Path and M4A Durability Design
+# CAF Fast Path and M4A Durability Design
+
+> Reviewed 2026-10-10. Historical plan/requirements. Historical CAF/M4A strategy. V2 new-session durability is segmented AAC; full-session PCM/automatic mixed M4A is not the new capture path. Legacy adapters remain. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
 
 ## Context
 

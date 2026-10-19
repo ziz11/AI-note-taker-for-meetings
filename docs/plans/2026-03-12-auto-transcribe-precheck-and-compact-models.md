@@ -1,5 +1,7 @@
 # Auto-Transcribe Precheck And Compact Models Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Precheck and queue/settings code exist; original UI acceptance claims require direct GUI validation. Current summary controls are disabled. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Block auto-transcription with a clear persisted reason and `Open Models` action when the FluidAudio diarization package is missing, and compact the Models settings UI without changing its structure.

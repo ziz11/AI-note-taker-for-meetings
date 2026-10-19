@@ -1,0 +1,29 @@
+{
+  "evidence" : "Preferred Core ML operation placement; not live utilization, execution time share or watts",
+  "hardware" : "Mac15,6",
+  "models" : [
+    {
+      "component" : "Encoder.mlmodelc",
+      "inspectionSeconds" : 0.83948941665585153,
+      "model" : "parakeet-ultra",
+      "policy" : "cpuAndNeuralEngine",
+      "preferredOperationCounts" : {
+        "CPU" : 9,
+        "Neural Engine" : 1376,
+        "Unknown" : 2013
+      }
+    },
+    {
+      "component" : "Encoder.mlmodelc",
+      "inspectionSeconds" : 18.966981041652616,
+      "model" : "parakeet-tdt-0.6b-v3-coreml",
+      "policy" : "cpuAndNeuralEngine",
+      "preferredOperationCounts" : {
+        "CPU" : 9,
+        "Neural Engine" : 1376,
+        "Unknown" : 2013
+      }
+    }
+  ],
+  "os" : "Version 26.7.1 (Build 25G241)"
+}

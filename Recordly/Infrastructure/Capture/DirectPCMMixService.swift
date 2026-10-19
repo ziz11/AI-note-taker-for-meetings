@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import Foundation
 
@@ -34,6 +35,29 @@ final class DirectPCMMixService {
         let expectedFrames: AVAudioFramePosition
     }
 
+    private final class OpenTrack {
+        let kind: TrackKind
+        let file: AVAudioFile
+        let offsetFrames: AVAudioFramePosition
+        let frameCount: AVAudioFramePosition
+        var gain: Float
+        var nextReadPosition: AVAudioFramePosition = 0
+
+        init(
+            kind: TrackKind,
+            file: AVAudioFile,
+            offsetFrames: AVAudioFramePosition,
+            frameCount: AVAudioFramePosition,
+            gain: Float
+        ) {
+            self.kind = kind
+            self.file = file
+            self.offsetFrames = offsetFrames
+            self.frameCount = frameCount
+            self.gain = gain
+        }
+    }
+
     private let chunkSize: AVAudioFrameCount
     private let micGain: Float
     private let systemGain: Float
@@ -58,24 +82,20 @@ final class DirectPCMMixService {
             throw MixError.invalidOutputFormat
         }
 
-        struct OpenTrack {
-            let kind: TrackKind
-            let file: AVAudioFile
-            let offsetFrames: AVAudioFramePosition
-            let frameCount: AVAudioFramePosition
-            let gain: Float
-        }
-
         var openTracks: [OpenTrack] = []
         openTracks.reserveCapacity(tracks.count)
 
         for track in tracks {
-            let file = try AVAudioFile(forReading: track.fileURL)
+            // Force a Float32 non-interleaved processing format so any on-disk
+            // format (Float32 CAF, Int16 CAF, AAC m4a) decodes uniformly.
+            let file = try AVAudioFile(
+                forReading: track.fileURL,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
             let format = file.processingFormat
-            guard format.commonFormat == .pcmFormatFloat32,
-                  format.channelCount == PCMTrackWriter.canonicalChannels,
-                  format.sampleRate == PCMTrackWriter.canonicalSampleRate,
-                  format.isInterleaved == false else {
+            guard format.channelCount == PCMTrackWriter.canonicalChannels,
+                  format.sampleRate == PCMTrackWriter.canonicalSampleRate else {
                 throw MixError.invalidInputFormat(fileName: track.fileURL.lastPathComponent)
             }
 
@@ -124,26 +144,43 @@ final class DirectPCMMixService {
             try FileManager.default.removeItem(at: outputURL)
         }
 
-        let outputFile = try AVAudioFile(
-            forWriting: outputURL,
-            settings: canonicalFormat.settings,
-            commonFormat: .pcmFormatFloat32,
-            interleaved: false
-        )
+        // Scoped so the AVAudioFile deallocates (and the encoder finalizes the
+        // bitstream — required for AAC/m4a output) before the caller validates the file.
+        do {
+            let outputFile = try AVAudioFile(
+                forWriting: outputURL,
+                settings: PCMTrackWriter.fileSettings(for: outputURL),
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+            try writeMix(openTracks: openTracks, totalFrames: totalFrames, canonicalFormat: canonicalFormat, outputFile: outputFile)
+        }
+
+        return DirectPCMMixResult(mergeMode: mergeMode, totalFrames: totalFrames)
+    }
+
+    private func writeMix(
+        openTracks: [OpenTrack],
+        totalFrames: AVAudioFramePosition,
+        canonicalFormat: AVAudioFormat,
+        outputFile: AVAudioFile
+    ) throws {
+        guard let outBuffer = AVAudioPCMBuffer(pcmFormat: canonicalFormat, frameCapacity: chunkSize),
+              let outChannel = outBuffer.floatChannelData?[0],
+              let inputBuffer = AVAudioPCMBuffer(pcmFormat: canonicalFormat, frameCapacity: chunkSize),
+              let inputChannel = inputBuffer.floatChannelData?[0] else {
+            throw MixError.invalidOutputFormat
+        }
 
         var globalPosition: AVAudioFramePosition = 0
 
         while globalPosition < totalFrames {
             let remaining = totalFrames - globalPosition
             let frameCount = AVAudioFrameCount(min(AVAudioFramePosition(chunkSize), remaining))
-            guard let outBuffer = AVAudioPCMBuffer(pcmFormat: canonicalFormat, frameCapacity: frameCount),
-                  let outChannel = outBuffer.floatChannelData?[0] else {
-                throw MixError.invalidOutputFormat
-            }
+            let frameCountInt = Int(frameCount)
 
             outBuffer.frameLength = frameCount
-            let frameCountInt = Int(frameCount)
-            outChannel.initialize(repeating: 0, count: frameCountInt)
+            vDSP_vclr(outChannel, 1, vDSP_Length(frameCountInt))
 
             let chunkStart = globalPosition
             let chunkEnd = globalPosition + AVAudioFramePosition(frameCount)
@@ -156,34 +193,37 @@ final class DirectPCMMixService {
                 let intersectionEnd = min(chunkEnd, trackEnd)
                 guard intersectionStart < intersectionEnd else { continue }
 
-                // Read-seek policy: each input is independently seek/read based on its
-                // local range intersection with the current global output chunk.
                 let readFrames = AVAudioFrameCount(intersectionEnd - intersectionStart)
                 let localStart = intersectionStart - trackStart
                 let destinationOffset = Int(intersectionStart - chunkStart)
 
-                guard let inputBuffer = AVAudioPCMBuffer(pcmFormat: canonicalFormat, frameCapacity: readFrames),
-                      let inputChannel = inputBuffer.floatChannelData?[0] else {
-                    throw MixError.unsupportedInputData(fileName: track.file.url.lastPathComponent)
+                // Reads are sequential chunk-to-chunk; only seek when the local
+                // position actually diverges (first intersecting chunk). Explicit
+                // framePosition sets are expensive on compressed inputs.
+                if track.nextReadPosition != localStart {
+                    track.file.framePosition = localStart
                 }
-
-                track.file.framePosition = localStart
                 try track.file.read(into: inputBuffer, frameCount: readFrames)
+                track.nextReadPosition = localStart + AVAudioFramePosition(inputBuffer.frameLength)
 
                 let actualFrames = Int(inputBuffer.frameLength)
-                for index in 0..<actualFrames {
-                    outChannel[destinationOffset + index] += track.gain * inputChannel[index]
-                }
+                guard actualFrames > 0 else { continue }
+                var gain = track.gain
+                vDSP_vsma(
+                    inputChannel, 1,
+                    &gain,
+                    outChannel + destinationOffset, 1,
+                    outChannel + destinationOffset, 1,
+                    vDSP_Length(actualFrames)
+                )
             }
 
-            for index in 0..<frameCountInt {
-                outChannel[index] = max(-1, min(1, outChannel[index]))
-            }
+            var lowerBound: Float = -1
+            var upperBound: Float = 1
+            vDSP_vclip(outChannel, 1, &lowerBound, &upperBound, outChannel, 1, vDSP_Length(frameCountInt))
 
             try outputFile.write(from: outBuffer)
             globalPosition += AVAudioFramePosition(frameCount)
         }
-
-        return DirectPCMMixResult(mergeMode: mergeMode, totalFrames: totalFrames)
     }
 }

@@ -1,5 +1,7 @@
 # Recordly Inference Context
 
+> Reviewed 2026-10-16. Current reference. Evidence and open acceptance limits are tracked centrally. See [current project status](project-status.md).
+
 Use this file as the primary context for inference-related work.
 
 Optimized for:
@@ -36,7 +38,7 @@ Default local stage map:
 - `audioCapture -> nativeCapture`
 - `asr -> fluidAudio`
 - `diarization -> fluidAudio`
-- `summarization -> llamaCpp`
+- `summarization -> disabled` in app composition (the generic contract default is overridden)
 - `vad -> disabled`
 
 ## Ownership boundaries
@@ -62,7 +64,7 @@ Factory and routing:
 
 Model layer:
 
-- `ModelManager` owns discovery, install state, selected model IDs, artifact resolution, and runtime settings persistence for diarization and summarization.
+- `ModelManager` retains local/legacy discovery and summary preferences/settings. The active diarization package and prepared manager are owned by `FluidAudioDiarizationModelProvider`.
 - `FluidAudioASRModelProvider` owns ASR model provisioning (SDK-managed download/cache/resolve).
 - Any legacy ASR preference fields that still exist are compatibility residue, not an active local-file Whisper path.
 - Model layers must not become orchestration or inference-execution layers.
@@ -103,39 +105,15 @@ Rule:
 
 - runtime profile data is configuration, not product policy
 
-## Canonical artifacts and persistence invariants
+## Canonical artifacts and audio boundaries
 
-Live capture source of truth remains normalized PCM in CAF.
+New live sessions persist a v2 `audio-manifest.json` and independent AAC chunks with UUIDs, frame timing, gaps, hashes and recovery sidecars. Capture uses a shared monotonic host-clock origin; storage does not define inference-window boundaries.
 
-Canonical live artifacts:
+`SessionAudioRangeReader` materializes at most 60 seconds of mono PCM for windows owning 50 seconds with 5-second context. Window stage caches validate audio, actual artifact fingerprints, backend settings and implementation versions. Successful windows survive optional-stage failure. Cancellation propagates.
 
-- `mic.raw.caf`
-- `system.raw.caf`
-- `merged-call.caf`
-- `mic.m4a`
-- `system.m4a`
-- `merged-call.m4a`
+Native compositions play the logical timeline; full mixed M4A is explicit export only. Old CAF/M4A and imported-file sessions retain the legacy path. Transcript/SRT/summary locations remain compatible.
 
-Do not change without an explicit migration reason:
-
-- session folder layout
-- canonical artifact names
-- transcript, SRT, JSON, or summary locations
-- recovery semantics
-
-Backend rule:
-
-- adapt backend requirements to persisted artifacts more often than adapting persistence for one backend
-
-## Audio invariants
-
-- internal capture stays `CAF + PCM`
-- live capture may persist durable per-source `m4a` alongside temporary `CAF`
-- immediate live processing prefers source-track `CAF`; recovery and later reprocessing may use per-source `m4a`
-- backend-local FluidAudio adapters may load persisted `CAF`, `FLAC`, or per-source `m4a` session artifacts and prepare SDK-ready PCM
-- backend-local FluidAudio transcription may use VAD regions first and fixed full-input windows second for long recordings
-- if a future backend needs WAV, FLAC, buffers, or another representation, adapt at the consumer boundary
-- do not rewrite the capture pipeline for one backend format preference
+Backend speaker labels are local to an inference run and window. Model-scoped 256-dimensional voice observations allow the segmented identity store to match returning remote speakers within a recording. Matching requires enough exclusive owned speech, similarity and a runner-up margin, with one-to-one local-group constraints. Insufficient or ambiguous evidence stays window-local. Reprocessing rebuilds aliases from current evidence and retains compatible named anchors; exact-turn local names remain stored. SDK/model changes invalidate incompatible evidence, so old local names are not automatically attached to new voice profiles. See `fluid-speaker-verification.md` and `fluidaudio-upgrade-changelog.md`.
 
 ## Current behavior to preserve
 
@@ -157,17 +135,21 @@ Artifacts written by the pipeline:
 - `transcript.json`
 - `transcript.txt`
 - `transcript.srt`
-- ASR fingerprint cache files
+- `speaker-identities.json`
+- `inference/windows/` stage-output/provenance caches
+- `inference/report.json` diagnostics, continuity and reuse
+- Legacy ASR fingerprint cache files
 
 Summarization workflow:
 
-- `RecordingWorkflowController.summarize(...)` resolves summarization runtime through the selector and engine through the factory
-- success writes `summary.md`
-- if summarization is unavailable, missing, fails, or times out, workflow falls back to a template summary
+- `DefaultInferenceComposition` disables the summary stage.
+- `RecordingsStore` and `RecordingWorkflowController.summarize(...)` perform no generation, runtime resolution or artifact writes.
+- Buttons and auto-summary are disabled placeholders; Transcript opens by default. Existing summary files remain readable.
+- Retained llama.cpp/MLX contracts/backends and selector APIs are compatibility/test code, not an active app path.
 
-Hard failure rule:
+Partial failure rule:
 
-- ASR failure is generally a hard failure for transcript generation
+- Independent ASR tracks/windows preserve successful output with degraded ranges. Failure of every usable track remains an error. Cancellation propagates.
 
 Transcript rendering behavior:
 
@@ -260,3 +242,7 @@ Do not:
 UI design reference:
 
 - `docs/prompts/2026-03-11-model-settings-screen-redesign.md`
+
+## ASR model selection — 2026-10-16
+
+The FluidAudio backend supports Parakeet Ultra (fresh default) and Parakeet TDT 0.6B v3. The ASR provider persists the explicit choice and resolves only its canonical validated SDK directory. A job retains that URL across all bounded windows; changing Models affects the next job. Backend loading and cache fingerprints use the corresponding model version. No speaker embedding/matching, AAC, stage contract or summary behavior changes with this selection. See [model integration](model-integration.md).

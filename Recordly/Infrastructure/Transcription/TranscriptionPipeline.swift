@@ -28,6 +28,10 @@ enum TranscriptionPipelineError: LocalizedError {
 
 enum PipelineDegradationReason: String, Codable, Equatable {
     case emptyMicASR
+    case micASRFailedFallbackUsed
+    case windowInferenceFailed
+    case captureDiagnostics
+    case speakerContinuityUnresolved
     case emptySystemASR
     case systemASRFailedFallbackUsed
     case diarizationDegraded
@@ -109,9 +113,16 @@ struct TranscriptionPipeline {
         in sessionDirectory: URL,
         runtimeProfile: InferenceRuntimeProfile,
         engineFactory: any InferenceEngineFactory,
-        onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil
+        onStateChange: (@MainActor (TranscriptPipelineState) -> Void)? = nil,
+        onProgress: (@MainActor (TranscriptProcessingProgress) -> Void)? = nil
     ) async throws -> TranscriptionResult {
         await onStateChange?(.queued)
+        try Task.checkCancellation()
+        if recording.assets.audioManifestFile != nil {
+            return try await SegmentedTranscriptionPipeline(mergeService: mergeService, renderService: renderService)
+                .process(recording: recording, in: sessionDirectory, runtimeProfile: runtimeProfile,
+                    engineFactory: engineFactory, onStateChange: onStateChange, onProgress: onProgress)
+        }
 
         let micInput = try preparePreferredLiveCaptureInput(
             recording: recording,
@@ -156,20 +167,28 @@ struct TranscriptionPipeline {
 
         let micAudioURL = micInput?.url ?? importedInput?.url
         let micDoc: ASRDocument?
+        var microphoneFailure: Error?
         if let micAudioURL {
             await onStateChange?(.transcribingMic)
-            let document = try await runMainPathASR(
-                asrEngine: asrEngine,
-                audioURL: micAudioURL,
-                channel: .mic,
-                sessionID: recording.id,
-                configuration: asrConfiguration
-            )
-            try writeJSON(document, to: sessionDirectory.appendingPathComponent(micASRFile))
-            if document.segments.isEmpty {
-                degradedReasons.append(.emptyMicASR)
+            do {
+                let document = try await runMainPathASR(
+                    asrEngine: asrEngine,
+                    audioURL: micAudioURL,
+                    channel: .mic,
+                    sessionID: recording.id,
+                    configuration: asrConfiguration
+                )
+                try writeJSON(document, to: sessionDirectory.appendingPathComponent(micASRFile))
+                if document.segments.isEmpty {
+                    degradedReasons.append(.emptyMicASR)
+                }
+                micDoc = document
+            } catch {
+                try propagateInferenceCancellation(error)
+                microphoneFailure = error
+                micDoc = nil
+                degradedReasons.append(.micASRFailedFallbackUsed)
             }
-            micDoc = document
         } else {
             micDoc = nil
         }
@@ -178,7 +197,7 @@ struct TranscriptionPipeline {
         if systemInput != nil {
             await onStateChange?(.diarizingSystem)
             diarizationOutcome = try await loadOrRunDiarization(
-                diarizationEngine: await resolveDiarizationEngine(
+                diarizationEngine: try await resolveDiarizationEngine(
                     engineFactory: engineFactory,
                     runtimeProfile: runtimeProfile
                 ),
@@ -216,6 +235,9 @@ struct TranscriptionPipeline {
         if let systemDoc = systemOutcome.document, systemDoc.segments.isEmpty {
             degradedReasons.append(.emptySystemASR)
         }
+
+        if micDoc == nil && systemOutcome.document == nil, let microphoneFailure { throw microphoneFailure }
+        try Task.checkCancellation()
 
         let micSegments = (micDoc?.segments ?? []).map {
             TranscriptSegment(
@@ -313,10 +335,12 @@ struct TranscriptionPipeline {
     ) -> [String] {
         let assetFileName = channel == .mic ? recording.assets.microphoneFile : recording.assets.systemAudioFile
         let canonicalDurable = channel == .mic ? "mic.m4a" : "system.m4a"
+        let canonicalRaw = channel == .mic ? "mic.raw.caf" : "system.raw.caf"
 
         let orderedCandidates = [
             canonicalDurable,
-            assetFileName
+            assetFileName,
+            canonicalRaw
         ]
 
         var unique: [String] = []
@@ -329,7 +353,9 @@ struct TranscriptionPipeline {
     }
 
     private func isLiveCaptureInferenceCandidate(_ fileName: String) -> Bool {
-        fileName != "merged-call.m4a" && fileName.lowercased().hasSuffix(".m4a")
+        let normalized = fileName.lowercased()
+        return fileName != "merged-call.m4a"
+            && (normalized.hasSuffix(".m4a") || normalized.hasSuffix(".raw.caf"))
     }
 
     private func prepareInputCandidate(
@@ -371,7 +397,7 @@ struct TranscriptionPipeline {
     }
 
     private func requiresLiveCaptureValidation(fileName: String) -> Bool {
-        fileName == "mic.raw.caf" || fileName == "system.raw.caf"
+        isDurableSourceFileName(fileName) || isTemporaryFastPathFileName(fileName)
     }
 
     private func prepareImportedInput(
@@ -431,12 +457,14 @@ struct TranscriptionPipeline {
         configuration: ASREngineConfiguration
     ) async throws -> ASRDocument {
         do {
-            return try await asrEngine.transcribe(
+            let document = try await asrEngine.transcribe(
                 audioURL: audioURL,
                 channel: channel,
                 sessionID: sessionID,
                 configuration: configuration
             )
+            try Task.checkCancellation()
+            return document
         } catch let error as ASREngineRuntimeError {
             switch error {
             case .modelMissing:
@@ -448,7 +476,7 @@ struct TranscriptionPipeline {
             case .outputParseFailed:
                 throw TranscriptionPipelineError.outputParseFailed
             case .cancelled:
-                throw TranscriptionPipelineError.cancelled
+                throw CancellationError()
             }
         }
     }
@@ -456,13 +484,14 @@ struct TranscriptionPipeline {
     private func resolveDiarizationEngine(
         engineFactory: any InferenceEngineFactory,
         runtimeProfile: InferenceRuntimeProfile
-    ) async -> (engine: (any DiarizationEngine)?, backendUnavailableReason: String?) {
+    ) async throws -> (engine: (any DiarizationEngine)?, backendUnavailableReason: String?) {
         do {
             let engine = try await MainActor.run {
                 try engineFactory.makeDiarizationEngine(for: runtimeProfile)
             }
             return (engine, nil)
         } catch {
+            try propagateInferenceCancellation(error)
             return (nil, error.localizedDescription)
         }
     }
@@ -470,11 +499,12 @@ struct TranscriptionPipeline {
     private func resolveSystemChunkEngine(
         engineFactory: any InferenceEngineFactory,
         runtimeProfile: InferenceRuntimeProfile
-    ) -> (engine: (any SystemChunkTranscriptionEngine)?, backendUnavailableReason: String?) {
+    ) throws -> (engine: (any SystemChunkTranscriptionEngine)?, backendUnavailableReason: String?) {
         do {
             let engine = try engineFactory.makeSystemChunkTranscriptionEngine(for: runtimeProfile)
             return (engine, nil)
         } catch {
+            try propagateInferenceCancellation(error)
             return (nil, error.localizedDescription)
         }
     }
@@ -550,6 +580,7 @@ struct TranscriptionPipeline {
                 degradationReason: nil
             )
         } catch {
+            try propagateInferenceCancellation(error)
             guard allowMicOnlyDegradation else {
                 throw error
             }
@@ -588,7 +619,7 @@ struct TranscriptionPipeline {
             throw TranscriptionPipelineError.inferenceFailed("system diarization produced no segments")
         }
 
-        let chunkEngineOutcome = resolveSystemChunkEngine(
+        let chunkEngineOutcome = try resolveSystemChunkEngine(
             engineFactory: engineFactory,
             runtimeProfile: runtimeProfile
         )
@@ -636,6 +667,7 @@ struct TranscriptionPipeline {
                 degradationReason: nil
             )
         } catch let error as ASREngineRuntimeError {
+            try propagateInferenceCancellation(error)
             guard allowMicOnlyDegradation else {
                 switch error {
                 case .modelMissing:
@@ -656,6 +688,7 @@ struct TranscriptionPipeline {
                 degradationReason: .systemASRFailedFallbackUsed
             )
         } catch let error as TranscriptionPipelineError {
+            try propagateInferenceCancellation(error)
             guard allowMicOnlyDegradation else {
                 throw error
             }
@@ -665,6 +698,7 @@ struct TranscriptionPipeline {
                 degradationReason: .systemASRFailedFallbackUsed
             )
         } catch {
+            try propagateInferenceCancellation(error)
             guard allowMicOnlyDegradation else {
                 throw error
             }
@@ -720,12 +754,14 @@ struct TranscriptionPipeline {
             try writeJSON(document, to: destination)
             return DiarizationLoadOutcome(document: document, degradedReason: nil, modelUsed: modelUsed)
         } catch let error as DiarizationRuntimeError {
+            try propagateInferenceCancellation(error)
             return DiarizationLoadOutcome(
                 document: nil,
                 degradedReason: error.errorDescription ?? "runtime error",
                 modelUsed: modelUsed
             )
         } catch {
+            try propagateInferenceCancellation(error)
             return DiarizationLoadOutcome(
                 document: nil,
                 degradedReason: error.localizedDescription,

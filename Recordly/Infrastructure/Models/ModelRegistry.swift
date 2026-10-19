@@ -12,7 +12,8 @@ final class ModelRegistry {
     }
 
     func loadModels() -> [ModelDescriptor] {
-        guard let url = bundle.url(forResource: "model-registry", withExtension: "json") else {
+        guard let url = bundle.url(forResource: "model-registry", withExtension: "json", subdirectory: "Resources")
+            ?? bundle.url(forResource: "model-registry", withExtension: "json") else {
             return []
         }
 

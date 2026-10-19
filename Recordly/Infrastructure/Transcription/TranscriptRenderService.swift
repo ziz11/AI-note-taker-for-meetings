@@ -120,7 +120,8 @@ struct StructuredTranscriptExportService {
             return [makeStructuredSegment(from: segment, diarization: diarization, idSuffix: nil, startMs: segment.startMs, endMs: segment.endMs, text: segment.text)]
         }
 
-        guard shouldUseWordTimings(for: segment, words: words) else {
+        let timedText = ASRTimedText(text: segment.text, words: words)
+        guard timedText.isAligned || shouldUseWordTimings(for: segment, words: words) else {
             return reflowTextOnly(segment: segment, diarization: diarization)
         }
 
@@ -131,10 +132,11 @@ struct StructuredTranscriptExportService {
         for (index, word) in words.enumerated() {
             currentWords.append(word)
             let nextWord = words.indices.contains(index + 1) ? words[index + 1] : nil
-            let currentText = join(words: currentWords)
-            let shouldSplit = endsSentence(word.word)
+            let currentText = timedText.text(for: currentWords)
+            let shouldSplit = timedText.canSplit(after: index) && (
+                endsSentence(word.word)
                 || currentText.count >= maxCharactersPerSegment
-                || gap(after: word, next: nextWord) >= longPauseThresholdMs
+                || gap(after: word, next: nextWord) >= longPauseThresholdMs)
 
             if shouldSplit {
                 result.append(
@@ -160,7 +162,7 @@ struct StructuredTranscriptExportService {
                     idSuffix: chunkIndex,
                     startMs: currentWords.first?.startMs ?? segment.startMs,
                     endMs: currentWords.last?.endMs ?? segment.endMs,
-                    text: join(words: currentWords)
+                    text: timedText.text(for: currentWords)
                 )
             )
         }
@@ -350,27 +352,6 @@ struct StructuredTranscriptExportService {
         }
 
         return chunks.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    }
-
-    private func join(words: [ASRWord]) -> String {
-        var result = ""
-
-        for word in words {
-            let token = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !token.isEmpty else { continue }
-
-            if result.isEmpty || token.first.map(isTightPunctuation) == true {
-                result += token
-            } else {
-                result += " \(token)"
-            }
-        }
-
-        return result
-    }
-
-    private func isTightPunctuation(_ character: Character) -> Bool {
-        [",", ".", "!", "?", ";", ":", ")", "]", "}"].contains(character)
     }
 
     private func isAlphabeticToken(_ token: String) -> Bool {

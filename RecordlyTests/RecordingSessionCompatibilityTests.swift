@@ -2,6 +2,16 @@ import XCTest
 @testable import Recordly
 
 final class RecordingSessionCompatibilityTests: XCTestCase {
+    func testSegmentedSessionOffersTracksAndMixedWithoutMergedFile() {
+        var session = makeSession(state: .ready)
+        session.assets.audioManifestFile = "audio-manifest.json"
+        session.assets.audioTracks = ["microphone", "system"]
+        XCTAssertEqual(session.playbackFileName(for: .mixed), "audio-manifest.json")
+        XCTAssertEqual(session.playbackFileName(for: .microphone), "audio-manifest.json")
+        XCTAssertEqual(session.playbackFileName(for: .system), "audio-manifest.json")
+        XCTAssertFalse(session.isMixedTrackProcessing)
+        XCTAssertNil(session.assets.mergedCallFile)
+    }
     func testOldSessionJSONDecodesWithoutNewFields() throws {
         let json = """
         {

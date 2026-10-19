@@ -1,0 +1,94 @@
+{
+  "runs" : [
+    {
+      "audioSeconds" : 30,
+      "model" : "ultra",
+      "pass" : 0,
+      "wallSeconds" : 1.2485406666819472
+    },
+    {
+      "audioSeconds" : 30,
+      "model" : "ultra",
+      "pass" : 1,
+      "wallSeconds" : 0.42508658333099447
+    },
+    {
+      "audioSeconds" : 30,
+      "model" : "ultra",
+      "pass" : 2,
+      "wallSeconds" : 0.38998350000474602
+    },
+    {
+      "model" : "v3",
+      "status" : "Not installed in the managed cache"
+    }
+  ],
+  "scope" : "30-second excerpt; first model call then two retained-manager repeats. Not full pipeline or an energy benchmark.",
+  "telemetry" : {
+    "activeSpanCount" : 0,
+    "asrComputePolicy" : "cpuAndNeuralEngine (configured)",
+    "asrModel" : "ultra",
+    "asrRealtimeMultiplier" : 75.128704863338925,
+    "diarizationComputePolicy" : "all (GPU allowed)",
+    "evidenceNote" : "CPU is process CPU; UI delay is main-queue scheduling. ANE utilization and per-app watts are not measured.",
+    "isSampling" : true,
+    "lastModelLoadSeconds" : 0.75524787500035018,
+    "measurements" : [
+      {
+        "elapsedSeconds" : 0.75524787500035018,
+        "model" : "ultra",
+        "outcome" : "completed",
+        "stage" : "modelLoad",
+        "startedOnMainThread" : false,
+        "timestamp" : 813858467.70387006
+      },
+      {
+        "audioSeconds" : 30,
+        "elapsedSeconds" : 0.43336541668395512,
+        "model" : "ultra",
+        "outcome" : "completed",
+        "stage" : "asr",
+        "startedOnMainThread" : false,
+        "timestamp" : 813858468.13716102
+      },
+      {
+        "audioSeconds" : 30,
+        "elapsedSeconds" : 0.3823055416578427,
+        "model" : "ultra",
+        "outcome" : "completed",
+        "stage" : "asr",
+        "startedOnMainThread" : false,
+        "timestamp" : 813858468.57885695
+      },
+      {
+        "audioSeconds" : 30,
+        "elapsedSeconds" : 0.38227329164510593,
+        "model" : "ultra",
+        "outcome" : "completed",
+        "stage" : "asr",
+        "startedOnMainThread" : false,
+        "timestamp" : 813858469.00371003
+      }
+    ],
+    "samples" : [
+      {
+        "lowPowerMode" : false,
+        "mainQueueDelayMs" : 44.914750003954396,
+        "residentBytes" : 192806912,
+        "thermalState" : "Nominal",
+        "timestamp" : 813858467.00949299
+      },
+      {
+        "cpuPercent" : 132.88185380709643,
+        "lowPowerMode" : false,
+        "mainQueueDelayMs" : 20.969208329916,
+        "residentBytes" : 328155136,
+        "thermalState" : "Nominal",
+        "timestamp" : 813858468.99702203
+      }
+    ],
+    "schemaVersion" : 1,
+    "timestamp" : 813858469.12551999,
+    "uiDelayP95Ms" : 44.914750003954396
+  }
+}

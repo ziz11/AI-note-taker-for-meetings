@@ -1,11 +1,22 @@
 # Third-Party Licenses
 
+> Reviewed 2026-10-10. Current reference; application runtime is the released FluidAudio 0.17.7 build, with summarization disabled and partial session speaker continuity. License text below is unchanged. See [current project status](docs/project-status.md).
+
 ## FluidAudio
 
 - Project: [FluidAudio](https://github.com/FluidInference/FluidAudio)
 - Copyright: FluidInference
-- Used for: on-device speech recognition (ASR) in Recordly
+- Used for: on-device speech recognition and speaker diarization in Recordly
 - License: Apache License 2.0
+- The upstream fastcluster and VBx notices are reproduced in `third-party/FluidAudio-0.17.7/` and bundled under `Contents/Resources/ThirdPartyLicenses/`.
+
+## NeMo text processing (via FluidAudio)
+
+- Project: [text-processing-rs v0.3.1](https://github.com/FluidInference/text-processing-rs/tree/v0.3.1)
+- Copyright: 2026 FluidInference
+- Used for: default text normalization, statically linked through FluidAudio
+- License: [Apache License 2.0](https://github.com/FluidInference/text-processing-rs/blob/v0.3.1/LICENSE), reproduced below.
+- The upstream [NeMo attribution summary](third-party/FluidAudio-0.17.7/NemoTextProcessing-LICENSE.md), [v0.3.1 license](third-party/FluidAudio-0.17.7/NemoTextProcessing-v0.3.1-LICENSE) and [complete dependency notices](third-party/FluidAudio-0.17.7/NemoTextProcessing-THIRD-PARTY-LICENSES.md) cover the embedded NVIDIA grammars and statically linked Rust crates. These notices are distributed with the standalone app.
 
 ### Apache License 2.0
 

@@ -65,4 +65,5 @@ struct InferenceRuntimeProfile: Equatable, Sendable {
     var stageSelection: StageRuntimeSelection
     var modelArtifacts: InferenceModelArtifacts
     var summarizationRuntimeSettings: SummarizationRuntimeSettings
+    var llamaExecutableURL: URL? = nil
 }

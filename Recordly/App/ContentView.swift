@@ -80,6 +80,12 @@ struct ContentView: View {
             .background(AppTheme.contentBackground)
         }
         .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 420)
+        .toolbar {
+            ToolbarItem { PerformanceStatusButton(monitor: store.performanceMonitor) }
+        }
+        .onAppear { store.performanceMonitor.setCaptureActive(store.isRecording) }
+        .onChange(of: store.isRecording) { _, active in store.performanceMonitor.setCaptureActive(active) }
+
         .alert("Action Failed", isPresented: errorBinding) {
             if let primaryAction = store.viewState.alert?.primaryAction {
                 switch primaryAction {

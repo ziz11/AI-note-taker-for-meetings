@@ -1,5 +1,7 @@
 # ASR Model Provider Abstraction — Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Provider separation delivered, then evolved to capability-specific FluidAudioASRModelProvider and FluidAudioDiarizationModelProvider. Original examples are historical. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Introduce backend-scoped ASR model providers so FluidAudio gets SDK-managed model provisioning (download/status/resolve) while WhisperCpp keeps its local-file flow, with backend-specific persisted selection and split settings UX.

@@ -46,3 +46,22 @@ system.diarization.json
 Recordly.md
 hook.sh
 .worktrees/
+
+# Packaged binaries and archives belong in ignored build/ or external release assets
+*.zip
+*.dmg
+*.pkg
+*.ipa
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+*.7z
+*.rar
+*.app/
+*.xcarchive/
+*.xcresult/
+*.dSYM/
+/dist/
+/artifacts/

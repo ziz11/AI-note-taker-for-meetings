@@ -1,7 +1,9 @@
 @preconcurrency import AVFoundation
 import Foundation
+import os.signpost
 
 actor SessionMergeService {
+    private static let signposter = OSSignposter(subsystem: "com.recordly.capture", category: "merge")
     struct Result {
         let mergedM4AFileName: String?
         let note: String
@@ -23,13 +25,22 @@ actor SessionMergeService {
         self.fileManager = fileManager
     }
 
-    func mergeSession(in sessionDirectory: URL, exportM4A: Bool) async throws -> Result {
+    func mergeSession(in sessionDirectory: URL) async throws -> Result {
+        let signpostState = Self.signposter.beginInterval("merge.session")
+        defer { Self.signposter.endInterval("merge.session", signpostState) }
+
         var metadata = try await metadataStore.load(in: sessionDirectory)
         metadata.status = .mixing
         try await save(metadata, in: sessionDirectory)
 
-        let mergedCAFURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("merged-call-\(UUID().uuidString).caf")
+        // A previous merge that crashed mid-run may have left a pending file behind.
+        sweepStalePendingFiles(in: sessionDirectory)
+
+        // Mix directly into an AAC m4a pending file in the session directory
+        // (same volume, so the final replace is atomic). The mixer encodes on
+        // write, so no intermediate PCM CAF or AVAssetExportSession pass is needed.
+        let pendingURL = sessionDirectory
+            .appendingPathComponent("merged-call.pending-\(UUID().uuidString).m4a")
 
         let mixResult: DirectPCMMixResult
         var warnings: [String]
@@ -42,9 +53,10 @@ actor SessionMergeService {
             )
             temporaryPreparedInputs = prepared.temporaryFiles
             warnings = prepared.driftWarnings
-            mixResult = try mixer.mix(tracks: prepared.inputTracks, outputURL: mergedCAFURL)
+            mixResult = try mixer.mix(tracks: prepared.inputTracks, outputURL: pendingURL)
         } catch {
             temporaryPreparedInputs.forEach { try? fileManager.removeItem(at: $0) }
+            try? fileManager.removeItem(at: pendingURL)
             do {
                 let prepared = try prepareInputTracks(
                     metadata: metadata,
@@ -53,8 +65,10 @@ actor SessionMergeService {
                 )
                 temporaryPreparedInputs = prepared.temporaryFiles
                 warnings = prepared.driftWarnings
-                mixResult = try mixer.mix(tracks: prepared.inputTracks, outputURL: mergedCAFURL)
+                mixResult = try mixer.mix(tracks: prepared.inputTracks, outputURL: pendingURL)
             } catch {
+                temporaryPreparedInputs.forEach { try? fileManager.removeItem(at: $0) }
+                try? fileManager.removeItem(at: pendingURL)
                 metadata = try await metadataStore.load(in: sessionDirectory)
                 metadata.status = .mixError
                 metadata.mergeMode = .unavailable
@@ -65,16 +79,7 @@ actor SessionMergeService {
         }
         temporaryPreparedInputs.forEach { try? fileManager.removeItem(at: $0) }
 
-        let mergedM4AFileName: String?
-        if exportM4A {
-            mergedM4AFileName = try await exportMergedM4A(from: mergedCAFURL, in: sessionDirectory)
-        } else {
-            mergedM4AFileName = nil
-        }
-
-        if fileManager.fileExists(atPath: mergedCAFURL.path) {
-            try? fileManager.removeItem(at: mergedCAFURL)
-        }
+        let mergedM4AFileName = try finalizeMergedM4A(pendingURL: pendingURL, in: sessionDirectory)
 
         metadata = try await metadataStore.load(in: sessionDirectory)
         metadata.status = .ready
@@ -190,7 +195,13 @@ actor SessionMergeService {
         let candidates: [String]
         switch sourcePreference {
         case .durableM4A:
-            candidates = [durableFileName(for: stats.kind)]
+            // Per-track fallback: a missing durable m4a (e.g. failed export) must not
+            // drop that track from the merge while its raw capture still exists.
+            if stats.diagnostics.contains(where: { $0.contains("durable mirror append failed") }) {
+                candidates = [stats.fileName, durableFileName(for: stats.kind)]
+            } else {
+                candidates = [durableFileName(for: stats.kind), stats.fileName]
+            }
         case .rawCAF:
             candidates = [stats.fileName]
         }
@@ -214,7 +225,16 @@ actor SessionMergeService {
     }
 
     private func prepareCanonicalPCMSourceIfNeeded(_ sourceURL: URL) throws -> (url: URL, temporaryURL: URL?) {
-        let inputFile = try AVAudioFile(forReading: sourceURL)
+        // The mixer opens inputs with a forced Float32 non-interleaved processing
+        // format, so only sample rate and channel count matter here. App-produced
+        // files (durable m4a, raw CAF in any bit depth) always pass through; the
+        // temp-file conversion below is a cold path for foreign files only —
+        // streaming that conversion inside the mixer isn't worth a second decode path.
+        let inputFile = try AVAudioFile(
+            forReading: sourceURL,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
         let inputFormat = inputFile.processingFormat
         guard let canonicalFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -225,10 +245,8 @@ actor SessionMergeService {
             throw DirectPCMMixService.MixError.invalidOutputFormat
         }
 
-        if inputFormat.commonFormat == canonicalFormat.commonFormat,
-           inputFormat.sampleRate == canonicalFormat.sampleRate,
-           inputFormat.channelCount == canonicalFormat.channelCount,
-           inputFormat.isInterleaved == canonicalFormat.isInterleaved {
+        if inputFormat.sampleRate == canonicalFormat.sampleRate,
+           inputFormat.channelCount == canonicalFormat.channelCount {
             return (sourceURL, nil)
         }
 
@@ -292,18 +310,11 @@ actor SessionMergeService {
         return (outputURL, outputURL)
     }
 
-    private func exportMergedM4A(from sourceURL: URL, in sessionDirectory: URL) async throws -> String {
+    private func finalizeMergedM4A(pendingURL: URL, in sessionDirectory: URL) throws -> String {
         let outputFileName = "merged-call.m4a"
         let outputURL = sessionDirectory.appendingPathComponent(outputFileName)
-        let pendingURL = sessionDirectory.appendingPathComponent("merged-call.pending-\(UUID().uuidString).m4a")
-
-        let asset = AVURLAsset(url: sourceURL)
-        guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
-            throw AudioCaptureError.mixdownFailed
-        }
 
         do {
-            try await exportSession.export(to: pendingURL, as: .m4a)
             guard isUsableAudioFile(pendingURL) else {
                 throw AudioCaptureError.mixdownFailed
             }
@@ -319,6 +330,18 @@ actor SessionMergeService {
         }
 
         return outputFileName
+    }
+
+    private func sweepStalePendingFiles(in sessionDirectory: URL) {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: sessionDirectory,
+            includingPropertiesForKeys: nil
+        ) else {
+            return
+        }
+        for url in contents where url.lastPathComponent.hasPrefix("merged-call.pending-") {
+            try? fileManager.removeItem(at: url)
+        }
     }
 
     private func isUsableAudioFile(_ url: URL) -> Bool {

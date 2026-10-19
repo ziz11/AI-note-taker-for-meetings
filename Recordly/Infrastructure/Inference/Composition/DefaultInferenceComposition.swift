@@ -15,7 +15,8 @@ enum DefaultInferenceComposition {
         asrModelProvider: any FluidAudioASRModelProviding,
         diarizationModelProvider: any FluidAudioDiarizationModelProviding
     ) -> InferenceComposition {
-        let stageSelection = StageRuntimeSelection.defaultLocal
+        var stageSelection = StageRuntimeSelection.defaultLocal
+        stageSelection.setBackend(.disabled, for: .summarization)
         let runtimeProfileSelector = DefaultInferenceRuntimeProfileSelector(
             modelManager: modelManager,
             asrModelProvider: asrModelProvider,

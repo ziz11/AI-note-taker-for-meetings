@@ -1,5 +1,7 @@
 # Recordly Rename Design
 
+> Reviewed 2026-10-10. Historical plan/requirements. Rename delivered. Current app/storage names are Recordly; the original plan is historical. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **Status:** Completed. The rename from CallRecorderPro to Recordly has been fully applied, including storage paths.
 
 **Date:** 2026-03-07

@@ -1,5 +1,7 @@
 # Distribution Packaging Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Partially delivered: locally signed universal standalone is installed. Developer ID/notarized distribution is not delivered; unsigned/distribution scripts remain placeholders. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add a repeatable script that archives, signs, and packages `Recordly.app` for outside-App-Store distribution.

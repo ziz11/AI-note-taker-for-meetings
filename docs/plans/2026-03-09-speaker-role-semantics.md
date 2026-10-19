@@ -1,5 +1,7 @@
 # Speaker Role Semantics Implementation Plan
 
+> Reviewed 2026-10-10. Historical plan/requirements. Local me/remote role semantics delivered; model-scoped session voice matching now supplements local fallbacks. Full meeting-wide voice accuracy remains unverified. Original instructions and checklist/test counts below are a dated snapshot, not new execution instructions or current acceptance. See [current project status](../project-status.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add explicit speaker-role semantics to transcript segments while keeping the current mic/system merge architecture and preserving compatibility with legacy transcript JSON.

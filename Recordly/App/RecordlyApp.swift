@@ -24,6 +24,9 @@ struct RecordlyApp: App {
     @StateObject private var recordingsStore: RecordingsStore
 
     init() {
+        #if DEBUG
+        AudioPipelineCrashHarness.runIfRequested()
+        #endif
         let modelManager = ModelManager()
         let fluidAudioModelProvider = FluidAudioASRModelProvider()
         let fluidAudioDiarizationModelProvider = FluidAudioDiarizationModelProvider()

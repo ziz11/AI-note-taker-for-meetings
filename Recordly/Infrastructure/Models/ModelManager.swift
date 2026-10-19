@@ -83,6 +83,11 @@ final class ModelManager: ObservableObject {
         set { preferences.selectedSummarizationModelID = newValue }
     }
 
+    var llamaExecutablePath: String? {
+        get { preferences.llamaExecutablePath }
+        set { preferences.llamaExecutablePath = newValue }
+    }
+
     var summarizationRuntimeSettings: SummarizationRuntimeSettings {
         get { preferences.summarizationRuntimeSettings }
         set { preferences.summarizationRuntimeSettings = newValue }
@@ -155,15 +160,14 @@ final class ModelManager: ObservableObject {
             return nil
         }
 
-        let options = listLocalOptions(kind: kind)
-        guard !options.isEmpty else {
-            setSelectedModelID(nil, for: kind)
-            return nil
-        }
-
-        if let selectedID = selectedModelID(for: kind),
-           let selected = options.first(where: { $0.id == selectedID }) {
+        guard let selectedID = selectedModelID(for: kind) else { return nil }
+        // Selection is durable configuration. Catalog display deduplication must not
+        // hide an explicitly selected artifact or clear a temporarily missing path.
+        if let selected = listLocalOptions(kind: kind).first(where: { $0.id == selectedID }) {
             return selected
+        }
+        if let url = resolveInstalledModelURL(modelID: selectedID) {
+            return buildLocalOption(url: url, kind: kind, source: .userLocal)
         }
 
         return nil
@@ -442,7 +446,9 @@ final class ModelManager: ObservableObject {
         case .diarization:
             return isSupportedModelFile(url, extensions: ["bin"])
         case .summarization:
-            return isSupportedModelFile(url, extensions: ["gguf", "bin"]) || MLXModelValidator.isValidModelDirectory(url)
+            return isSupportedModelFile(url, extensions: ["gguf"])
+                || (isSupportedModelFile(url, extensions: ["bin"]) && (try? GGUFModelValidator.validate(url)) != nil)
+                || MLXModelValidator.isValidModelDirectory(url)
         }
     }
 
@@ -456,7 +462,7 @@ final class ModelManager: ObservableObject {
     private func supportedModelExtensions(for kind: ModelKind) -> Set<String> {
         switch kind {
         case .summarization:
-            return ["bin", "gguf"]
+            return ["gguf"]
         case .diarization:
             return ["bin"]
         case .asr:

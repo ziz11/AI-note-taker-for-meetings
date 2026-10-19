@@ -1,8 +1,68 @@
 import XCTest
 @testable import Recordly
 
+#if arch(arm64) && canImport(FluidAudio)
+import FluidAudio
+#endif
+
 @MainActor
 final class FluidAudioDiarizationModelProviderTests: XCTestCase {
+    func testFreshInstallAdapterResolvesSDKDefaultArtifactBeforeDownloading() throws {
+#if arch(arm64) && canImport(FluidAudio)
+        let adapter = FluidAudioOfflineDiarizationManagerAdapter(modelsRoot: nil)
+        let expected = OfflineDiarizerModels.defaultModelsDirectory()
+            .appendingPathComponent(FluidAudioRuntimeIdentity.diarizationCacheFolder, isDirectory: true)
+        XCTAssertEqual(adapter.modelDirectoryURL?.standardizedFileURL, expected.standardizedFileURL,
+            "Fresh provisioning needs the eventual loaded artifact path without an app restart")
+#else
+        throw XCTSkip("FluidAudio default model discovery requires Apple Silicon.")
+#endif
+    }
+
+    func testUnrelatedModelDirectoryDoesNotClaimOfflineDiarizationReady() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("parakeet-ultra-coreml"), withIntermediateDirectories: true)
+        let provider = FluidAudioDiarizationModelProvider(modelsRoot: { root })
+        XCTAssertEqual(provider.state, .needsDownload)
+        XCTAssertThrowsError(try provider.resolveForRuntime())
+    }
+
+    func testOfflineReadinessRequiresPLDAParametersAndAllFourBundles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let offline = root.appendingPathComponent("speaker-diarization")
+        for name in ["Segmentation", "FBank", "Embedding", "PldaRho"] {
+            try FileManager.default.createDirectory(at: offline.appendingPathComponent("\(name).mlmodelc"), withIntermediateDirectories: true)
+            try Data("compiled-layout".utf8).write(to: offline.appendingPathComponent("\(name).mlmodelc/coremldata.bin"))
+        }
+        let provider = FluidAudioDiarizationModelProvider(modelsRoot: { root })
+        XCTAssertEqual(provider.state, .needsDownload)
+        try Data("{}".utf8).write(to: offline.appendingPathComponent("plda-parameters.json"))
+        provider.refreshState()
+        XCTAssertEqual(provider.state, .needsDownload, "Invalid PLDA data must not report ready")
+        let psi = [Float](repeating: 1, count: 128).withUnsafeBytes { Data($0).base64EncodedString() }
+        let json = ["tensors": ["psi": ["data_base64": psi]]]
+        try JSONSerialization.data(withJSONObject: json).write(to: offline.appendingPathComponent("plda-parameters.json"))
+        provider.refreshState()
+        XCTAssertEqual(provider.state, .ready)
+        let partialWeights = offline.appendingPathComponent("Embedding.mlmodelc/weights")
+        try FileManager.default.createDirectory(at: partialWeights, withIntermediateDirectories: true)
+        let partial = partialWeights.appendingPathComponent("weight.bin.partial")
+        try Data("unfinished".utf8).write(to: partial)
+        provider.refreshState()
+        XCTAssertEqual(provider.state, .needsDownload, "Staged weights must not report ready")
+        try FileManager.default.removeItem(at: partial)
+        provider.refreshState()
+        XCTAssertEqual(provider.state, .ready)
+        try FileManager.default.removeItem(at: offline.appendingPathComponent("PldaRho.mlmodelc/coremldata.bin"))
+        provider.refreshState()
+        XCTAssertEqual(provider.state, .needsDownload, "Interrupted compiled bundle must not report ready")
+        try FileManager.default.removeItem(at: offline.appendingPathComponent("Embedding.mlmodelc"))
+        provider.refreshState()
+        XCTAssertEqual(provider.state, .needsDownload)
+    }
+
     func testResolveBeforeDownloadThrowsNoModelProvisioned() {
         let provider = FluidAudioDiarizationModelProvider(managerFactory: {
             StubOfflineDiarizationManager()
