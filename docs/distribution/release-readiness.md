@@ -48,7 +48,7 @@ The current AppIcon catalogue has all ten declared PNG sizes. Visual Barkenson a
 | Own and third-party terms | Owner, coordinator inventories | Own-code/binary licence decision; inventory of actual linked/embedded components and model terms; final bundle notices verified after packaging. |
 | Site and release links | Website agent, coordinator accepts | Deployed Pages URL and base path, valid download/version/checksum links, repository/support/source links and mobile/desktop checks after final repository name. No download button to a nonexistent asset. |
 
-Lack of current build/acceptance evidence blocks a release-ready claim. Meeting-wide speaker accuracy, Intel speech-runtime support, long-capture energy/memory behaviour and complete GUI responsiveness remain unverified product limits; release copy must state the support actually tested. These are not invitations to change inference during this work.
+Lack of current build/acceptance evidence blocks a release-ready claim. Intel speech inference is unavailable in the active backends. Meeting-wide speaker accuracy, long-capture energy/memory behaviour and complete GUI responsiveness remain unverified product limits; release copy must state the support actually tested. These are not invitations to change inference during this work.
 
 ## Repository and Pages sequence
 

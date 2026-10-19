@@ -2,6 +2,16 @@
 
 Reviewed **2026-10-16**. [Project status](project-status.md) is the current delivery/acceptance summary. The [Markdown audit](documentation-audit-2026-10-10.md) covers every repository Markdown file, including preserved license/archive documents.
 
+## Distribution preparation — 20 October 2026
+
+Barkenson is the confirmed public name. Internal Recordly namespaces remain for compatibility.
+
+- [Coordination plan](plans/2026-10-20-barkenson-distribution.md) — final name, agent ownership, integration order and release gates.
+- [Integration result](distribution/integration-result.md) — fresh verification, included work and remaining blockers.
+- [Capabilities](distribution/capabilities.md) — source-backed features and limits.
+- [Identity preservation](distribution/identity-preservation.md) — data, settings, models, signing and permissions.
+- [Release readiness](distribution/release-readiness.md) — standalone distribution and Pages acceptance.
+
 ## Current reference
 
 - [Compute/performance diagnostics](performance-diagnostics-2026-10-16.md) — small chip popover, bounded local metrics, native Ultra timing and ANE/energy evidence limits.
@@ -20,8 +30,8 @@ Reviewed **2026-10-16**. [Project status](project-status.md) is the current deli
 - [Requested recording verification](recording-7C943EA0-verification.md) — in-place repeats, saved-name probe, audio integrity and partial continuity.
 - [Minimal Models panel](compact-model-panel-2026-10-16.md) — current 400×230-point panel, small controls and intrinsic-size state renders.
 - [Previous catalog redesign](model-settings-redesign-2026-10-16.md) — superseded large-screen layout and download busy-state fix.
-- [Latest standalone](../releases/standalone-2026-10-16-compact-model-panel/README.md) — build 3, local release, source and fixed archive checksum.
-- [Previous Ultra standalone](../releases/standalone-2026-10-16-ultra-models/README.md) — fixed rollback artifact.
+- [Historical diagnostics standalone](../releases/standalone-2026-10-16-performance-diagnostics/README.md) — build 4 record, not a current binary download or fresh verification.
+- [Previous Ultra standalone](../releases/standalone-2026-10-16-ultra-models/README.md) — historical build record; binary rollback availability is unverified.
 - [Third-party notices](../THIRD_PARTY_LICENSES.md) — licensed runtime dependencies.
 
 ## Delivered feature reports with historical measurements
@@ -42,6 +52,6 @@ Reviewed **2026-10-16**. [Project status](project-status.md) is the current deli
 - [Diarization research](research/diarization-options.md) retains its March research date, with the current Recordly decision noted separately; alternative SDKs were not re-benchmarked.
 - [Migration rollout](migrations/agent-rollout-plan.md) is historical; the Whisper migration is delivered.
 - [Recovered quality experiment](archive/2026-04-03-asr-diarization-quality/README.md) explains the untouched original plan/patch and their relationship to later work.
-- [Previous standalone](../releases/standalone-2026-10-10/README.md) remains a fixed rollback artifact.
+- [Previous standalone](../releases/standalone-2026-10-10/README.md) is a historical build record; binary rollback availability requires a separate local check.
 
 Private audio, transcripts and voice embeddings remain outside Git. Local `/private/tmp` evidence paths may expire; committed aggregate reports are the durable documentation.
