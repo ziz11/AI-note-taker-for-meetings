@@ -32,7 +32,24 @@ The coordinator separately repeated all three existing packaging/signing guard s
 
 Application inference, transcription, persistence, model provisioning and workflow source has no changes relative to the pre-branding baseline. Summary generation remains disabled; only its inactive UI was removed. The bundle identifier remains `com.local.Recordly`; the executable/module/scheme remain Recordly; SDK and Recordly data roots remain intact.
 
-Final bundle/icon verification is recorded here after packaging the committed integration source.
+## Verified integrated local package
+
+Source/package commit: **`15be35a`**, including the selected icon. The working tree was clean when the existing local standalone script built the Release package. The script completed with exit 0 and `BUILD SUCCEEDED`. It used `RECORDLY_BUILD_DIR` at repository-root `build/barkenson-readiness-release` and the existing pinned `build/standalone/SourcePackages` checkout. Local log: `build/barkenson-final-icon-package.log`.
+
+| Check | Fresh result |
+| --- | --- |
+| Archive | `build/barkenson-readiness-release/Barkenson-15be35a-local.zip`, **24,078,882 bytes** |
+| ZIP SHA-256 | `1ee36de64e35f7750bfd621ae338347b75d6cb2582f60e03e04e76eaf71c5124` |
+| Extracted executable SHA-256 | `ed31d8b96280e3dbef5eb192036983a0350b8f15f08abd70c78446b3aa45e128` |
+| Metadata | Name/display name Barkenson, executable Recordly, identifier `com.local.Recordly`, **0.1.0 (5)**, minimum macOS 15.0, universal arm64/x86_64 |
+| Extracted signature | `codesign --verify --deep --strict --verbose=2` passes; authority `Recordly Local Development`, no team, flags `0x0` |
+| Designated requirement | `identifier "com.local.Recordly" and certificate root = H"b5b4e764405e28dd9d5a814d5241c77b5c591e8e"` |
+| Icon | `CFBundleIconFile`/`CFBundleIconName` resolve AppIcon. Compiled ICNS decodes; its 256 px representation was visually inspected and contains the selected cream tile/orange quotation marks. `assetutil --info Assets.car` confirms all ten named AppIcon renditions, from 16 to 1024 px |
+| Archive contents | 128 entries, Barkenson.app root, notices present, CRC check passes; targeted scan found no recordings, audio, transcript/summary artefacts or model weights |
+
+The extracted app is at repository-root `build/barkenson-final-icon-extracted/Barkenson.app`; this path is ignored and was not installed or launched. The existing installed Recordly app was not replaced. Live Finder/Dock inspection was attempted through the supported computer-use tool, which returned **Computer Use permissions are not granted**. No OS permission was changed, and no live Finder/Dock success is claimed. Actual upgrade/privacy consent, live recording and another-Mac launch remain pending.
+
+This package is a local integration candidate, not a notarised public release. Subsequent report-only commits do not alter its application source or icon.
 
 ## Remaining acceptance and publication
 
