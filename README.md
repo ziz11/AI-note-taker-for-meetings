@@ -2,11 +2,17 @@
 
 **Meeting recorder for Mac.** Free, with local transcription and speaker diarisation.
 
-Barkenson is the confirmed public name. The application uses the Barkenson display name. The source project, executable and compatibility namespaces retain Recordly to preserve existing data and settings. See the [distribution plan](docs/plans/2026-10-20-barkenson-distribution.md) and [current integration evidence](docs/distribution/integration-result.md). A branded download and GitHub Pages site are not yet verified.
+Barkenson is the confirmed public name. The application uses the Barkenson display name. The source project, executable and compatibility namespaces retain Recordly to preserve existing data and settings. See the [distribution plan](docs/plans/2026-10-20-barkenson-distribution.md) and [current integration evidence](docs/distribution/2026-10-20-app-icon-integration.md). The standalone preview is published; the website remains deferred.
 
 The application records microphone and system audio, converts speech to text, and labels speaker turns on your Mac.
 
 Record a call, listen back to the audio and export a transcript with speaker labels. Recordings and transcripts are stored locally, and transcription and diarisation run on your device.
+
+## Download the preview
+
+[Download Barkenson 0.1.0 (5) for Mac](https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases/download/v0.1.0-preview.1/Barkenson-0.1.0-build5-macOS.zip) · [Release notes](https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases/tag/v0.1.0-preview.1)
+
+Requires macOS 15 or later and Apple Silicon for transcription and speaker separation. This author-and-friends preview uses a local development certificate and is not notarised. Read the installation notes before opening it. Xcode is not required to run the standalone app.
 
 ## What you can do
 
@@ -46,7 +52,6 @@ Clone the repository:
 ```bash
 git clone https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac.git
 cd Barkenson-Meeting-recorder-for-Mac
-git switch develop
 ```
 
 Set up the persistent local signing identity:
