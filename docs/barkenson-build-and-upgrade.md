@@ -4,7 +4,7 @@ Barkenson is the public name of the existing Recordly application. It records mi
 
 ## Build on a Mac
 
-Use Xcode with the macOS 15 SDK or later. Native inference has been verified on Apple Silicon; an x86_64 build alone does not establish Intel model-runtime support. Keep the pinned FluidAudio 0.17.7 package; no model or algorithm change is part of this rename.
+Use Xcode with the macOS 15 SDK or later. Apple Silicon is required for active speech recognition and diarisation; a universal executable does not enable Intel inference. Keep the pinned FluidAudio 0.17.7 package; no model or algorithm change is part of this rename.
 
 ```sh
 ./scripts/setup-local-signing.sh  # Only when the existing identity is absent.
@@ -61,9 +61,9 @@ See the [fresh verification report](barkenson-app-verification.md) for exact sou
 
 ## Links and deferred work
 
-- [Source and issues](https://github.com/ziz11/AI-note-taker-for-meetings)
-- [Release assets](https://github.com/ziz11/AI-note-taker-for-meetings/releases) — no specific Barkenson download is promised until an asset exists.
-- [Report a problem](https://github.com/ziz11/AI-note-taker-for-meetings/issues)
+- [Source and issues](https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac)
+- [Release assets](https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases) — no specific Barkenson download is promised until an asset exists.
+- [Report a problem](https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/issues)
 - [Architecture and historical acceptance](project-status.md)
 
-Final icon artwork is explicitly deferred pending the designer's selection; the existing icon remains. Site publication, repository renaming, notarisation, installation on another Mac, recording/sleep endurance and real microphone/system permission checks belong to release/integration acceptance. The README refresh in PR #22 is separate; its integrator should adopt this public name and build guide while retaining compatibility paths.
+The approved The Imprint quotation-mark icon is integrated through the existing AppIcon catalogue. Editable source and exports are in [the icon handoff](brand/icon-handoff.md). Live Dock/Finder and permission-prompt appearance are acceptance checks on the final app, separate from PNG/ICNS validation. Site publication, repository renaming, notarisation, installation on another Mac, recording/sleep endurance and real microphone/system permission checks belong to release/integration acceptance. The README refresh in PR #22 is separate; its integrator should adopt this public name and build guide while retaining compatibility paths.

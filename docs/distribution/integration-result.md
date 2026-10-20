@@ -1,6 +1,6 @@
 # Barkenson preparation: integrated result
 
-Date: 20 October 2026. Coordinator branch: `codex/barkenson-coordination`.
+Date: 20 October 2026. **Historical preparation baseline:** superseded for current integration status by [the application and icon integration record](2026-10-20-app-icon-integration.md). Coordinator branch: `codex/barkenson-coordination`.
 
 **Preparation status:** the final name, ownership plan, capability inventory, identity-preservation strategy and release gates are integrated. **Distribution status:** not release-ready. This round does not rename the application bundle or repository, deploy Pages, publish an asset, install an app or certify upgrade permissions.
 

@@ -8,6 +8,8 @@
 
 **Tech stack:** Swift/SwiftUI, Xcode, FluidAudio 0.17.7, local AAC session storage, GitHub Releases and GitHub Pages.
 
+> Current execution status: see [application/icon integration](../distribution/2026-10-20-app-icon-integration.md). The repository has since been renamed to `ziz11/Barkenson-Meeting-recorder-for-Mac`. Initial baseline and PR inventories below are dated snapshots.
+
 ## Final naming decision
 
 The owner confirmed **Barkenson** as the final public application name on 20 October 2026 in this chat. The exact short description is **Meeting recorder for Mac.** The app is free. Public text uses British English: diarisation, summarisation, behaviour, artefacts, licences and notarisation.

@@ -2,7 +2,7 @@
 
 **Meeting recorder for Mac.** Free, with local transcription and speaker diarisation.
 
-Barkenson is the confirmed public name. The source project, current app bundle and compatibility namespaces still use Recordly while distribution preparation is in progress. See the [distribution plan](docs/plans/2026-10-20-barkenson-distribution.md) and [current integration evidence](docs/distribution/integration-result.md). A branded download and GitHub Pages site are not yet verified.
+Barkenson is the confirmed public name. The application uses the Barkenson display name. The source project, executable and compatibility namespaces retain Recordly to preserve existing data and settings. See the [distribution plan](docs/plans/2026-10-20-barkenson-distribution.md) and [current integration evidence](docs/distribution/integration-result.md). A branded download and GitHub Pages site are not yet verified.
 
 The application records microphone and system audio, converts speech to text, and labels speaker turns on your Mac.
 
@@ -44,8 +44,9 @@ A paid Apple Developer account is not required for local development. Distributi
 Clone the repository:
 
 ```bash
-git clone https://github.com/ziz11/AI-note-taker-for-meetings.git
-cd AI-note-taker-for-meetings
+git clone https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac.git
+cd Barkenson-Meeting-recorder-for-Mac
+git switch develop
 ```
 
 Set up the persistent local signing identity:
@@ -54,7 +55,7 @@ Set up the persistent local signing identity:
 ./scripts/setup-local-signing.sh
 ```
 
-The script creates the `Recordly Local Development` certificate in your login keychain and trusts it locally for code signing. It can be run again if needed. A compatible persistent signing identity is intended to retain macOS permissions across rebuilds; an upgrade still needs a permission check, particularly if the signing identity changes.
+The script reuses the existing `Recordly Local Development` certificate, or creates and locally trusts one if absent. Keep the existing certificate when upgrading; a new certificate with the same name is a different identity. A compatible persistent signing identity is intended to retain macOS permissions across rebuilds; an upgrade still needs a permission check, particularly if the signing identity changes.
 
 Open `Recordly.xcodeproj` in Xcode and run the app with ⌘R.
 
@@ -62,14 +63,15 @@ Alternatively, build a standalone Release app and ZIP:
 
 ```bash
 ./scripts/build-standalone-local.sh
-open build/standalone-local/Build/Products/Release/Recordly.app
+unzip build/standalone-local/Barkenson-YOUR_COMMIT-local.zip -d build/standalone-preview
+open build/standalone-preview/Barkenson.app
 ```
 
-This build runs independently of Xcode on the build Mac. Its local certificate is intended for development, not public distribution. The [historical standalone build record](releases/standalone-2026-10-16-performance-diagnostics/README.md) documents a verified local build. Binary archives are not included in Git. See the [artifact policy](releases/README.md) for details.
+Replace `YOUR_COMMIT` with the revision printed by the script. This build runs independently of Xcode on the build Mac. Its local certificate is intended for development, not public distribution. The [historical standalone build record](releases/standalone-2026-10-16-performance-diagnostics/README.md) documents a verified local build. Binary archives are not included in Git. See the [artifact policy](releases/README.md) for details.
 
 ### 2. Grant recording permissions
 
-Allow Microphone access when prompted. Use Recordly's **Grant Access** action to open the Screen Recording permission flow, then restart the app if macOS requests it.
+Allow Microphone access when prompted. Use Barkenson's **Open Settings** action to open the Screen Recording permission flow, then restart the app if macOS requests it.
 
 <details>
 <summary>Moving from an older ad hoc signed build</summary>
@@ -81,7 +83,7 @@ tccutil reset Microphone com.local.Recordly
 tccutil reset ScreenCapture com.local.Recordly
 ```
 
-Run Recordly again and grant both permissions. Later builds must preserve a compatible signing identity; verify that both grants remain valid after an upgrade.
+Run Barkenson again and grant both permissions. Later builds must preserve a compatible signing identity; verify that both grants remain valid after an upgrade.
 
 To check that the certificate is available:
 
@@ -125,7 +127,7 @@ The toolbar's chip icon opens local processing diagnostics, including job speed,
 
 ## For contributors
 
-Recordly separates recording workflows, audio storage, model provisioning and inference backends. The active speech recognition and diarisation backends use FluidAudio. Summary backend code remains in the repository for compatibility and development, but is disabled in the app.
+Barkenson separates recording workflows, audio storage, model provisioning and inference backends. The active speech recognition and diarisation backends use FluidAudio. Summary backend code remains in the repository for compatibility and development, but is disabled in the app.
 
 Start with these references:
 
@@ -144,6 +146,6 @@ Start with these references:
 
 ## Acknowledgements
 
-Recordly uses [FluidAudio](https://github.com/FluidInference/FluidAudio), developed by FluidInference, for local speech recognition and diarisation.
+Barkenson uses [FluidAudio](https://github.com/FluidInference/FluidAudio), developed by FluidInference, for local speech recognition and diarisation.
 
 FluidAudio is licensed under the Apache License 2.0. See [third party licences](THIRD_PARTY_LICENSES.md) for attribution details.

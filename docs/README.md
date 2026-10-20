@@ -7,7 +7,8 @@ Reviewed **2026-10-16**. [Project status](project-status.md) is the current deli
 Barkenson is the confirmed public name. Internal Recordly namespaces remain for compatibility.
 
 - [Coordination plan](plans/2026-10-20-barkenson-distribution.md) — final name, agent ownership, integration order and release gates.
-- [Integration result](distribution/integration-result.md) — fresh verification, included work and remaining blockers.
+- [Current app/icon integration](distribution/2026-10-20-app-icon-integration.md) — merged PRs, approved icon, fresh verification and remaining release acceptance.
+- [Initial preparation result](distribution/integration-result.md) — earlier baseline evidence.
 - [Capabilities](distribution/capabilities.md) — source-backed features and limits.
 - [Identity preservation](distribution/identity-preservation.md) — data, settings, models, signing and permissions.
 - [Release readiness](distribution/release-readiness.md) — standalone distribution and Pages acceptance.
