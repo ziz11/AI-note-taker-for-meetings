@@ -1,6 +1,10 @@
-# Recordly
+# Barkenson
 
-Recordly is a local call recorder for macOS with transcription and speaker diarisation. It records microphone and system audio, converts speech to text, and labels speaker turns on your Mac.
+**Meeting recorder for Mac.** Free, with local transcription and speaker diarisation.
+
+Barkenson is the confirmed public name. The application uses the Barkenson display name. The source project, executable and compatibility namespaces retain Recordly to preserve existing data and settings. See the [distribution plan](docs/plans/2026-10-20-barkenson-distribution.md) and [current integration evidence](docs/distribution/integration-result.md). A branded download and GitHub Pages site are not yet verified.
+
+The application records microphone and system audio, converts speech to text, and labels speaker turns on your Mac.
 
 Record a call, listen back to the audio and export a transcript with speaker labels. Recordings and transcripts are stored locally, and transcription and diarisation run on your device.
 
@@ -10,28 +14,28 @@ Record a call, listen back to the audio and export a transcript with speaker lab
 * **Transcribe recordings locally.** Use FluidAudio speech recognition with Parakeet Ultra or Parakeet TDT 0.6B v3.
 * **Import existing audio.** Transcribe an audio file without making a new recording.
 * **Follow the conversation by speaker.** Add speaker labels and names, with partial matching across a recording.
-* **Listen back and export.** Play recordings in the app, export combined audio, and work with transcripts in TXT, SRT and JSON formats.
+* **Listen back and export.** Play recordings in the app and export combined audio or a TXT transcript. Processing also saves SRT and JSON artefacts in the session folder.
 * **Resume interrupted processing.** Reuse completed transcription windows when the audio, model and settings still match.
 
 ## Project status
 
-Recordly is under active development. Recording, audio import, playback and local transcription are implemented.
+Barkenson is under active development. Recording, audio import, playback and local transcription are implemented.
 
 **Speaker identification is still being improved.** Short turns, overlapping speech and ambiguous voices can produce separate or unresolved labels. A speaker is not guaranteed to have one consistent identity throughout a meeting.
 
-**Automatic summaries were removed from the active workflow because the results were not good enough.** Recordly currently focuses on recording, transcription and diarisation. Any remaining summary controls are inactive placeholders.
+**Automatic summary generation is disabled.** Barkenson currently focuses on recording, transcription and diarisation. Any remaining summary controls are inactive placeholders.
 
-The current standalone build uses a local signing certificate. Notarised distribution is not yet available. See the [project status](docs/project-status.md) for release details, verification evidence and remaining work.
+The existing standalone packaging route uses a local signing certificate. Notarised distribution is not yet available; older build reports do not certify a new release. See the [project status](docs/project-status.md) for release details, verification evidence and remaining work.
 
 ## Requirements
 
 * macOS 15 or later.
-* Apple Silicon is the verified platform for speech processing, tested on an M3 Pro. The universal executable does not establish Intel support for speech inference.
+* Apple Silicon is required for the active speech recognition and diarisation backends. Historical native checks used an M3 Pro; the universal executable does not provide Intel speech inference.
 * Microphone and Screen Recording permissions for live capture.
 * An internet connection to download speech models during setup. Inference runs locally once the required models are available.
 * Xcode and its command line build tools to build from source.
 
-A paid Apple Developer account is not required for local development. Distribution outside your own Mac requires separate signing and notarisation work.
+A paid Apple Developer account is not required for local development. Distribution to other Macs needs a tested signing and Gatekeeper policy. Developer ID signing and notarisation are the normal route for a low-friction public download; any limited non-notarised release for friends must state its trust limitations.
 
 ## Getting started
 
@@ -40,8 +44,9 @@ A paid Apple Developer account is not required for local development. Distributi
 Clone the repository:
 
 ```bash
-git clone https://github.com/ziz11/AI-note-taker-for-meetings.git
-cd AI-note-taker-for-meetings
+git clone https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac.git
+cd Barkenson-Meeting-recorder-for-Mac
+git switch develop
 ```
 
 Set up the persistent local signing identity:
@@ -50,7 +55,7 @@ Set up the persistent local signing identity:
 ./scripts/setup-local-signing.sh
 ```
 
-The script creates the `Recordly Local Development` certificate in your login keychain and trusts it locally for code signing. It can be run again if needed. A persistent identity lets macOS retain Recordly's permissions across rebuilds.
+The script reuses the existing `Recordly Local Development` certificate, or creates and locally trusts one if absent. Keep the existing certificate when upgrading; a new certificate with the same name is a different identity. A compatible persistent signing identity is intended to retain macOS permissions across rebuilds; an upgrade still needs a permission check, particularly if the signing identity changes.
 
 Open `Recordly.xcodeproj` in Xcode and run the app with ⌘R.
 
@@ -58,14 +63,15 @@ Alternatively, build a standalone Release app and ZIP:
 
 ```bash
 ./scripts/build-standalone-local.sh
-open build/standalone-local/Build/Products/Release/Recordly.app
+unzip build/standalone-local/Barkenson-YOUR_COMMIT-local.zip -d build/standalone-preview
+open build/standalone-preview/Barkenson.app
 ```
 
-This build runs independently of Xcode on the build Mac. Its local certificate is intended for development, not public distribution. The [historical standalone build record](releases/standalone-2026-10-16-performance-diagnostics/README.md) documents a verified local build. Binary archives are not included in Git. See the [artifact policy](releases/README.md) for details.
+Replace `YOUR_COMMIT` with the revision printed by the script. This build runs independently of Xcode on the build Mac. Its local certificate is intended for development, not public distribution. The [historical standalone build record](releases/standalone-2026-10-16-performance-diagnostics/README.md) documents a verified local build. Binary archives are not included in Git. See the [artifact policy](releases/README.md) for details.
 
 ### 2. Grant recording permissions
 
-Allow Microphone access when prompted. Use Recordly's **Grant Access** action to open the Screen Recording permission flow, then restart the app if macOS requests it.
+Allow Microphone access when prompted. Use Barkenson's **Open Settings** action to open the Screen Recording permission flow, then restart the app if macOS requests it.
 
 <details>
 <summary>Moving from an older ad hoc signed build</summary>
@@ -77,7 +83,7 @@ tccutil reset Microphone com.local.Recordly
 tccutil reset ScreenCapture com.local.Recordly
 ```
 
-Run Recordly again and grant both permissions. Later builds using the persistent certificate should retain them.
+Run Barkenson again and grant both permissions. Later builds must preserve a compatible signing identity; verify that both grants remain valid after an upgrade.
 
 To check that the certificate is available:
 
@@ -121,7 +127,7 @@ The toolbar's chip icon opens local processing diagnostics, including job speed,
 
 ## For contributors
 
-Recordly separates recording workflows, audio storage, model provisioning and inference backends. The active speech recognition and diarisation backends use FluidAudio. Summary backend code remains in the repository for compatibility and development, but is disabled in the app.
+Barkenson separates recording workflows, audio storage, model provisioning and inference backends. The active speech recognition and diarisation backends use FluidAudio. Summary backend code remains in the repository for compatibility and development, but is disabled in the app.
 
 Start with these references:
 
@@ -140,6 +146,6 @@ Start with these references:
 
 ## Acknowledgements
 
-Recordly uses [FluidAudio](https://github.com/FluidInference/FluidAudio), developed by FluidInference, for local speech recognition and diarisation.
+Barkenson uses [FluidAudio](https://github.com/FluidInference/FluidAudio), developed by FluidInference, for local speech recognition and diarisation.
 
 FluidAudio is licensed under the Apache License 2.0. See [third party licences](THIRD_PARTY_LICENSES.md) for attribution details.
