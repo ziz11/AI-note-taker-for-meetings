@@ -51,6 +51,12 @@ The extracted app is at repository-root `build/barkenson-final-icon-extracted/Ba
 
 This package is a local integration candidate, not a notarised public release. Subsequent report-only commits do not alter its application source or icon.
 
+## Owner-reported local acceptance — 20 October 2026
+
+The owner confirmed in the coordinator chat that the app builds and works when run from Xcode, then separately confirmed that the standalone bundle also works normally on their Mac. **Local manual smoke acceptance: passed, as reported by the owner.** No additional local launch check is requested solely because the earlier coordinator automation could not access the GUI.
+
+This is human-reported acceptance, separate from the automated evidence above. The report does not enumerate individual capture/export, upgrade/rollback, permission-denial, sleep/endurance or Finder/Dock checks, so those specific checks are not independently marked passed. It does not establish first launch or Gatekeeper behaviour on another Mac. The website is deferred by the owner: preserve its draft files, do not redesign, merge or publish PR #23 as part of application distribution.
+
 ## Remaining acceptance and publication
 
 Source readiness and a valid local package do not establish a public release. Before publishing, record actual upgrade/rollback with preserved recordings/settings/models; real microphone/system permission behaviour; capture, playback/import/export, interrupted work and sleep/long-recording checks; downloaded Gatekeeper behaviour and another supported Mac. The [identity matrix](identity-preservation.md) remains the acceptance procedure. A matching designated requirement is evidence for compatibility, not a completed TCC upgrade test.
