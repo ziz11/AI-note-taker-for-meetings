@@ -2,7 +2,7 @@
 
 **Meeting recorder for Mac.** Free, with local transcription and speaker diarisation.
 
-Barkenson is the confirmed public name. The application uses the Barkenson display name. The source project, executable and compatibility namespaces retain Recordly to preserve existing data and settings. See the [distribution plan](docs/plans/2026-10-20-barkenson-distribution.md) and [current integration evidence](docs/distribution/2026-10-20-app-icon-integration.md). The standalone preview is published; the website remains deferred.
+Barkenson is the confirmed public name. The application uses the Barkenson display name. The source project, executable and compatibility namespaces retain Recordly to preserve existing data and settings. See the [distribution plan](docs/plans/2026-10-20-barkenson-distribution.md) and [current integration evidence](docs/distribution/2026-10-20-app-icon-integration.md). The standalone preview and [GitHub Pages website](https://ziz11.github.io/Barkenson-Meeting-recorder-for-Mac/) are published.
 
 The application records microphone and system audio, converts speech to text, and labels speaker turns on your Mac.
 

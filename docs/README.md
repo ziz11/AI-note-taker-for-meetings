@@ -4,6 +4,8 @@ Reviewed **2026-10-16**. [Project status](project-status.md) is the current deli
 
 ## Distribution preparation — 20 October 2026
 
+[The GitHub Pages website is live](https://ziz11.github.io/Barkenson-Meeting-recorder-for-Mac/). See the [website publication record](distribution/2026-10-20-website-publication.md).
+
 Barkenson is the confirmed public name. Internal Recordly namespaces remain for compatibility.
 
 - [Coordination plan](plans/2026-10-20-barkenson-distribution.md) — final name, agent ownership, integration order and release gates.
