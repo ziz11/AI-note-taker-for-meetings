@@ -38,6 +38,8 @@ final class RecordingsStore: ObservableObject {
     @Published private(set) var playbackState = PlaybackState()
     @Published private(set) var modelOnboardingCoordinator: ModelOnboardingCoordinator
     @Published var isModelsSheetPresented = false
+    /// Presentation readiness only; recovery policy and work remain unchanged.
+    @Published private(set) var isLaunchRecoveryComplete = false
 
     let performanceMonitor: PerformanceMonitor
 
@@ -105,6 +107,7 @@ final class RecordingsStore: ObservableObject {
         }
 
         if previewMode {
+            isLaunchRecoveryComplete = true
             recordings = Self.previewRecordings
             selectedRecordingID = recordings.first?.id
             viewState.storageLocationPath = "/Users/you/Library/Application Support/Recordly/recordings"
@@ -119,10 +122,13 @@ final class RecordingsStore: ObservableObject {
             viewState.storageLocationPath = try workflow.recordingsDirectoryPath()
             loadRecordings()
             Task { [weak self] in
-                await self?.recoverPendingPostProcessing()
+                guard let self else { return }
+                await self.recoverPendingPostProcessing()
+                self.isLaunchRecoveryComplete = true
             }
         } catch {
             present(error)
+            isLaunchRecoveryComplete = true
         }
     }
 
@@ -1473,14 +1479,21 @@ final class RecordingsStore: ObservableObject {
 
     private func readableMessage(for error: Error) -> String {
         if let captureError = error as? AudioCaptureError {
-            return captureError.localizedDescription
+            switch captureError {
+            case .microphonePermissionDenied:
+                return "Allow Barkenson in System Settings → Privacy & Security → Microphone, then start a new recording."
+            case .systemAudioPermissionDenied:
+                return "Allow Barkenson in System Settings → Privacy & Security → Screen & System Audio Recording, then start a new recording."
+            default:
+                return captureError.localizedDescription
+            }
         }
 
         let nsError = error as NSError
         let rawMessage = nsError.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if rawMessage == "The operation couldn’t be completed. (Foundation._GenericObjCError error 0.)" {
-            return "The audio file could not be finalized correctly. Try stopping the recording once more."
+            return "The audio file could not be finalised correctly. Try stopping the recording once more."
         }
 
         return rawMessage

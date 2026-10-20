@@ -2,6 +2,13 @@ import XCTest
 @testable import Recordly
 
 final class AppPathsCompatibilityTests: XCTestCase {
+    func testPublicBrandKeepsExistingApplicationIdentity() {
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String, "Barkenson")
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "Barkenson")
+        XCTAssertEqual(Bundle.main.bundleIdentifier, "com.local.Recordly")
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String, "Recordly")
+    }
+
     func testLegacyAppSupportFolderNameRemainsStable() {
         XCTAssertEqual(AppPaths.appSupportFolderName, "Recordly")
     }

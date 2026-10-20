@@ -148,6 +148,17 @@ final class ModelSettingsViewModelTests: XCTestCase {
         if variant == nil {
             try render(vm, to: outputURL)
             try render(vm, scheme: .light, to: variantURL(outputURL, "light"))
+            let store = RecordingsStore(previewMode: true)
+            for scheme in [ColorScheme.light, .dark] {
+                let suffix = scheme == .light ? "light" : "dark"
+                try renderView(ModelOnboardingView { _ in }, scheme: scheme,
+                               to: variantURL(outputURL, "welcome-" + suffix))
+                if let recording = store.recordings.first {
+                    try renderView(RecordingDetailView(recording: recording)
+                        .environmentObject(store).frame(width: 800, height: 900),
+                        scheme: scheme, to: variantURL(outputURL, "recording-" + suffix))
+                }
+            }
 
         }
         let states: [(String, FluidAudioModelProvisioningState, FluidAudioModelProvisioningState)] = [
@@ -181,8 +192,12 @@ final class ModelSettingsViewModelTests: XCTestCase {
 
     private func render(_ viewModel: ModelSettingsViewModel,
                         scheme: ColorScheme = .dark, to output: URL) throws {
-        let host = NSHostingView(rootView: ModelSettingsView(viewModel: viewModel)
-            .environment(\.colorScheme, scheme))
+        try renderView(ModelSettingsView(viewModel: viewModel), scheme: scheme, to: output)
+    }
+
+    private func renderView<Content: View>(_ content: Content,
+                                           scheme: ColorScheme, to output: URL) throws {
+        let host = NSHostingView(rootView: content.environment(\.colorScheme, scheme))
         let size = host.fittingSize
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                               styleMask: [.borderless], backing: .buffered, defer: false)

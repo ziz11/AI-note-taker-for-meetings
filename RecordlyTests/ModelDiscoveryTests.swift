@@ -212,8 +212,11 @@ final class ModelDiscoveryTests: XCTestCase {
         try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
         try Data("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>test.registry</string></dict></plist>".utf8)
             .write(to: bundleDirectory.appendingPathComponent("Contents/Info.plist"))
-        let original = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Recordly/Resources/model-registry.json")
+        // Use the shipped fixture so a hosted test does not require Documents-folder access.
+        let original = try XCTUnwrap(
+            Bundle.main.url(forResource: "model-registry", withExtension: "json", subdirectory: "Resources")
+                ?? Bundle.main.url(forResource: "model-registry", withExtension: "json")
+        )
         try FileManager.default.copyItem(at: original, to: resources.appendingPathComponent("model-registry.json"))
         let bundle = try XCTUnwrap(Bundle(url: bundleDirectory))
         XCTAssertFalse(ModelRegistry(bundle: bundle).loadModels().isEmpty)
