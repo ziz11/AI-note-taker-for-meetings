@@ -57,9 +57,13 @@ The owner confirmed in the coordinator chat that the app builds and works when r
 
 This is human-reported acceptance, separate from the automated evidence above. The report does not enumerate individual capture/export, upgrade/rollback, permission-denial, sleep/endurance or Finder/Dock checks, so those specific checks are not independently marked passed. It does not establish first launch or Gatekeeper behaviour on another Mac. The website is deferred by the owner: preserve its draft files, do not redesign, merge or publish PR #23 as part of application distribution.
 
+## Additional Mac acceptance — closed by owner
+
+On 20 October 2026, the owner instructed the coordinator to consider the additional-Mac check completed. **This acceptance item is closed at the owner's direction and is no longer a blocker for the intended author-and-friends distribution.** No additional machine details or test logs were supplied; this is owner acceptance, not an independently observed coordinator test or notarisation evidence. Earlier pending statements above describe the evidence available at those earlier checks.
+
 ## Remaining acceptance and publication
 
-Source readiness and a valid local package do not establish a public release. Before publishing, record actual upgrade/rollback with preserved recordings/settings/models; real microphone/system permission behaviour; capture, playback/import/export, interrupted work and sleep/long-recording checks; downloaded Gatekeeper behaviour and another supported Mac. The [identity matrix](identity-preservation.md) remains the acceptance procedure. A matching designated requirement is evidence for compatibility, not a completed TCC upgrade test.
+The additional-Mac item is closed as recorded above. Source readiness and a valid local package do not establish a public release. Detailed upgrade/rollback, permission-denial, interrupted-work and sleep/endurance checks remain unrecorded; the [identity matrix](identity-preservation.md) remains their acceptance procedure. A matching designated requirement is evidence for compatibility, not a completed TCC upgrade test.
 
 The selected icon does not approve the full designer concept, site or a new app redesign. Keep the agreed native app styling. Live Finder/Dock inspection requires the built app; no private recordings or model caches should be changed merely to inspect an icon. The author's installed application is not replaced by source integration.
 
