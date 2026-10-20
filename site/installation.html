@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f4efe4">
+<title>Installation guide · Barkenson</title>
+<meta name="description" content="Install Barkenson, allow audio access and prepare local transcription on your Mac.">
+<link rel="canonical" href="https://ziz11.github.io/Barkenson-Meeting-recorder-for-Mac/installation.html">
+<link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="masthead wrap"><a class="wordmark" href="./"><img class="mark" src="./assets/barkenson-mark.svg" width="32" height="32" alt="">Barkenson</a><nav aria-label="Main navigation"><a href="./">Back to the app</a><a href="https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases/tag/v0.1.0-preview.1">Release notes</a></nav></header>
+<main class="guide wrap" id="main">
+<p class="eyebrow">Barkenson 0.1.0 · Preview</p><h1>Installation guide.</h1>
+<p class="guide-intro">macOS 15 or later · Apple Silicon for transcription and speaker separation.</p>
+<section aria-labelledby="install"><h2 id="install">1. Download and install</h2><p><a href="https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases/download/v0.1.0-preview.1/Barkenson-0.1.0-build5-macOS.zip">Download Barkenson for Mac</a>, extract the ZIP and move Barkenson.app to Applications. Xcode is not needed.</p><p>If you already use Barkenson or its previous name, Recordly, stop recording and quit the old app first. Keep a backup of the old application and its data before replacing it. Keep one active installed copy; your existing recordings, models and settings retain their original locations.</p></section>
+<section aria-labelledby="opening"><h2 id="opening">2. Open the preview</h2><p>This preview uses a local development signing certificate. It is not notarised and is not a Developer ID release. macOS may question or prevent first launch. Read the <a href="https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases/tag/v0.1.0-preview.1">release notes</a> before opening it; do not disable macOS security protections or install a signing private key.</p><p>Check the archive in Terminal if needed:</p><pre><code>shasum -a 256 Barkenson-0.1.0-build5-macOS.zip</code></pre><p>The expected SHA-256 is:</p><pre><code>1ee36de64e35f7750bfd621ae338347b75d6cb2582f60e03e04e76eaf71c5124</code></pre></section>
+<section aria-labelledby="permissions"><h2 id="permissions">3. Allow audio access</h2><p>Allow Microphone access when prompted. Use <strong>Open Settings</strong> in the app to enable Screen &amp; System Audio Recording in System Settings → Privacy &amp; Security. This permission is used for system audio; screen video is not saved. Follow any restart instruction macOS displays.</p></section>
+<section aria-labelledby="models"><h2 id="models">4. Prepare your models</h2><p>Open <strong>Models</strong>. Download a transcription model, then select it. Download and selection are separate actions. The speaker separation package is optional; without it, transcription can continue with reduced speaker labelling.</p><p>Model downloads need an internet connection and local disk space. Recording and transcription run locally once setup is complete.</p></section>
+<section aria-labelledby="try"><h2 id="try">5. Make a short test recording</h2><p>Record your microphone and call audio, play it back, then run transcription. Review the speaker labels, try TXT transcript export or combined audio export, and reopen the app to check your recording.</p><p>If you need help, <a href="https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/issues">report a problem on GitHub</a>. Remove private meeting content before attaching files or screenshots.</p></section>
+<p><a class="text-link" href="./">← Back to Barkenson</a></p>
+</main>
+<footer class="wrap"><p>Meeting recorder for Mac.</p><nav aria-label="Project links"><a href="https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac">GitHub</a><a href="https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases">Releases</a><a href="https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/issues">Feedback</a></nav></footer>
+</body></html>
