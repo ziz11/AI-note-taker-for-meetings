@@ -65,6 +65,8 @@ assert sum(tag == 'article' for tag, _ in landing.tags) == 4, 'Keep four benefit
 assert sum(tag == 'li' for tag, _ in landing.tags) == 3, 'Keep three steps'
 assert sum(url == DOWNLOAD_URL for url in landing.urls) == 2, 'Use the verified ZIP for both download buttons'
 assert './installation.html' in landing.urls, 'Link setup beside download'
+assert any(tag == 'img' and a.get('src') == './assets/barkenson-app.png' and a.get('width') == '2704' and a.get('height') == '1756' for tag, a in landing.tags), 'Real app screenshot missing or dimensions changed'
+assert any(tag == 'a' and a.get('href') == './assets/barkenson-app.png' and a.get('aria-label') for tag, a in landing.tags), 'Full-size screenshot link must be accessible'
 assert not any('disabled' in attrs for _, attrs in landing.tags), 'Release exists; download must work'
 assert 'chatgpt.site' not in landing.html, 'GitHub Pages is the primary host'
 for stale in ['coming soon', 'in preparation', 'Screenshots pending', 'Recordly', 'Parakeet', 'certificate', 'Make yourself at home', 'The next chapter']:

@@ -14,11 +14,11 @@ The owner supplied the concise structure/copy and approved retaining cream paper
 
 The approved editable quotation symbol and app icon are reused from the designer's exports, not redrawn. The original decorative waveform is retained in the hero and is not presented as an app screenshot.
 
-## Screenshot acceptance gap
+## Owner-supplied application screenshot
 
-A large **real recording-and-transcript screenshot** is still required below the hero. None has been supplied to the coordinator. Existing native test renders contain synthetic fixture data and are not substituted for an installed-app screenshot. The landing page has no fake screenshot, broken image or public missing-screenshot message.
+The owner supplied a real 2704×1756 PNG of Barkenson showing recordings, playback controls and a completed four-second transcript. It is stored as `assets/barkenson-app.png`, byte-identical to the supplied file. The visible test transcript is “Let's discuss something together.” No mock-up or synthetic native render is substituted.
 
-Before marking the PR ready, add a privacy-reviewed real screenshot from the owner. Store an optimised copy under `assets/`, with explicit image dimensions, useful alt text and a responsive full-width figure below the hero. Check the transcript's legibility on desktop/mobile. Do not publish private meeting content, speaker names or identifiers without the owner's approval.
+The screenshot is displayed in full below the hero, with explicit dimensions, descriptive alt text and a responsive aspect ratio. It links to the original PNG so mobile visitors can inspect it at full size. No content is cropped, redrawn or rewritten. This closes the previous missing-screenshot requirement; it does not establish other functionality or platform acceptance.
 
 ## Published download
 
@@ -38,7 +38,7 @@ Serve `site/` at the project subpath `/Barkenson-Meeting-recorder-for-Mac/`, rat
 
 ## Publication
 
-The existing PR #23 remains a draft while the real screenshot and final review are pending. The coordinator owns integration. The workflow validates PRs without deploying; build/deploy jobs run only from `main`. For the first deployment, repository Settings → Pages must use **GitHub Actions**. After approval/merge, verify the returned deployment URL and live nested assets before claiming the GitHub Pages site is published.
+The owner-supplied screenshot is integrated. PR #23 can proceed to final review and publication after its checks pass. The coordinator owns integration. The workflow validates PRs without deploying; build/deploy jobs run only from `main`. For the first deployment, repository Settings → Pages must use **GitHub Actions**. After approval/merge, verify the returned deployment URL and live nested assets before claiming the GitHub Pages site is published.
 
 ## Coordinator verification — 20 October 2026
 
@@ -48,4 +48,8 @@ The existing PR #23 remains a draft while the real screenshot and final review a
 - FAQ disclosure opens its answer; the installation link navigates to the guide; keyboard focus has the intended visible 3 px outline.
 - Repository, Releases, Feedback and exact ZIP links returned HTTP 200 with HEAD requests.
 - Main-page text reduced from 772 to 233 whitespace-separated words, excluding markup. No inference, Swift, project or packaging files changed.
-- Canonical and Open Graph point to the GitHub Pages destination above. These checks do not assert a live GitHub Pages deployment or a real installed-app screenshot.
+- Canonical and Open Graph point to the GitHub Pages destination above. These earlier checks did not assert a live GitHub Pages deployment. The real owner-supplied screenshot was subsequently added as described above.
+
+## Screenshot verification — 20 October 2026
+
+The real owner-supplied PNG is 432,745 bytes, SHA-256 `60717e1a57900e973b79b716d4922676807860167d34eab11cc6e86309e51e99`; the committed copy is byte-identical. Browser checks at 320/375/768/1280 px load the 2704×1756 source and preserve the image's aspect ratio without horizontal overflow. Independent read-only review found no screenshot/content or integration blockers. The image contains generic numbered recordings and the short test transcript supplied by the owner.
