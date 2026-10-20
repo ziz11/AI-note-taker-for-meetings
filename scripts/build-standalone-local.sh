@@ -26,7 +26,12 @@ xcodebuild build -project "$TASK_ROOT/Recordly.xcodeproj" -scheme Recordly \
   -derivedDataPath "$TASK_OUTPUT" -clonedSourcePackagesDirPath "$TASK_PACKAGES" \
   -packageAuthorizationProvider netrc \
   CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$TASK_IDENTITY" DEVELOPMENT_TEAM=''
-TASK_APP="$TASK_OUTPUT/Build/Products/Release/Recordly.app"
+# Keep the Xcode product/executable stable; brand only the distributable folder.
+TASK_PRODUCT="$TASK_OUTPUT/Build/Products/Release/Recordly.app"
+TASK_STAGE="$(mktemp -d "$TASK_OUTPUT/barkenson-stage.XXXXXX")"
+trap 'rm -rf "$TASK_STAGE"' EXIT
+TASK_APP="$TASK_STAGE/Barkenson.app"
+ditto "$TASK_PRODUCT" "$TASK_APP"
 cp "$TASK_ROOT/THIRD_PARTY_LICENSES.md" "$TASK_APP/Contents/Resources/THIRD_PARTY_LICENSES.md"
 mkdir -p "$TASK_APP/Contents/Resources/ThirdPartyLicenses"
 cp -R "$TASK_ROOT/third-party/FluidAudio-0.17.7" "$TASK_APP/Contents/Resources/ThirdPartyLicenses/"
@@ -35,7 +40,7 @@ codesign --force --sign "$TASK_IDENTITY" \
   --preserve-metadata=identifier,entitlements,requirements,flags,runtime "$TASK_APP"
 codesign --verify --deep --strict "$TASK_APP"
 TASK_REVISION="$(git -C "$TASK_ROOT" rev-parse --short HEAD)"
-TASK_ARCHIVE="$TASK_OUTPUT/Recordly-$TASK_REVISION-local.zip"
+TASK_ARCHIVE="$TASK_OUTPUT/Barkenson-$TASK_REVISION-local.zip"
 ditto -c -k --sequesterRsrc --keepParent "$TASK_APP" "$TASK_ARCHIVE"
-print "Application: $TASK_APP"
+print "Build product: $TASK_PRODUCT"
 print "Archive: $TASK_ARCHIVE"
