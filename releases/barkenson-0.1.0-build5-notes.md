@@ -12,7 +12,7 @@ SHA-256:
 1ee36de64e35f7750bfd621ae338347b75d6cb2582f60e03e04e76eaf71c5124
 ```
 
-This document prepares a release; it does not assert that the asset has been published. Attach the ZIP and `SHA256SUMS.txt` to a GitHub prerelease. Do not commit the ZIP to Git.
+[Published prerelease: v0.1.0-preview.1](https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases/tag/v0.1.0-preview.1). The downloaded ZIP was independently verified against the SHA-256 above. Binary archives remain outside Git.
 
 ## Requirements and installation
 

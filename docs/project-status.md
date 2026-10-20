@@ -1,6 +1,6 @@
 # Recordly project status — 2026-10-16
 
-> Distribution preparation update, 20 October 2026: the confirmed public name is **Barkenson**. See the [coordination plan](plans/2026-10-20-barkenson-distribution.md) and [current application/icon integration](distribution/2026-10-20-app-icon-integration.md). The older build/test records below remain historical; they do not certify a new branded release.
+> Distribution update, 20 October 2026: [Barkenson 0.1.0 (5) preview is published](https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases/tag/v0.1.0-preview.1). the confirmed public name is **Barkenson**. See the [coordination plan](plans/2026-10-20-barkenson-distribution.md) and [current application/icon integration](distribution/2026-10-20-app-icon-integration.md). The older build/test records below remain historical; they do not certify a new branded release.
 
 This is the current project summary. Dated plans preserve their original decisions; their review notices explain what has shipped or been superseded. See the [documentation audit](documentation-audit-2026-10-10.md) for every Markdown file.
 

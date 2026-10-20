@@ -1,5 +1,7 @@
 # Barkenson application and icon integration
 
+> Current status: [v0.1.0-preview.1 is published](https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases/tag/v0.1.0-preview.1); its public ZIP matches the accepted local archive. See the publication record at the end of this document.
+
 20 October 2026. This record supersedes the [initial preparation snapshot](integration-result.md) for current integration state. It separates source integration from public distribution acceptance.
 
 ## Integrated decisions and PRs
@@ -68,3 +70,14 @@ The additional-Mac item is closed as recorded above. Source readiness and a vali
 The selected icon does not approve the full designer concept, site or a new app redesign. Keep the agreed native app styling. Live Finder/Dock inspection requires the built app; no private recordings or model caches should be changed merely to inspect an icon. The author's installed application is not replaced by source integration.
 
 Developer ID/notarisation, own-code/binary licence terms, model-notice inventory and the final GitHub Release asset remain open. No automatic global security bypass or privacy reset is part of integration. Pages remains unpublished by this work until the website is approved and its final links are verified.
+
+
+## Published preview — 20 October 2026
+
+The owner published [v0.1.0-preview.1](https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases/tag/v0.1.0-preview.1) as a non-draft **prerelease**, titled Barkenson 0.1.0. Its tag resolves to main commit `53569c236f45c436ee137dfdb6321c3d7caf013f`. Application, test, project and packaging source at the tag matches verified bundle source `15be35a` exactly.
+
+The coordinator downloaded the public [ZIP](https://github.com/ziz11/Barkenson-Meeting-recorder-for-Mac/releases/download/v0.1.0-preview.1/Barkenson-0.1.0-build5-macOS.zip) and independently verified **24,078,882 bytes** and SHA-256 `1ee36de64e35f7750bfd621ae338347b75d6cb2582f60e03e04e76eaf71c5124`, matching the locally accepted archive and GitHub's asset digest. The GitHub API lists one uploaded asset: the ZIP. A separate checksum attachment is absent, but the correct checksum is present in the release description.
+
+The author-and-friends preview is now available for distribution. Local signing and the previously recorded acceptance limits remain disclosed; publication does not imply Developer ID/notarisation or additional automated GUI testing. The website/Pages work remains deferred and PR #23 remains a draft. Earlier preparation/pending-publication paragraphs above are historical snapshots superseded by this section.
+
+The live release description still contains the preparation-only paragraph beginning “This document prepares a release”. That paragraph is stale after publication and can be removed; it does not change the archive, digest or download. The checked-in notes have been corrected.
