@@ -64,6 +64,8 @@ enum AdaptiveLayoutMetrics {
 
 struct ContentView: View {
     @EnvironmentObject private var store: RecordingsStore
+    @AppStorage("barkenson.welcomeSeen") private var hasSeenWelcome = false
+    @State private var isWelcomePresented = false
 
     var body: some View {
         NavigationSplitView {
@@ -83,8 +85,14 @@ struct ContentView: View {
         .toolbar {
             ToolbarItem { PerformanceStatusButton(monitor: store.performanceMonitor) }
         }
-        .onAppear { store.performanceMonitor.setCaptureActive(store.isRecording) }
+        .onAppear {
+            store.performanceMonitor.setCaptureActive(store.isRecording)
+            presentWelcomeIfReady()
+        }
         .onChange(of: store.isRecording) { _, active in store.performanceMonitor.setCaptureActive(active) }
+        .onChange(of: store.isLaunchRecoveryComplete) { _, _ in presentWelcomeIfReady() }
+        .onChange(of: store.shouldPresentRecoveryPrompt) { _, _ in presentWelcomeIfReady() }
+        .onChange(of: store.viewState.alert != nil) { _, _ in presentWelcomeIfReady() }
 
         .alert("Action Failed", isPresented: errorBinding) {
             if let primaryAction = store.viewState.alert?.primaryAction {
@@ -114,15 +122,41 @@ struct ContentView: View {
         } message: {
             Text("Found \(store.pendingRecoveryTranscriptionCount) recordings with unfinished transcriptions from the previous session. Resume them now?")
         }
-        .sheet(isPresented: onboardingBinding) {
-            ModelOnboardingView(
-                coordinator: store.modelOnboardingCoordinator,
-                modelManager: store.modelManagerProxy
-            )
+        .sheet(isPresented: setupSheetBinding) {
+            if store.isModelsSheetPresented {
+                ModelSettingsView(viewModel: store.modelSettingsViewModelProxy)
+            } else {
+                ModelOnboardingView { openModels in
+                    hasSeenWelcome = true
+                    store.isModelsSheetPresented = openModels
+                    isWelcomePresented = false
+                }
+            }
         }
-        .sheet(isPresented: $store.isModelsSheetPresented) {
-            ModelSettingsView(viewModel: store.modelSettingsViewModelProxy)
-        }
+    }
+
+    // One presentation owns welcome and Models, including the app-menu shortcut.
+    private var setupSheetBinding: Binding<Bool> {
+        Binding(
+            get: { isWelcomePresented || store.isModelsSheetPresented },
+            set: { presented in
+                if !presented {
+                    if isWelcomePresented { hasSeenWelcome = true }
+                    isWelcomePresented = false
+                    store.isModelsSheetPresented = false
+                }
+            }
+        )
+    }
+
+    private func presentWelcomeIfReady() {
+        guard !hasSeenWelcome,
+              store.isLaunchRecoveryComplete,
+              !store.shouldPresentRecoveryPrompt,
+              store.viewState.alert == nil,
+              !store.isModelsSheetPresented,
+              !store.isRecording else { return }
+        isWelcomePresented = true
     }
 
     private var errorBinding: Binding<Bool> {
@@ -131,17 +165,6 @@ struct ContentView: View {
             set: { newValue in
                 if !newValue {
                     store.dismissError()
-                }
-            }
-        )
-    }
-
-    private var onboardingBinding: Binding<Bool> {
-        Binding(
-            get: { store.modelOnboardingCoordinator.isPresented },
-            set: { newValue in
-                if !newValue {
-                    store.modelOnboardingCoordinator.dismiss()
                 }
             }
         )

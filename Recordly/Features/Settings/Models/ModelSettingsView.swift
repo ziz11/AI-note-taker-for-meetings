@@ -22,7 +22,7 @@ struct ModelSettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Transcription").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("Transcription · FluidAudio / Core ML").font(.system(size: 11)).foregroundStyle(.secondary)
                 VStack(spacing: 0) {
                     ForEach(Array(viewModel.speechModels.enumerated()), id: \.element.id) { index, row in
                         if index > 0 { Divider() }
@@ -39,7 +39,7 @@ struct ModelSettingsView: View {
             Divider()
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Text("Speaker separation")
+                    Text("Speaker separation · FluidAudio")
                     Spacer(minLength: 8)
                     diarizationStatus
                 }
@@ -68,9 +68,10 @@ struct ModelSettingsView: View {
                 .font(.system(size: 11))
             }
 
-            Text("Processing stays on this Mac.")
-                .font(.system(size: 10))
+            Text("Download a model, then select it for the next transcription. Speaker separation is optional. Downloads need an internet connection; processing stays on this Mac.")
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .font(.system(size: 12))
         .controlSize(.small)
@@ -171,7 +172,7 @@ struct ModelSettingsView: View {
     }
 
     private func errorText(_ message: String) -> some View {
-        Text(message).font(.system(size: 10)).foregroundStyle(.orange)
+        Text(message).font(.system(size: 11)).foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
     }
 

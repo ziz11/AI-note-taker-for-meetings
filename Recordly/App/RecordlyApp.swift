@@ -51,7 +51,7 @@ struct RecordlyApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Barkenson") {
             ContentView()
                 .environmentObject(recordingsStore)
                 .frame(minWidth: 800, minHeight: 600)
@@ -61,6 +61,20 @@ struct RecordlyApp: App {
         }
         .commands {
             SidebarCommands()
+            CommandGroup(replacing: .appInfo) {
+                Button("About Barkenson") {
+                    NSApp.orderFrontStandardAboutPanel(options: [
+                        .applicationName: "Barkenson",
+                        .credits: NSAttributedString(string: "Meeting recorder for Mac.\nRecord, transcribe and identify speakers locally.")
+                    ])
+                }
+            }
+            CommandGroup(replacing: .appSettings) {
+                Button("Models…") {
+                    recordingsStore.isModelsSheetPresented = true
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
             CommandGroup(after: .newItem) {
                 Button("Import Audio") {
                     Task {

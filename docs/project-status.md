@@ -1,5 +1,7 @@
 # Recordly project status — 2026-10-16
 
+> Distribution preparation update, 20 October 2026: the confirmed public name is **Barkenson**. See the [coordination plan](plans/2026-10-20-barkenson-distribution.md) and [current application/icon integration](distribution/2026-10-20-app-icon-integration.md). The older build/test records below remain historical; they do not certify a new branded release.
+
 This is the current project summary. Dated plans preserve their original decisions; their review notices explain what has shipped or been superseded. See the [documentation audit](documentation-audit-2026-10-10.md) for every Markdown file.
 
 ## Delivered implementation

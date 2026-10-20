@@ -1,10 +1,5 @@
 import SwiftUI
 
-private enum DetailContentTab: String, CaseIterable {
-    case summary = "Summary"
-    case transcript = "Transcript"
-}
-
 struct RecordingDetailView: View {
     @EnvironmentObject private var store: RecordingsStore
 
@@ -12,7 +7,6 @@ struct RecordingDetailView: View {
 
     @State private var draftTitle = ""
     @State private var isEditingTitle = false
-    @State private var selectedTab: DetailContentTab = .transcript
     @State private var isMetadataExpanded = false
     @FocusState private var isTitleFieldFocused: Bool
 
@@ -44,7 +38,6 @@ struct RecordingDetailView: View {
         .onChange(of: recording.id) { _, _ in
             draftTitle = recording.title
             isEditingTitle = false
-            selectedTab = .transcript
             isMetadataExpanded = false
         }
     }
@@ -77,7 +70,7 @@ struct RecordingDetailView: View {
 
             clusterButton(
                 systemImage: recording.isFavorite ? "star.fill" : "star",
-                tint: recording.isFavorite ? Color(red: 1.0, green: 0.82, blue: 0.28) : .white,
+                tint: recording.isFavorite ? AppTheme.accent : .primary,
                 isDisabled: false
             ) {
                 store.toggleFavorite(for: recording)
@@ -158,10 +151,10 @@ struct RecordingDetailView: View {
 
     @ViewBuilder
     private var processingPanel: some View {
-        let jobs = store.processingJobs(for: recording.id)
+        let jobs = store.processingJobs(for: recording.id).filter { $0.kind == .transcription }
         ForEach(jobs) { job in
             progressCard(
-                title: job.kind == .transcription ? "Transcription" : "Summary",
+                title: "Transcription",
                 detail: job.stageLabel,
                 value: job.progress,
                 counters: job.transcriptionDetail
@@ -250,12 +243,6 @@ struct RecordingDetailView: View {
                 }
 
                 secondaryActionButton(
-                    title: "Summarize (Unavailable)",
-                    systemImage: "sparkles",
-                    isDisabled: true
-                ) {}
-
-                secondaryActionButton(
                     title: "Open Folder",
                     systemImage: "folder"
                 ) {
@@ -269,23 +256,13 @@ struct RecordingDetailView: View {
                     store.exportTranscript(for: recording)
                 }
 
-                Menu {
-                    Button("Copy Summary") {
-                        store.copySummary(for: recording)
-                    }
-                    Button("Copy Transcript") {
-                        store.copyTranscript(for: recording)
-                    }
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .frame(height: 38)
-                        .background(Color.white.opacity(0.08), in: Capsule(style: .continuous))
+                secondaryActionButton(
+                    title: "Copy Transcript",
+                    systemImage: "doc.on.doc",
+                    isDisabled: !hasTranscript
+                ) {
+                    store.copyTranscript(for: recording)
                 }
-                .menuStyle(.button)
-                .disabled(!hasTranscript && store.summaryText(for: recording) == nil)
             }
         }
         .padding(isCompact ? 16 : 18)
@@ -296,27 +273,19 @@ struct RecordingDetailView: View {
     private func notesPanel(isCompact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Picker("Content", selection: $selectedTab) {
-                    Text(DetailContentTab.transcript.rawValue).tag(DetailContentTab.transcript)
-                    Text(DetailContentTab.summary.rawValue).tag(DetailContentTab.summary)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: isCompact ? .infinity : 260)
+                Text("Transcript")
+                    .font(.headline)
 
                 Spacer(minLength: 12)
 
                 Button {
-                    if selectedTab == .summary {
-                        store.copySummary(for: recording)
-                    } else {
-                        store.copyTranscript(for: recording)
-                    }
+                    store.copyTranscript(for: recording)
                 } label: {
                     Label("Copy", systemImage: "doc.on.doc")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(AppTheme.accent)
-                .disabled(selectedTab == .summary)
+                .disabled(!hasTranscript)
             }
 
             RecordingNotesText(text: activeNotesText, isFallback: activeNotesIsFallback)
@@ -423,21 +392,11 @@ struct RecordingDetailView: View {
     }
 
     private var activeNotesText: String {
-        switch selectedTab {
-        case .summary:
-            return "Summarization is temporarily unavailable."
-        case .transcript:
-            return store.transcriptText(for: recording) ?? recording.transcriptPreviewFallback
-        }
+        store.transcriptText(for: recording) ?? recording.transcriptPreviewFallback
     }
 
     private var activeNotesIsFallback: Bool {
-        switch selectedTab {
-        case .summary:
-            return true
-        case .transcript:
-            return store.transcriptText(for: recording) == nil
-        }
+        store.transcriptText(for: recording) == nil
     }
 
     private var clusterDivider: some View {
@@ -458,7 +417,7 @@ struct RecordingDetailView: View {
 
     private func clusterButton(
         systemImage: String,
-        tint: Color = .white,
+        tint: Color = .primary,
         isDisabled: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
@@ -470,7 +429,7 @@ struct RecordingDetailView: View {
         .opacity(isDisabled ? 0.35 : 1)
     }
 
-    private func clusterIcon(systemImage: String, tint: Color = .white) -> some View {
+    private func clusterIcon(systemImage: String, tint: Color = .primary) -> some View {
         Image(systemName: systemImage)
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(tint)
